@@ -5,11 +5,42 @@
  *
  * @copyright Copyright (C) 2015-2021 Wazuh, Inc.
  */
+
+
+#include "json.hpp"
+#include "db.hpp"
+
+const char * fim_file_entry_to_json(const char *file_path, const fim_file_data *entry)
+{
+    nlohmann::json ret;
+
+    ret["path"] = file_path;
+    ret["mode"] = entry->mode;
+    ret["last_event"] = entry->last_event;
+    ret["scanned"] = entry->scanned;
+    ret["options"] = entry->options;
+    ret["checksum"] = entry->checksum;
+    ret["dev"] = entry->dev;
+    ret["inode"] = entry->inode;
+    ret["size"] = entry->size;
+    ret["perm"] = entry->perm;
+    ret["attributes"] = entry->attributes;
+    ret["uid"] = entry->uid;
+    ret["gid"] = entry->gid;
+    ret["user_name"] = entry->user_name;
+    ret["group_name"] = entry->group_name;
+    ret["hash_md5"] = entry->hash_md5;
+    ret["hash_sha1"] = entry->hash_sha1;
+    ret["hash_sha256"] = entry->hash_sha256;
+    ret["mtime"] = entry->mtime;
+
+    return ret.dump().c_str();
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "db.hpp"
 
 #ifdef WAZUH_UNIT_TESTING
 /* Remove static qualifier when unit testing */
@@ -327,9 +358,11 @@ int fim_db_check_limit(fdb_t *fim_sql) {
     return retval;
 }
 
+
+
 int fim_db_insert_entry(fdb_t *fim_sql, const char *file_path, const fim_file_data *entry) {
     int res;
-
+    const char *json_query = fim_file_entry_to_json(file_path, entry);
     fim_db_clean_stmt(fim_sql, FIMDB_STMT_REPLACE_ENTRY);
     fim_db_bind_replace_entry(fim_sql, file_path, entry);
 
