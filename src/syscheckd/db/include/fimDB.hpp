@@ -46,7 +46,6 @@ public:
 
     void init();
     void syncDB();
-    bool isFull() { return m_isFull; };
     int insertItem(DBItem*);
     int removeItem(DBItem*);
     int updateItem(DBItem*);
@@ -57,8 +56,7 @@ private:
     FIMDB();
     ~FIMDB() = default;
     FIMDB(const FIMDB&) = delete;
-    bool            m_isFull;
-    DBSYNC_HANDLE   m_dbsyncHandler;
-    RSYNC_HANDLE    m_rsyncHandler;
+    std::unique_ptr<DBSync>       m_dbsyncHandler;
+    std::unique_ptr<RemoteSync>   m_rsyncHandler;
 };
 #endif //_FIMDB_HPP
