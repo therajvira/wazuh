@@ -195,6 +195,7 @@ ACTIVE_CONFIG_VERSION = 'Wazuh v3.7.0'
 # Command variables
 CHECK_CONFIG_COMMAND = 'check-manager-configuration'
 RESTART_WAZUH_COMMAND = 'restart-wazuh'
+WAZUH_VERSION = 'current' if wazuh_version == '' else '.'.join(wazuh_version.split('.')[:2]).lstrip('v')
 
 # User and group name
 USER_NAME = 'wazuh'
