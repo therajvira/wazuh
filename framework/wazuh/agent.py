@@ -282,20 +282,55 @@ def get_agents(agent_list=None, offset=0, limit=common.database_limit, sort=None
         if filters is None:
             filters = dict()
 
+        from logging import getLogger
+        import time
+        logger = getLogger('wazuh-api')
+        start = time.time()
+        logger.info("Starting query")
+
         system_agents = get_agents_info()
+        rbac_filters = get_rbac_filters(system_resources=system_agents, permitted_resources=agent_list,
+                                        filters=filters)
 
-        for agent_id in agent_list:
-            if agent_id not in system_agents:
-                result.add_failed_item(id_=agent_id, error=WazuhResourceNotFound(1701))
-
-        rbac_filters = get_rbac_filters(system_resources=system_agents, permitted_resources=agent_list, filters=filters)
-
-        with WazuhDBQueryAgents(offset=offset, limit=limit, sort=sort, search=search, select=select,
-                                query=q, **rbac_filters) as db_query:
+        with WazuhDBQueryAgents(limit=None, select=["id", "status"], query=q, **rbac_filters) as db_query:
             data = db_query.run()
 
-        result.affected_items.extend(data['items'])
-        result.total_affected_items = data['totalItems']
+        can_get_agents = set(map(operator.itemgetter('id'), data['items']))
+        agent_list = set(agent_list)
+
+        try:
+            agent_list.remove('000')
+            result.add_failed_item('000', WazuhError(1703))
+        except KeyError:
+            pass
+
+            # Add non existent agents to failed_items
+        not_found_agents = agent_list - system_agents
+        [result.add_failed_item(id_=agent, error=WazuhResourceNotFound(1701)) for agent in not_found_agents]
+
+        # Add non active agents to failed_items
+        non_active_agents = set([agent['id'] for agent in data['items'] if agent['status'] != 'active'])
+        [result.add_failed_item(id_=agent, error=WazuhError(1707))
+         for agent in non_active_agents]
+
+        # Add non eligible agents to failed_items
+        non_eligible_agents = agent_list - not_found_agents - non_active_agents - can_get_agents
+        [result.add_failed_item(id_=ag, error=WazuhError(
+            1731,
+            extra_message="some of the requirements are not met -> {}".format(
+                ', '.join(f"{key}: {value}" for key, value in filters.items() if key != 'rbac_ids') +
+                (f', q: {q}' if q else '')
+            )
+        )) for ag in non_eligible_agents]
+
+        eligible_agents = list(agent_list.intersection(system_agents).intersection(can_get_agents))
+
+        # # Transform the format of the agent ids to the general format
+        # eligible_agents = [int(agent) for agent in eligible_agents]
+
+        logger.info(f'End of the query, time: {time.time() - start}s')
+
+        result.affected_items = eligible_agents
 
     return result
 
