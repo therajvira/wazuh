@@ -44,11 +44,14 @@ public:
         return s_instance;
     }
 
-    void init();
-    void syncDB();
-    int insertItem(DBItem*);
-    int removeItem(DBItem*);
-    int updateItem(DBItem*);
+#ifdef WIN32
+    void init(const std::string& dbPath, const unsigned int interval_synchronization, const unsigned int max_rows_file, const unsigned int max_rows_registry);
+#else
+    void init(const std::string& dbPath, const unsigned int interval_synchronization, const unsigned int max_rows_file);
+#endif
+    int insertItem(std::unique_ptr<DBItem> const item item);
+    int removeItem(std::unique_ptr<DBItem> const item item);
+    int updateItem(std::unique_ptr<DBItem> const item item, ResultCallbackData callbackData);
     int setAllUnscanned();
     int executeQuery();
 
@@ -56,8 +59,13 @@ private:
     FIMDB();
     ~FIMDB() = default;
     FIMDB(const FIMDB&) = delete;
+
+    const unsigned int            m_max_rows_file;
+    const unsigned int            m_max_rows_registry;
+    const unsigned int            m_interval_synchronization;
     std::unique_ptr<DBSync>       m_dbsyncHandler;
     std::unique_ptr<RemoteSync>   m_rsyncHandler;
+
     std::string createStatement();
     void setFileLimit();
     void setRegistryLimit();
