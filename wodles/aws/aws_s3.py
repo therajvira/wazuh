@@ -440,7 +440,7 @@ class AWSBucket(WazuhIntegration):
                                             aws_account_id='{aws_account_id}' AND
                                             aws_region = '{aws_region}'
                                         ORDER BY
-                                            log_key ASC
+                                            log_key DESC
                                         LIMIT 1;"""
 
         self.sql_db_maintenance = """DELETE
