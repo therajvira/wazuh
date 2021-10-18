@@ -443,6 +443,19 @@ class AWSBucket(WazuhIntegration):
                                             log_key DESC
                                         LIMIT 1;"""
 
+        self.sql_find_first_key_processed = """
+                                        SELECT
+                                            log_key
+                                        FROM
+                                            {table_name}
+                                        WHERE
+                                            bucket_path='{bucket_path}' AND
+                                            aws_account_id='{aws_account_id}' AND
+                                            aws_region = '{aws_region}'
+                                        ORDER BY
+                                            log_key ASC
+                                        LIMIT 1;"""
+
         self.sql_db_maintenance = """DELETE
                             FROM
                                 {table_name}
@@ -489,7 +502,7 @@ class AWSBucket(WazuhIntegration):
                                   )
         self.retain_db_records = 500
         self.reparse = reparse
-        self.only_logs_after = datetime.strptime(only_logs_after, "%Y%m%d")
+        self.only_logs_after = datetime.strptime(only_logs_after, "%Y%m%d") if only_logs_after else None
         self.skip_on_error = skip_on_error
         self.account_alias = account_alias
         self.prefix = prefix
@@ -594,6 +607,26 @@ class AWSBucket(WazuhIntegration):
                     error_msg=e))
             sys.exit(10)
 
+    def marker_custom_date(self, aws_region: str, aws_account_id: str, date: datetime) -> str:
+        """
+        Returns a AWS bucket marker using a custom date.
+
+        Parameters
+        ----------
+        aws_region: str
+            The region.
+        aws_account_id: str
+            The account ID.
+        date: datetime
+            The date that must be used to create the filter.
+
+        Returns
+        -------
+        str
+            The required marker.
+        """
+        return f'{self.get_full_prefix(aws_account_id, aws_region)}{date.strftime("%Y/%m/%d")}'
+
     def marker_only_logs_after(self, aws_region, aws_account_id):
         return '{init}{only_logs_after}'.format(
             init=self.get_full_prefix(aws_account_id, aws_region),
@@ -634,6 +667,20 @@ class AWSBucket(WazuhIntegration):
         if self.reparse:
             if self.only_logs_after:
                 filter_marker = self.marker_only_logs_after(aws_region, aws_account_id)
+            else:
+                query_first_key = self.db_connector.execute(
+                    self.sql_find_first_key_processed.format(
+                        bucket_path=self.bucket_path,
+                        table_name=self.db_table_name,
+                        aws_account_id=aws_account_id,
+                        aws_region=aws_region
+                    )
+                )
+                try:
+                    filter_marker = query_first_key.fetchone()[0]
+                except (TypeError, IndexError):
+                    # The DB is empty and there's no only_logs_after, we start from today's date
+                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
         else:
             query_last_key = self.db_connector.execute(
                 self.sql_find_last_key_processed.format(bucket_path=self.bucket_path,
@@ -644,7 +691,8 @@ class AWSBucket(WazuhIntegration):
                 last_key = query_last_key.fetchone()[0]
             except (TypeError, IndexError) as e:
                 # if DB is empty for a region
-                last_key = self.marker_only_logs_after(aws_region, aws_account_id)
+                filter_marker = self.marker_only_logs_after(aws_region, aws_account_id) if self.only_logs_after else \
+                    self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
 
         filter_args = {
             'Bucket': self.bucket,
@@ -656,10 +704,11 @@ class AWSBucket(WazuhIntegration):
         if not iterating:
             if filter_marker:
                 filter_args['StartAfter'] = filter_marker
-                debug('+++ Marker: {0}'.format(filter_marker), 2)
+                debug(f'+++ Marker: {filter_marker}', 2)
             else:
-                filter_args['StartAfter'] = last_key
-                debug('+++ Marker: {0}'.format(last_key), 2)
+                filter_args['StartAfter'] = last_key if self.only_logs_after is None or \
+                    (ol_marker := self.marker_only_logs_after(aws_region, aws_account_id)) < last_key else ol_marker
+                debug(f'+++ Marker: {last_key}', 2)
 
         return filter_args
 
@@ -1057,7 +1106,8 @@ class AWSConfigBucket(AWSLogsBucket):
 
     def get_date_last_log(self, aws_account_id, aws_region):
         if self.reparse:
-            last_date_processed = self.only_logs_after.strftime('%Y%m%d')
+            last_date_processed = self.only_logs_after.strftime('%Y%m%d') if self.only_logs_after is not None else \
+                datetime.utcnow().strftime('%Y%m%d')
         else:
             try:
                 query_date_last_log = self.db_connector.execute(self.sql_find_last_log_processed.format(
@@ -1069,7 +1119,7 @@ class AWSConfigBucket(AWSLogsBucket):
                 last_date_processed = str(query_date_last_log.fetchone()[0])
             # if DB is empty
             except (TypeError, IndexError) as e:
-                last_date_processed = self.only_logs_after.strftime('%Y%m%d')
+                last_date_processed = datetime.utcnow().strftime('%Y%m%d')
         return last_date_processed
 
     def iter_regions_and_accounts(self, account_id, regions):
@@ -1104,6 +1154,21 @@ class AWSConfigBucket(AWSLogsBucket):
         if self.reparse:
             if self.only_logs_after:
                 filter_marker = self.marker_only_logs_after(aws_region, aws_account_id)
+            else:
+                query_first_key = self.db_connector.execute(
+                    self.sql_find_first_key_processed.format(
+                        bucket_path=self.bucket_path,
+                        table_name=self.db_table_name,
+                        aws_account_id=aws_account_id,
+                        aws_region=aws_region
+                    )
+                )
+                try:
+                    filter_marker = query_first_key.fetchone()[0]
+                except (TypeError, IndexError):
+                    # The DB is empty and there's no only_logs_after, we start from today's date
+                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
+
         else:
             created_date = self.add_zero_to_day(date)
             query_last_key_of_day = self.db_connector.execute(
@@ -1131,10 +1196,11 @@ class AWSConfigBucket(AWSLogsBucket):
         if not iterating:
             if filter_marker:
                 filter_args['StartAfter'] = filter_marker
-                debug('+++ Marker: {0}'.format(filter_marker), 2)
+                debug(f'+++ Marker: {filter_marker}', 2)
             else:
-                filter_args['StartAfter'] = last_key
-                debug('+++ Marker: {0}'.format(last_key), 2)
+                filter_args['StartAfter'] = last_key if self.only_logs_after is None or \
+                    (ol_marker := self.marker_only_logs_after(aws_region, aws_account_id)) < last_key else ol_marker
+                debug(f'+++ Marker: {last_key}', 2)
 
         return filter_args
 
@@ -1485,7 +1551,7 @@ class AWSVPCFlowBucket(AWSLogsBucket):
             last_date_processed = str(query_date_last_log.fetchone()[0])
         # if DB is empty
         except (TypeError, IndexError) as e:
-            last_date_processed = self.only_logs_after.strftime('%Y%m%d')
+            last_date_processed = datetime.utcnow().strftime('%Y%m%d')
         return last_date_processed
 
     def iter_regions_and_accounts(self, account_id, regions):
@@ -1571,6 +1637,20 @@ class AWSVPCFlowBucket(AWSLogsBucket):
         if self.reparse:
             if self.only_logs_after:
                 filter_marker = self.marker_only_logs_after(aws_region, aws_account_id)
+            else:
+                query_first_key = self.db_connector.execute(
+                    self.sql_find_first_key_processed.format(
+                        bucket_path=self.bucket_path,
+                        table_name=self.db_table_name,
+                        aws_account_id=aws_account_id,
+                        aws_region=aws_region
+                    )
+                )
+                try:
+                    filter_marker = query_first_key.fetchone()[0]
+                except (TypeError, IndexError):
+                    # The DB is empty and there's no only_logs_after, we start from today's date
+                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
         else:
 
             query_last_key_of_day = self.db_connector.execute(
@@ -1597,10 +1677,11 @@ class AWSVPCFlowBucket(AWSLogsBucket):
         if not iterating:
             if filter_marker:
                 filter_args['StartAfter'] = filter_marker
-                debug('+++ Marker: {0}'.format(filter_marker), 2)
+                debug(f'+++ Marker: {filter_marker}', 2)
             else:
-                filter_args['StartAfter'] = last_key
-                debug('+++ Marker: {0}'.format(last_key), 2)
+                filter_args['StartAfter'] = last_key if self.only_logs_after is None or \
+                    (ol_marker := self.marker_only_logs_after(aws_region, aws_account_id)) < last_key else ol_marker
+                debug(f'+++ Marker: {last_key}', 2)
 
         return filter_args
 
@@ -1971,7 +2052,20 @@ class AWSCustomBucket(AWSBucket):
         if self.reparse:
             if self.only_logs_after:
                 filter_marker = self.marker_only_logs_after(aws_account_id, aws_region)
-
+            else:
+                query_first_key = self.db_connector.execute(
+                    self.sql_find_first_key_processed.format(
+                        bucket_path=self.bucket_path,
+                        table_name=self.db_table_name,
+                        aws_account_id=aws_account_id,
+                        aws_region=aws_region
+                    )
+                )
+                try:
+                    filter_marker = query_first_key.fetchone()[0]
+                except (TypeError, IndexError):
+                    # The DB is empty and there's no only_logs_after, we start from today's date
+                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
         else:
             query_last_key = self.db_connector.execute(
                 self.sql_find_last_key_processed.format(table_name=self.db_table_name,
@@ -1981,7 +2075,8 @@ class AWSCustomBucket(AWSBucket):
                 last_key = query_last_key.fetchone()[0]
             except (TypeError, IndexError) as e:
                 # if DB is empty for a service
-                last_key = self.marker_only_logs_after(aws_region, aws_account_id)
+                filter_marker = self.marker_only_logs_after(aws_region, aws_account_id) if self.only_logs_after else \
+                    self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
 
         filter_args = {
             'Bucket': self.bucket,
@@ -1993,10 +2088,11 @@ class AWSCustomBucket(AWSBucket):
         if not iterating:
             if filter_marker:
                 filter_args['StartAfter'] = filter_marker
-                debug('+++ Marker: {0}'.format(filter_marker), 2)
+                debug(f'+++ Marker: {filter_marker}', 2)
             else:
-                filter_args['StartAfter'] = last_key
-                debug('+++ Marker: {0}'.format(last_key), 2)
+                filter_args['StartAfter'] = last_key if self.only_logs_after is None or \
+                    (ol_marker := self.marker_only_logs_after(aws_region, aws_account_id)) < last_key else ol_marker
+                debug(f'+++ Marker: {last_key}', 2)
 
         return filter_args
 
@@ -2207,7 +2303,7 @@ class AWSServerAccess(AWSCustomBucket):
             date = re.search(r'(\d{4}-\d{2}-\d{2}).*', downloaded_file)
             if date:
                 date = datetime.strptime(date.group(1), '%Y-%m-%d')
-                return date < self.only_logs_after
+                return date < self.only_logs_after if self.only_logs_after else date < datetime.utcnow()
             return False
 
         try:
@@ -2439,8 +2535,8 @@ class AWSService(WazuhIntegration):
                                 LIMIT {retain_db_records});"""
 
     def get_last_log_date(self):
-        return '{Y}-{m}-{d} 00:00:00.0'.format(Y=self.only_logs_after[0:4],
-                                               m=self.only_logs_after[4:6], d=self.only_logs_after[6:8])
+        date = self.only_logs_after if self.only_logs_after else datetime.utcnow().strftime('%Y%m%d')
+        return f'{date[0:4]}-{date[4:6]}-{date[6:8]} 00:00:00.0'
 
     def format_message(self, msg):
         # rename service field to source
@@ -2706,7 +2802,20 @@ class AWSCloudWatchLogs(AWSService):
                     result_before = None
                     result_after = None
 
-                    if db_values is None:
+                    if self.only_logs_after_millis is None:
+                        if db_values:
+                            result_before = self.get_alerts_within_range(log_group=log_group, log_stream=log_stream,
+                                                                         token=None, start_time=None,
+                                                                         end_time=db_values['start_time'])
+                            if db_values['end_time'] is not None:
+                                result_after = self.get_alerts_within_range(log_group=log_group, log_stream=log_stream,
+                                                                            token=db_values['token'],
+                                                                            start_time=db_values['end_time'] + 1,
+                                                                            end_time=None)
+                        else:
+                            result_after = self.get_alerts_within_range(log_group=log_group, log_stream=log_stream,
+                                                                        token=None, start_time=None, end_time=None)
+                    elif db_values is None:
                         result_before = self.get_alerts_within_range(log_group=log_group, log_stream=log_stream,
                                                                      token=None, start_time=self.only_logs_after_millis,
                                                                      end_time=None)
@@ -3062,7 +3171,7 @@ def arg_valid_regions(arg_string):
 
 def arg_valid_iam_role_duration(arg_string):
     """Checks if the role session duration specified is a valid parameter.
-
+only_logs_after
     Parameters
     ----------
     arg_string: str or None
@@ -3121,7 +3230,7 @@ def get_script_arguments():
                         default='', type=arg_valid_prefix)
     parser.add_argument('-s', '--only_logs_after', dest='only_logs_after',
                         help='Only parse logs after this date - format YYYY-MMM-DD',
-                        default=datetime.strftime(datetime.utcnow(), '%Y-%b-%d'), type=arg_valid_date)
+                        default=None, type=arg_valid_date)
     parser.add_argument('-r', '--regions', dest='regions', help='Comma delimited list of AWS regions to parse logs',
                         default='', type=arg_valid_regions)
     parser.add_argument('-e', '--skip_on_error', action='store_true', dest='skip_on_error',
