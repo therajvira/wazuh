@@ -173,6 +173,8 @@ class WazuhIntegration:
         self.check_metadata_version()
         self.discard_field = discard_field
         self.discard_regex = re.compile(fr'{discard_regex}')
+        # to fetch logs using this date if no only_logs_after value was provided on the first execution
+        self.default_date = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
     def migrate_from_38(self, **kwargs):
         self.db_maintenance(**kwargs)
@@ -679,8 +681,8 @@ class AWSBucket(WazuhIntegration):
                 try:
                     filter_marker = query_first_key.fetchone()[0]
                 except (TypeError, IndexError):
-                    # The DB is empty and there's no only_logs_after, we start from today's date
-                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
+                    # The DB is empty and there's no only_logs_after, we start from the default date
+                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, self.default_date)
         else:
             query_last_key = self.db_connector.execute(
                 self.sql_find_last_key_processed.format(bucket_path=self.bucket_path,
@@ -692,7 +694,7 @@ class AWSBucket(WazuhIntegration):
             except (TypeError, IndexError) as e:
                 # if DB is empty for a region
                 filter_marker = self.marker_only_logs_after(aws_region, aws_account_id) if self.only_logs_after else \
-                    self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
+                    self.marker_custom_date(aws_region, aws_account_id, self.default_date)
 
         filter_args = {
             'Bucket': self.bucket,
@@ -1107,7 +1109,7 @@ class AWSConfigBucket(AWSLogsBucket):
     def get_date_last_log(self, aws_account_id, aws_region):
         if self.reparse:
             last_date_processed = self.only_logs_after.strftime('%Y%m%d') if self.only_logs_after is not None else \
-                datetime.utcnow().strftime('%Y%m%d')
+                self.default_date.strftime('%Y%m%d')
         else:
             try:
                 query_date_last_log = self.db_connector.execute(self.sql_find_last_log_processed.format(
@@ -1119,7 +1121,7 @@ class AWSConfigBucket(AWSLogsBucket):
                 last_date_processed = str(query_date_last_log.fetchone()[0])
             # if DB is empty
             except (TypeError, IndexError) as e:
-                last_date_processed = datetime.utcnow().strftime('%Y%m%d')
+                last_date_processed = self.default_date.strftime('%Y%m%d')
         return last_date_processed
 
     def iter_regions_and_accounts(self, account_id, regions):
@@ -1167,7 +1169,7 @@ class AWSConfigBucket(AWSLogsBucket):
                     filter_marker = query_first_key.fetchone()[0]
                 except (TypeError, IndexError):
                     # The DB is empty and there's no only_logs_after, we start from today's date
-                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
+                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, self.default_date)
 
         else:
             created_date = self.add_zero_to_day(date)
@@ -1551,7 +1553,7 @@ class AWSVPCFlowBucket(AWSLogsBucket):
             last_date_processed = str(query_date_last_log.fetchone()[0])
         # if DB is empty
         except (TypeError, IndexError) as e:
-            last_date_processed = datetime.utcnow().strftime('%Y%m%d')
+            last_date_processed = self.default_date.strftime('%Y%m%d')
         return last_date_processed
 
     def iter_regions_and_accounts(self, account_id, regions):
@@ -1650,7 +1652,7 @@ class AWSVPCFlowBucket(AWSLogsBucket):
                     filter_marker = query_first_key.fetchone()[0]
                 except (TypeError, IndexError):
                     # The DB is empty and there's no only_logs_after, we start from today's date
-                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
+                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, self.default_date)
         else:
 
             query_last_key_of_day = self.db_connector.execute(
@@ -2065,7 +2067,7 @@ class AWSCustomBucket(AWSBucket):
                     filter_marker = query_first_key.fetchone()[0]
                 except (TypeError, IndexError):
                     # The DB is empty and there's no only_logs_after, we start from today's date
-                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
+                    filter_marker = self.marker_custom_date(aws_region, aws_account_id, self.default_date)
         else:
             query_last_key = self.db_connector.execute(
                 self.sql_find_last_key_processed.format(table_name=self.db_table_name,
@@ -2076,7 +2078,7 @@ class AWSCustomBucket(AWSBucket):
             except (TypeError, IndexError) as e:
                 # if DB is empty for a service
                 filter_marker = self.marker_only_logs_after(aws_region, aws_account_id) if self.only_logs_after else \
-                    self.marker_custom_date(aws_region, aws_account_id, datetime.utcnow())
+                    self.marker_custom_date(aws_region, aws_account_id, self.default_date)
 
         filter_args = {
             'Bucket': self.bucket,
@@ -2303,7 +2305,7 @@ class AWSServerAccess(AWSCustomBucket):
             date = re.search(r'(\d{4}-\d{2}-\d{2}).*', downloaded_file)
             if date:
                 date = datetime.strptime(date.group(1), '%Y-%m-%d')
-                return date < self.only_logs_after if self.only_logs_after else date < datetime.utcnow()
+                return date < self.only_logs_after if self.only_logs_after else date < self.default_date
             return False
 
         try:
@@ -2535,7 +2537,7 @@ class AWSService(WazuhIntegration):
                                 LIMIT {retain_db_records});"""
 
     def get_last_log_date(self):
-        date = self.only_logs_after if self.only_logs_after else datetime.utcnow().strftime('%Y%m%d')
+        date = self.only_logs_after if self.only_logs_after else self.default_date.strftime('%Y%m%d')
         return f'{date[0:4]}-{date[4:6]}-{date[6:8]} 00:00:00.0'
 
     def format_message(self, msg):
