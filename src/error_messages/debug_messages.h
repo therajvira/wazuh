@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * January 17, 2018.
  *
  * This program is free software; you can redistribute it
@@ -54,7 +54,7 @@
 #define VU_AG_PART_SCAN       "(5439): A partial scan will be run on agent '%.3d'"
 #define VU_NO_PACKAGE_SCAN    "(5440): The package inventory of the agent '%.3d' is not available, but a hotfix analysis will be launched."
 #define VU_SOCKET_RETRY       "(5441): Unable to connect to socket '%s'. Waiting '%d' seconds."
-#define VU_NO_HOTFIX_AVAIL    "(5442): It is not possible to perform a hotfix scan on agent '%.3d'"
+#define VU_NO_HOTFIX_AVAIL    "(5442): Hotfixes data not reported by the agent '%.3d'."
 #define VU_OSINFO_DISABLED    "(5443): Unable to get the OS release for agent '%.3d'. It may not have the OS inventory enabled."
 #define VU_OSINFOLNX_DISABLED "(5444): Unable to get the OS version and release for agent '%.3d'. It may not have the OS inventory enabled."
 #define VU_NO_SOFTWARE        "(5445): No changes have been found with respect to the last package inventory or no packages have been indexed for agent '%.3d'"
@@ -85,6 +85,7 @@
 #define VU_FUNCTION_TIME      "(5470): It took '%ld' seconds to '%s' vulnerabilities in agent '%.3d'"
 #define VU_AGENT_FINISH       "(5471): Finished vulnerability assessment for agent '%.3d'"
 #define VU_END_SCAN           "(5472): Vulnerability scan finished."
+#define VU_HOTFIX_NOT_SYNCED  "(5473): Hotfixes data not synchronized in agent '%.3d' database."
 #define VU_NO_SRC_VERSION     "(5480): Unable to get the source '%s' version for agent '%.3d'"
 #define VU_NO_SRC_NAME        "(5481): Unable to get the source '%s' name for agent '%.3d'"
 #define VU_VULN_SEND_AG_FEED  "(5482): A total of '%d' vulnerabilities have been reported for agent '%.3d' thanks to the '%s' feed."
@@ -95,14 +96,20 @@
 #define VU_ERROR_CMP_VER      "(5487): Unknown relation '%s' between versions '%s' and '%s' for package '%s'"
 #define VU_DISCARD_CVE_ENTRY  "(5488): Package '%s' not affected by '%s' with misleading condition (%s '%s')."
 #define VU_DISCARD_DU         "(5489): '%s' vulnerability information discarded for agent '%.3d' ('KB%s'): Dynamic Updates (DU) are only available when upgrading to new Windows 10 versions."
+#define VU_REMOVED_VULN       "(5490): The vulnerability '%s' affecting '%s' was solved"
+#define VU_AG_BASELINE_SCAN   "(5491): A baseline scan will be run on agent '%.3d'"
+#define VU_INS_DEPS           "(5492): Inserting '%s' vulnerabilities dependencies."
+#define VU_DEP_FLAG           "(5493): Dependency '%s' is installed on agent '%.3d': Version (%s) '%s' '%s'"
+#define VU_DEP_PRESCAN_START  "(5494): Starting SUSE dependency analysis for agent '%.3d'"
+#define VU_DEP_PRESCAN_FINISH "(5495): Finished SUSE dependency analysis for agent '%.3d'"
 
 /* File integrity monitoring debug messages */
 #define FIM_DIFF_SKIPPED                    "(6200): Diff execution skipped for containing insecure characters."
 #define FIM_SCHED_BATCH                     "(6201): Setting SCHED_BATCH returned: '%d'"
 #define FIM_LOCAL_DIFF_DELETE               "(6202): Deleting backup '%s'. Not monitored anymore."
 #define FIM_FILE_IGNORE_RESTRICT            "(6203): Ignoring entry '%s' due to restriction '%s'"
-#define FIM_IGNORE_ENTRY                    "(6204): Ignoring '%s' '%s' due to '%s'"
-#define FIM_IGNORE_SREGEX                   "(6205): Ignoring '%s' '%s' due to sregex '%s'"
+#define FIM_IGNORE_ENTRY                    "(6204): Ignoring path '%s' due to pattern '%s'"
+#define FIM_IGNORE_SREGEX                   "(6205): Ignoring path '%s' due to sregex '%s'"
 #define FIM_TAG_ADDED                       "(6206): Adding tag '%s' to directory '%s'"
 #define FIM_READING_REGISTRY                "(6207): Attempt to read: '%s%s'"
 #define FIM_CLIENT_CONFIGURATION            "(6208): Reading Client Configuration [%s]"
@@ -204,7 +211,7 @@
 #define FIM_WHODATA_DEVICE_PATH             "(6304): Find device '%s' in path '%s'"
 #define FIM_WHODATA_DEVICE_REPLACE          "(6305): Replacing '%s' to '%s'"
 #define FIM_WHODATA_PATH_NOPROCCESED        "(6306): The path could not be processed in Whodata mode. Error: %u"
-#define FIM_WHODATA_CONVERT_PATH            "(6307): Convert '%s' to '%s' to process the whodata event."
+#define FIM_CONVERT_PATH                    "(6307): Convert '%s' to '%s' to process the FIM events."
 #define FIM_WHODATA_FOLDER_REMOVED          "(6308): File '%s' was inside the removed directory '%s'. It will be notified."
 #define FIM_WHODATA_IGNORE_FILEEVENT        "(6309): Ignoring remove event for file '%s' because it has already been reported."
 #define FIM_CHECKSUM_MSG                    "(6310): Sending msg to the server: %s"
@@ -232,15 +239,15 @@
 #define FIM_WARN_REALTIME_UNSUPPORTED       "(6332): Realtime monitoring request on unsupported system."
 #define FIM_WARN_WHODATA_UNSUPPORTED        "(6333): Whodata monitoring request on unsupported system."
 #define FIM_AUDIT_INVALID_AUID              "(6334): Audit: Invalid 'auid' value read. Check Audit configuration (PAM)."
-#define FIM_ENTRIES_INFO                    "(6335): Fim entries: %d"
-#define FIM_INODES_INFO                     "(6336): Fim inode entries: %d, path count: %d"
+#define FIM_ENTRIES_INFO                    "(6335): Fim file entries count: '%d'"
+#define FIM_INODES_INFO                     "(6336): Fim inode entries: '%d', path count: '%d'"
 #define FIM_WHODATA_INVALID_UNKNOWN_UID     "(6337): The user ID could not be extracted from the event."
 #define FIM_EMPTY_DIRECTORIES_CONFIG        "(6338): Empty directories tag found in the configuration."
 
 #define FIM_DELETE_DB_TRY                   "(6340): Failed to delete FIM database '%s'- %dº try."
 #define FIM_DELETE_DB                       "(6341): Failed to delete FIM database '%s'."
-#define FIM_FILE_LIMIT_VALUE                "(6342): Maximum number of entries to be monitored: '%u'"
-#define FIM_FILE_LIMIT_UNLIMITED            "(6343): No limit set to maximum number of entries to be monitored"
+#define FIM_FILE_LIMIT_VALUE                "(6342): Maximum number of files to be monitored: '%u'"
+#define FIM_LIMIT_UNLIMITED                 "(6343): No limit set to maximum number of %s entries to be monitored"
 #define FIM_INOTIFY_WATCH_DELETED           "(6344): Inotify watch deleted for '%s'"
 #define FIM_NUM_WATCHES                     "(6345): Folders monitored with real-time engine: %u"
 #define FIM_REALTIME_CALLBACK               "(6346): Realtime watch deleted for '%s'"
@@ -251,7 +258,7 @@
 #define FIM_DIFF_IDENTICAL_MD5_FILES        "(6351): The files are identical, don't compute differences"
 #define FIM_DIFF_COMMAND_OUTPUT_EQUAL       "(6352): Command diff/fc output 0, files are the same"
 #define FIM_EMPTY_REGISTRY_CONFIG           "(6353): Empty windows_registry tag found in the configuration."
-#define FIM_REGISTRY_ENTRIES_INFO           "(6354): Fim registry entries: %d"
+#define FIM_REGISTRY_ENTRIES_INFO           "(6354): Fim registry entries count: '%d'"
 #define FIM_DIFF_FOLDER_NOT_EXIST           "(6355): Can't remove folder '%s', it does not exist."
 #define FIM_DIFF_FILE_SIZE_LIMIT            "(6356): Maximum file size limit to generate diff information configured to '%d KB' for '%s'."
 #define FIM_DISK_QUOTA_LIMIT                "(6357): Maximum disk quota size limit configured to '%d KB'."
@@ -263,7 +270,15 @@
 #define FIM_WILDCARDS_UPDATE_FINALIZE       "(6363): Configuration wildcards update finalize."
 #define FIM_REALTIME_MAXNUM_WATCHES         "(6364): Unable to add directory to real time monitoring: '%s' - Maximum size permitted."
 #define FIM_ADDED_RULE_TO_FILE              "(6365): Added directory '%s' to audit rules file."
-
+#define FIM_WHODATA_STATE_CHECKER           "(6366): Starting check of Windows Audit Policies and SACLs."
+#define FIM_WHODATA_POLICY_OPENED           "(6367): Audit policy opened successfully. Audit mode enabled."
+#define FIM_WHODATA_OBJECT_ACCESS           "(6368): Detected Audit Object Access category, checking subcategories. GUID: %s"
+#define FIM_WHODATA_SUCCESS_POLICY          "(6369): Found Audit %s subcategory configured to success. GUID: %s"
+#define FIM_REGISTRY_LIMIT_VALUE            "(6370): Maximum number of registry values to be monitored: '%u'"
+#define FIM_REGISTRY_VALUES_ENTRIES_INFO    "(6371): Fim registry values entries count: '%d'"
+#define FIM_WILDCARDS_REGISTERS_START       "(6372): Starting configuration for Windows registry wildcards."
+#define FIM_WILDCARDS_ADD_REGISTER          "(6373): Expanding entry '%s' to '%s' to monitor FIM events."
+#define FIM_WILDCARDS_REGISTERS_FINALIZE    "(6374): Wildcard configuration successfully completed."
 
 /* Modules messages */
 #define WM_UPGRADE_RESULT_AGENT_INFO         "(8151): Agent Information obtained: '%s'"
@@ -301,5 +316,10 @@
 /* Logcollector */
 
 #define LOGCOLLECTOR_FILE_NOT_EXIST           "(9000): File '%s' no longer exists."
+
+/* Analysisd */
+
+#define MESSAGE_TOO_LONG                    "(9200): Long message, cannot be processed."
+#define UNABLE_TO_SEND_INFORMATION_TO_WDB   "(9201): Unable to send dbsync information to Wazuh DB."
 
 #endif /* DEBUG_MESSAGES_H */

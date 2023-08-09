@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -11,7 +11,7 @@
 #ifndef SQLITE3_WRAPPERS_H
 #define SQLITE3_WRAPPERS_H
 
-#include "external/sqlite/sqlite3.h"
+#include "../external/sqlite/sqlite3.h"
 
 int __wrap_sqlite3_bind_int(sqlite3_stmt *stmt,
                             int index,
@@ -23,8 +23,9 @@ int __wrap_sqlite3_bind_int64(sqlite3_stmt *stmt,
                               int index,
                               sqlite3_int64 value);
 
-int __wrap_sqlite3_bind_null(__attribute__((unused)) sqlite3_stmt *stmt,
-                              int index);
+int __wrap_sqlite3_bind_double(sqlite3_stmt *pStmt, int index, double value);
+
+int __wrap_sqlite3_bind_null(sqlite3_stmt *pStmt, int index);
 
 void expect_sqlite3_bind_int64_call(int idx, double val, int ret);
 
@@ -38,6 +39,10 @@ void expect_sqlite3_bind_text_call(int position, const char *buf, int ret);
 
 int __wrap_sqlite3_bind_parameter_index(__attribute__((unused)) sqlite3_stmt * stmt,
                                         const char *zName);
+
+int __wrap_sqlite3_bind_double(__attribute__((unused)) sqlite3_stmt* stmt,
+                               int index,
+                               double value);
 
 int __wrap_sqlite3_clear_bindings(sqlite3_stmt* pStmt);
 
@@ -96,5 +101,7 @@ int __wrap_sqlite3_column_type(sqlite3_stmt *pStmt, int i);
 const char* __wrap_sqlite3_column_name(sqlite3_stmt *pStmt, int N);
 
 int __wrap_sqlite3_get_autocommit(__attribute__((unused)) sqlite3 * db);
+
+const char* __wrap_sqlite3_sql(sqlite3_stmt *pStmt);
 
 #endif

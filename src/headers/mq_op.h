@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -11,7 +11,8 @@
 #ifndef MQ_H
 #define MQ_H
 
-#include "config/localfile-config.h"
+#include "../config/localfile-config.h"
+#include <sys/types.h>
 
 /* Default queues */
 #define LOCALFILE_MQ    '1'
@@ -21,20 +22,31 @@
 #define DBSYNC_MQ       '5'
 #define SYSCHECK_MQ     '8'
 #define ROOTCHECK_MQ    '9'
+#define SYSCOLLECTOR_MQ 'd'
+#define CISCAT_MQ       'e'
+#define WIN_EVT_MQ      'f'
 #define SCA_MQ          'p'
 #define UPGRADE_MQ      'u'
-
-/* Queues for additional log types */
-#define MYSQL_MQ         'a'
-#define POSTGRESQL_MQ    'b'
-#define AUTH_MQ          'c'
-#define SYSCOLLECTOR_MQ  'd'
-#define CISCAT_MQ        'e'
-#define WIN_EVT_MQ       'f'
 
 #define INFINITE_OPENQ_ATTEMPTS 0
 
 extern int sock_fail_time;
+
+/**
+ *  Starts a Message Queue with specific owner and perms.
+ *  @param key path where the message queue will be created
+ *  @param type WRITE||READ
+ *  @param n_attempts Number of attempts to connect to the queue (0 to attempt until a successful conection).
+ *  @param uid owner of the queue.
+ *  @param gid group of the queue.
+ *  @param perms permissions of the queue.
+ *  @return
+ *  UNIX -> OS_INVALID if queue failed to start
+ *  UNIX -> int(rc) file descriptor of initialized queue
+ *  WIN32 -> 0
+ */
+int StartMQWithSpecificOwnerAndPerms(const char *key, short int type, short int n_attempts, uid_t uid, gid_t gid, mode_t mode) __attribute__((nonnull));
+
 /**
  *  Starts a Message Queue.
  *  @param key path where the message queue will be created
@@ -46,6 +58,23 @@ extern int sock_fail_time;
  *  WIN32 -> 0
  */
 int StartMQ(const char *key, short int type, short int n_attempts) __attribute__((nonnull));
+
+/**
+ * Sends a message string through a message queue
+ * @param queue file descriptor of the queue where the message will be sent (UNIX)
+ * @param message string containing the message
+ * @param locmsg path to the queue file
+ * @param loc  queue location (WIN32)
+ * @param fn_ptr function pointer to the function that will check if the process is shutting down
+ * @return
+ * UNIX -> 0 if file descriptor is still available
+ * UNIX -> -1 if there is an error in the socket. The socket will be closed before returning (StartMQ should be called to restore queue)
+ * WIN32 -> 0 on success
+ * WIN32 -> -1 on error
+ * Notes: (UNIX) If the socket is busy when trying to send a message a DEBUG2 message will be loggeed but the return code will be 0
+ */
+
+int SendMSGPredicated(int queue, const char *message, const char *locmsg, char loc, bool (*fn_ptr)()) __attribute__((nonnull));
 
 /**
  * Sends a message string through a message queue

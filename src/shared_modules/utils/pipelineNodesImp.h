@@ -1,6 +1,6 @@
 /*
  * Wazuh shared modules utils
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * July 14, 2020.
  *
  * This program is free software; you can redistribute it
@@ -31,7 +31,7 @@ namespace Utils
             {}
             ReadNode(Functor functor,
                      const unsigned int numberOfThreads)
-                : DispatcherType{ functor, numberOfThreads }
+                : DispatcherType{ functor, numberOfThreads, UNLIMITED_QUEUE_SIZE }
             {}
             // LCOV_EXCL_START
             ~ReadNode() = default;
@@ -63,7 +63,7 @@ namespace Utils
             {}
             ReadWriteNode(Functor functor,
                           const unsigned int numberOfThreads)
-                : DispatcherType{ std::bind(&RWNodeType::doTheWork, this, std::placeholders::_1), numberOfThreads }
+                : DispatcherType{ std::bind(&RWNodeType::doTheWork, this, std::placeholders::_1), numberOfThreads, UNLIMITED_QUEUE_SIZE }
                 , m_functor{functor}
             {}
             // LCOV_EXCL_START

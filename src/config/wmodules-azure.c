@@ -1,6 +1,6 @@
 /*
  * Wazuh Module Configuration
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * December, 2017.
  *
  * This program is free software; you can redistribute it
@@ -9,7 +9,6 @@
  * Foundation.
  */
 
-#ifndef CLIENT
 #ifndef WIN32
 #include "wazuh_modules/wmodules.h"
 
@@ -34,6 +33,7 @@ static const char *XML_CONTAINER = "container";
 static const char *XML_CONTAINER_NAME = "name";
 static const char *XML_CONTAINER_BLOBS = "blobs";
 static const char *XML_CONTAINER_TYPE="content_type";
+static const char *XML_PATH = "path";
 
 static const char *XML_REQUEST_QUERY = "query";
 static const char *XML_TIME_OFFSET = "time_offset";
@@ -48,6 +48,9 @@ static void wm_clean_api(wm_azure_api_t * api_config);
 static void wm_clean_request(wm_azure_request_t * request);
 static void wm_clean_storage(wm_azure_storage_t * storage);
 static void wm_clean_container(wm_azure_container_t * container);
+
+static const char *AUTHENTICATION_OPTIONS_URL = "https://documentation.wazuh.com/current/azure/activity-services/prerequisites/credentials.html";
+static const char *DEPRECATED_MESSAGE = "Deprecated tag <%s> found at module '%s'. This tag was deprecated in %s; please use a different authentication method. Check %s for more information.";
 
 // Parse XML
 
@@ -72,7 +75,7 @@ int wm_azure_read(const OS_XML *xml, xml_node **nodes, wmodule *module)
     module->data = azure;
 
     if (!nodes) {
-        mwarn("Empty configuration at module '%s'.", WM_AZURE_CONTEXT.name);
+        merror("Empty configuration at module '%s'.", WM_AZURE_CONTEXT.name);
         return OS_INVALID;
     }
 
@@ -201,7 +204,7 @@ int wm_azure_read(const OS_XML *xml, xml_node **nodes, wmodule *module)
         } else if (is_sched_tag(nodes[i]->element)) {
             // Do nothing
         } else {
-            merror("No such tag '%s' at module '%s'.", nodes[i]->element, WM_AZURE_CONTEXT.name);	
+            merror("No such tag '%s' at module '%s'.", nodes[i]->element, WM_AZURE_CONTEXT.name);
             return OS_INVALID;
         }
     }
@@ -237,11 +240,15 @@ int wm_azure_api_read(const OS_XML *xml, XML_NODE nodes, wm_azure_api_t * api_co
             return OS_INVALID;
 
         } else if (!strcmp(nodes[i]->element, XML_APP_ID)) {
-            if (*nodes[i]->content != '\0')
+            if (*nodes[i]->content != '\0') {
+                mwarn(DEPRECATED_MESSAGE, nodes[i]->element, WM_AZURE_CONTEXT.name, "4.4", AUTHENTICATION_OPTIONS_URL);
                 os_strdup(nodes[i]->content, api_config->application_id);
+            }
         } else if (!strcmp(nodes[i]->element, XML_APP_KEY)) {
-            if (*nodes[i]->content != '\0')
+            if (*nodes[i]->content != '\0') {
+                mwarn(DEPRECATED_MESSAGE, nodes[i]->element, WM_AZURE_CONTEXT.name, "4.4", AUTHENTICATION_OPTIONS_URL);
                 os_strdup(nodes[i]->content, api_config->application_key);
+            }
         } else if (!strcmp(nodes[i]->element, XML_AUTH_PATH)) {
             if (*nodes[i]->content != '\0')
                 os_strdup(nodes[i]->content, api_config->auth_path);
@@ -386,11 +393,6 @@ int wm_azure_request_read(XML_NODE nodes, wm_azure_request_t * request, unsigned
         return OS_INVALID;
     }
 
-    if (!request->time_offset) {
-        merror("At module '%s': No time offset defined. Skipping request block...", WM_AZURE_CONTEXT.name);
-        return OS_INVALID;
-    }
-
     if (!request->workspace && type == LOG_ANALYTICS) {
         merror("At module '%s': No Workspace ID defined. Skipping request block...", WM_AZURE_CONTEXT.name);
         return OS_INVALID;
@@ -417,22 +419,10 @@ int wm_azure_storage_read(const OS_XML *xml, XML_NODE nodes, wm_azure_storage_t 
             merror(XML_ELEMNULL);
             return OS_INVALID;
 
-        } else if (!nodes[i]->content) {
+        } else if (!nodes[i]->content && (strcmp(nodes[i]->element, XML_CONTAINER) != 0)) {
             merror(XML_VALUENULL, nodes[i]->element);
             return OS_INVALID;
 
-        } else if (!strcmp(nodes[i]->element, XML_ACCOUNT_NAME)) {
-            if (*nodes[i]->content != '\0')
-                os_strdup(nodes[i]->content, storage->account_name);
-        } else if (!strcmp(nodes[i]->element, XML_ACCOUNT_KEY)) {
-            if (*nodes[i]->content != '\0')
-                os_strdup(nodes[i]->content, storage->account_key);
-        } else if (!strcmp(nodes[i]->element, XML_AUTH_PATH)) {
-            if (*nodes[i]->content != '\0')
-                os_strdup(nodes[i]->content, storage->auth_path);
-        } else if (!strcmp(nodes[i]->element, XML_TAG)) {
-            if (*nodes[i]->content != '\0')
-                os_strdup(nodes[i]->content, storage->tag);
         } else if (!strcmp(nodes[i]->element, XML_CONTAINER)) {
 
             if (container) {
@@ -443,11 +433,6 @@ int wm_azure_storage_read(const OS_XML *xml, XML_NODE nodes, wm_azure_storage_t 
                 // First request block
                 os_calloc(1, sizeof(wm_azure_container_t), container);
                 storage->container = container;
-            }
-
-            if (!(children = OS_GetElementsbyNode(xml, nodes[i]))) {
-                merror(XML_INVELEM, nodes[i]->element);
-                return OS_INVALID;
             }
 
             // Read name attribute
@@ -463,7 +448,6 @@ int wm_azure_storage_read(const OS_XML *xml, XML_NODE nodes, wm_azure_storage_t 
                     } else {
                         storage->container = container = NULL;
                     }
-                    OS_ClearNode(children);
                     continue;
                 }
             } else {
@@ -475,24 +459,40 @@ int wm_azure_storage_read(const OS_XML *xml, XML_NODE nodes, wm_azure_storage_t 
                 } else {
                     storage->container = container = NULL;
                 }
-                OS_ClearNode(children);
                 continue;
             }
 
-            if (wm_azure_container_read(children, container) < 0) {
-                wm_clean_container(container);
-                if (container_prev) {
-                    container = container_prev;
-                    container->next = NULL;
-                } else {
-                    storage->container = container = NULL;
+            if ((children = OS_GetElementsbyNode(xml, nodes[i]))) {
+                if (wm_azure_container_read(children, container) < 0) {
+                    wm_clean_container(container);
+                    if (container_prev) {
+                        container = container_prev;
+                        container->next = NULL;
+                    } else {
+                        storage->container = container = NULL;
+                    }
                 }
+                OS_ClearNode(children);
             }
 
-            OS_ClearNode(children);
+        } else if (nodes[i]->content != NULL && *nodes[i]->content != '\0') {
+            if (!strcmp(nodes[i]->element, XML_ACCOUNT_NAME)) {
+                mwarn(DEPRECATED_MESSAGE, nodes[i]->element, WM_AZURE_CONTEXT.name, "4.4", AUTHENTICATION_OPTIONS_URL);
+                os_strdup(nodes[i]->content, storage->account_name);
+            } else if (!strcmp(nodes[i]->element, XML_ACCOUNT_KEY)) {
+                mwarn(DEPRECATED_MESSAGE, nodes[i]->element, WM_AZURE_CONTEXT.name, "4.4", AUTHENTICATION_OPTIONS_URL);
+                os_strdup(nodes[i]->content, storage->account_key);
+            } else if (!strcmp(nodes[i]->element, XML_AUTH_PATH)) {
+                os_strdup(nodes[i]->content, storage->auth_path);
+            } else if (!strcmp(nodes[i]->element, XML_TAG)) {
+                os_strdup(nodes[i]->content, storage->tag);
+            } else {
+                merror(XML_INVELEM, nodes[i]->element);
+                return OS_INVALID;
+            }
 
         } else {
-            merror(XML_INVELEM, nodes[i]->element);
+            merror(XML_VALUENULL, nodes[i]->element);
             return OS_INVALID;
         }
     }
@@ -535,6 +535,7 @@ int wm_azure_container_read(XML_NODE nodes, wm_azure_container_t * container) {
     container->blobs = NULL;
     container->time_offset = NULL;
     container->content_type = NULL;
+    container->path = NULL;
 
     for (i = 0; nodes[i]; i++) {
 
@@ -578,27 +579,21 @@ int wm_azure_container_read(XML_NODE nodes, wm_azure_container_t * container) {
                 merror("At module '%s': Invalid timeout.", WM_AZURE_CONTEXT.name);
                 return OS_INVALID;
             }
+
+        } else if (!strcmp(nodes[i]->element, XML_PATH)) {
+            if (strlen(nodes[i]->content) != 0) {
+                os_strdup(nodes[i]->content, container->path);
+            } else if (strlen(nodes[i]->content) == 0) {
+                merror("Empty content for tag '%s' at module '%s'", XML_PATH, WM_AZURE_CONTEXT.name);
+                return OS_INVALID;
+            }
+
         } else {
             merror(XML_INVELEM, nodes[i]->element);
             return OS_INVALID;
         }
     }
 
-    /* Validation process */
-    if (!container->blobs) {
-        merror("At module '%s': No blobs defined. Skipping container block...", WM_AZURE_CONTEXT.name);
-        return OS_INVALID;
-    }
-
-    if (!container->time_offset) {
-        merror("At module '%s': No time offset defined. Skipping container block...", WM_AZURE_CONTEXT.name);
-        return OS_INVALID;
-    }
-
-    if (!container->content_type) {
-        merror("At module '%s': No content type defined. Skipping container block...", WM_AZURE_CONTEXT.name);
-        return OS_INVALID;
-    }
 
     return 0;
 }
@@ -679,5 +674,4 @@ void wm_clean_container(wm_azure_container_t * container) {
     free(container);
 }
 
-#endif
 #endif

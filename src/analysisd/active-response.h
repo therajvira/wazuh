@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -11,8 +11,8 @@
 #ifndef ACTIVE_RESPONSE_H
 #define ACTIVE_RESPONSE_H
 
-#include "config/active-response.h"
-#include "config/config.h"
+#include "../config/active-response.h"
+#include "../config/config.h"
 #include "list_op.h"
 
 /* Initialize active response */

@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -19,7 +19,7 @@ void _getDecodersListJSON(OSDecoderNode *list, cJSON *array) {
     OSDecoderNode *node = NULL;
     int i;
 
-    for (node=list;node->next;node = node->next) {
+    for (node = list; node != NULL; node = node->next) {
         cJSON *decoder = cJSON_CreateObject();
 
         cJSON_AddNumberToObject(decoder,"id",node->osdecoder->id);
@@ -192,7 +192,7 @@ void _getRulesListJSON(RuleNode *list, cJSON *array) {
     RuleNode *node = NULL;
     u_int32_t same;
     u_int32_t different;
-    int i;
+    unsigned i;
 
     const char * same_fields[] = {
         "same_srcip",
@@ -234,7 +234,7 @@ void _getRulesListJSON(RuleNode *list, cJSON *array) {
         "different_location"
     };
 
-    for (node=list;node->next;node = node->next) {
+    for (node = list; node != NULL; node = node->next) {
         cJSON *rule = cJSON_CreateObject();
 
         if (node->child) {
@@ -469,7 +469,18 @@ void _getRulesListJSON(RuleNode *list, cJSON *array) {
         }
 
         if (same = node->ruleinfo->same_field, same) {
-            for (i = 0; same != 0; i++) {
+            if ((same & FIELD_DYNAMICS) == FIELD_DYNAMICS) {
+                cJSON * array = cJSON_CreateArray();
+                cJSON_AddItemToObject(rule, "same_field", array);
+
+                for (i = 0; node->ruleinfo->same_fields[i] != NULL; i++) {
+                    cJSON_AddItemToArray(array, cJSON_CreateString(node->ruleinfo->same_fields[i]));
+                }
+
+                same &= ~FIELD_DYNAMICS;
+            }
+
+            for (i = 0; i < sizeof(same_fields) / sizeof(char*) && same != 0; i++) {
                 if ((same & 1) == 1) {
                     cJSON_AddStringToObject(rule, same_fields[i], "");
                 }
@@ -477,8 +488,19 @@ void _getRulesListJSON(RuleNode *list, cJSON *array) {
             }
         }
 
-        if (different = node->ruleinfo->same_field, different) {
-            for (i = 0; different != 0; i++) {
+        if (different = node->ruleinfo->different_field, different) {
+            if ((different & FIELD_DYNAMICS) == FIELD_DYNAMICS) {
+                cJSON * array = cJSON_CreateArray();
+                cJSON_AddItemToObject(rule, "different_field", array);
+
+                for (i = 0; node->ruleinfo->not_same_fields[i] != NULL; i++) {
+                    cJSON_AddItemToArray(array, cJSON_CreateString(node->ruleinfo->not_same_fields[i]));
+                }
+
+                different &= ~FIELD_DYNAMICS;
+            }
+
+            for (i = 0; i < sizeof(different_fields) / sizeof(char*) && different != 0; i++) {
                 if ((different & 1) == 1) {
                     cJSON_AddStringToObject(rule, different_fields[i], "");
                 }

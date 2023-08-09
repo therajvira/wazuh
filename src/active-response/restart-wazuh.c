@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -8,8 +8,14 @@
  */
 
 #include "active_responses.h"
+#include "dll_load_notify.h"
 
 int main (int argc, char **argv) {
+#ifdef WIN32
+    // This must be always the first instruction
+    enable_dll_verification();
+#endif
+
     (void)argc;
     int action = OS_INVALID;
 

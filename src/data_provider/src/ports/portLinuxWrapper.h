@@ -1,6 +1,6 @@
 /*
  * Wazuh SYSINFO
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * November 3, 2020.
  *
  * This program is free software; you can redistribute it
@@ -12,6 +12,7 @@
 #ifndef _PORT_LINUX_WRAPPER_H
 #define _PORT_LINUX_WRAPPER_H
 
+#include <netinet/tcp.h>
 #include "iportWrapper.h"
 #include "sharedDefs.h"
 #include "bits/stdc++.h"
@@ -85,7 +86,7 @@ class LinuxPortWrapper final : public IPortWrapper
             in_addr addr;
             ss << std::hex << hexRawAddress;
             ss >> addr.s_addr;
-            return inet_ntoa(addr);
+            return Utils::NetworkHelper::IAddressToBinary(AF_INET, &addr);
         }
 
         static std::string IPv6Address(const std::string& hexRawAddress)
@@ -97,7 +98,6 @@ class LinuxPortWrapper final : public IPortWrapper
             if (hexAddressLength == IPV6_ADDRESS_HEX_SIZE)
             {
                 in6_addr sin6 {};
-                char address[INET6_ADDRSTRLEN] { 0 };
                 auto index { 0l };
 
                 for (auto i = 0ull; i < hexAddressLength; i += CHAR_BIT)
@@ -108,7 +108,7 @@ class LinuxPortWrapper final : public IPortWrapper
                     ++index;
                 }
 
-                retVal = inet_ntop(AF_INET6, &sin6, address, sizeof(address));
+                retVal =  Utils::NetworkHelper::IAddressToBinary(AF_INET6, &sin6);
             }
 
             return retVal;
@@ -226,9 +226,18 @@ class LinuxPortWrapper final : public IPortWrapper
 
             return retVal;
         }
-        int32_t inode() const override
+        int64_t inode() const override
         {
-            return std::stoi(m_fields.at(INODE));
+            int64_t retVal { -1 };
+
+            try
+            {
+                retVal = static_cast<int64_t>(std::stoll(m_fields.at(INODE)));
+            }
+            catch (...)
+            {}
+
+            return retVal;
         }
         std::string state() const override
         {

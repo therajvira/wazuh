@@ -1,6 +1,6 @@
 /*
  * OS processes
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * January 25, 2019
  *
  * This program is free software; you can redistribute it
@@ -29,5 +29,10 @@ OSList *w_os_get_process_list();
 int w_is_file(const char * const file);
 /* Delete the process list */
 int w_del_plist(OSList *p_list);
+
+#ifdef WIN32
+/* Executes Wow64DisableWow64FsRedirection if the OS version supports it */
+void SafeWow64DisableWow64FsRedirection(PVOID *oldValue);
+#endif
 
 #endif /* OS_UTILS_OP_H */

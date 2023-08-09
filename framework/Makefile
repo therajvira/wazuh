@@ -1,5 +1,5 @@
 # Makefile for Wazuh Framework
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # May 3, 2017
 #
 # Syntax: make [ all | build | install | examples | clean ]
@@ -10,6 +10,7 @@ INSTALLDIR       ?= /var/ossec
 CC           = gcc
 CFLAGS       = -pipe -Wall -Wextra
 THREAD_FLAGS = -pthread
+MV_FILE      = mv -f
 RM_FILE      = rm -f
 INSTALL_DIR  = install -o root -g ${WAZUH_GROUP} -m 0750  -d
 INSTALL_EXEC = install -o root -g ${WAZUH_GROUP} -m 0750
@@ -43,7 +44,11 @@ install:
 #	Remove update_ruleset script when upgrading to >=4.2.0 (deprecated)
 	[ ! -e ${INSTALLDIR}/bin/update_ruleset ] || $(RM_FILE) ${INSTALLDIR}/bin/update_ruleset
 #	Install scripts/%.py on $(INSTALLDIR)/bin/%
-	$(foreach script,$(wildcard scripts/*),$(INSTALL_EXEC) wrappers/generic_wrapper.sh $(patsubst scripts/%.py,$(INSTALLDIR)/bin/%,$(script));)
+	$(foreach script,$(wildcard scripts/*.py),$(INSTALL_EXEC) wrappers/generic_wrapper.sh $(patsubst scripts/%.py,$(INSTALLDIR)/bin/%,$(script));)
+#   Provisional name change for wazuh-logtest and wazuh-clusterd
+	$(MV_FILE) $(INSTALLDIR)/bin/wazuh_logtest $(INSTALLDIR)/bin/wazuh-logtest
+	$(MV_FILE) $(INSTALLDIR)/bin/wazuh_clusterd $(INSTALLDIR)/bin/wazuh-clusterd
+	$(RM_FILE) $(INSTALLDIR)/bin/__init__
 
 examples: install
 	$(INSTALL_DIR) $(INSTALLDIR)/framework/examples

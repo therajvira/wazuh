@@ -1,6 +1,6 @@
 
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -17,6 +17,8 @@
 #define EvtRender wrap_EvtRender
 #define EvtCreateRenderContext wrap_EvtCreateRenderContext
 #define EvtSubscribe wrap_EvtSubscribe
+#define EvtClose wrap_EvtClose
+
 
 BOOL wrap_EvtRender(EVT_HANDLE Context,
                     EVT_HANDLE Fragment,
@@ -38,5 +40,7 @@ EVT_HANDLE wrap_EvtSubscribe(EVT_HANDLE             Session,
                              PVOID                  Context,
                              EVT_SUBSCRIBE_CALLBACK Callback,
                              DWORD                  Flags);
+
+BOOL wrap_EvtClose(EVT_HANDLE object);
 
 #endif

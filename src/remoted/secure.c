@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -9,9 +9,10 @@
  */
 
 #include "shared.h"
-#include "os_net/os_net.h"
+#include "../os_net/os_net.h"
 #include "remoted.h"
-#include "wazuh_db/helpers/wdb_global_helpers.h"
+#include "state.h"
+#include "../wazuh_db/helpers/wdb_global_helpers.h"
 
 #ifdef WAZUH_UNIT_TESTING
 // Remove static qualifier when unit testing
@@ -30,10 +31,14 @@ wnotify_t * notify = NULL;
 
 size_t global_counter;
 
-STATIC void handle_outgoing_data_to_tcp_socket(int sock_client, struct sockaddr_in * peer_info);
-STATIC void handle_incoming_data_from_tcp_socket(int sock_client, struct sockaddr_in * peer_info);
-STATIC void handle_incoming_data_from_udp_socket(struct sockaddr_in * peer_info);
-STATIC void handle_new_tcp_connection(wnotify_t * notify, struct sockaddr_in * peer_info);
+OSHash *remoted_agents_state;
+
+extern remoted_state_t remoted_state;
+
+STATIC void handle_outgoing_data_to_tcp_socket(int sock_client);
+STATIC void handle_incoming_data_from_tcp_socket(int sock_client);
+STATIC void handle_incoming_data_from_udp_socket(struct sockaddr_storage * peer_info);
+STATIC void handle_new_tcp_connection(wnotify_t * notify, struct sockaddr_storage * peer_info);
 
 // Message handler thread
 static void * rem_handler_main(__attribute__((unused)) void * args);
@@ -42,38 +47,30 @@ static void * rem_handler_main(__attribute__((unused)) void * args);
 void * rem_keyupdate_main(__attribute__((unused)) void * args);
 
 /* Handle each message received */
-STATIC void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *peer_info, int sock_client, int *wdb_sock);
+STATIC void HandleSecureMessage(const message_t *message, int *wdb_sock);
 
 // Close and remove socket from keystore
 int _close_sock(keystore * keys, int sock);
 
 STATIC void * close_fp_main(void * args);
 
-/* Status of keypolling wodle */
+/* Status of key-request feature */
 static char key_request_available = 0;
 
 /* Decode hostinfo input queue */
 static w_queue_t * key_request_queue;
 
 /* Remote key request thread */
-void * w_key_request_thread(__attribute__((unused)) void * args);
+void * key_request_thread(__attribute__((unused)) void * args);
 
 /* Push key request */
 static void _push_request(const char *request,const char *type);
 #define push_request(x, y) if (key_request_available) _push_request(x, y);
 
-/* Connect to key polling wodle*/
+/* Connect to key-request feature */
 #define KEY_RECONNECT_INTERVAL 300 // 5 minutes
 static int key_request_connect();
 static int key_request_reconnect();
-
-/* Defines to switch according to different OS_AddSocket or, failing that, the case of using UDP protocol */
-#define OS_ADDSOCKET_ERROR          0   ///< OSHash_Set_ex returns 0 on error (* see OS_AddSocket and OSHash_Set_ex)
-#define OS_ADDSOCKET_KEY_UPDATED    1   ///< OSHash_Set_ex returns 1 when key existed, so it is update (*)
-#define OS_ADDSOCKET_KEY_ADDED      2   ///< OSHash_Set_ex returns 2 when key didn't existed, so it is added  (*)
-#define REMOTED_USING_UDP           42  ///< When using UDP, OS_AddSocket isn't called, so an arbitrary value is used
-
-#define USING_UDP_NO_CLIENT_SOCKET  -1  ///< When using UDP, no valid client socket FD is set
 
 /* Handle secure connections */
 void HandleSecure()
@@ -81,8 +78,20 @@ void HandleSecure()
     const int protocol = logr.proto[logr.position];
     int n_events = 0;
 
-    struct sockaddr_in peer_info;
-    memset(&peer_info, 0, sizeof(struct sockaddr_in));
+    struct sockaddr_storage peer_info;
+    memset(&peer_info, 0, sizeof(struct sockaddr_storage));
+
+    /* Global stats uptime */
+    remoted_state.uptime = time(NULL);
+
+    /* Create OSHash for agents statistics */
+    remoted_agents_state = OSHash_Create();
+    if (!remoted_agents_state) {
+        merror_exit(HASH_ERROR);
+    }
+    if (!OSHash_setSize(remoted_agents_state, 2048)) {
+        merror_exit(HSETSIZE_ERROR, "remoted_agents_state");
+    }
 
     /* Initialize manager */
     manager_init();
@@ -102,8 +111,11 @@ void HandleSecure()
     /* Create Security configuration assessment forwarder thread */
     w_create_thread(SCFGA_Forward, NULL);
 
-    // Create Request listener thread
-    w_create_thread(req_main, NULL);
+    // Initialize request module
+    req_init();
+
+    // Create com request thread
+    w_create_thread(remcom_main, NULL);
 
     // Create State writer thread
     w_create_thread(rem_state_main, NULL);
@@ -111,7 +123,7 @@ void HandleSecure()
     key_request_queue = queue_init(1024);
 
     // Create key request thread
-    w_create_thread(w_key_request_thread, NULL);
+    w_create_thread(key_request_thread, NULL);
 
     /* Create wait_for_msgs threads */
     {
@@ -217,11 +229,11 @@ void HandleSecure()
             }
             // If a message was received through a TCP client and tcp is enabled
             else if ((protocol & REMOTED_NET_PROTOCOL_TCP) && (event & WE_READ)) {
-                handle_incoming_data_from_tcp_socket(fd, &peer_info);
+                handle_incoming_data_from_tcp_socket(fd);
             }
             // If a TCP client socket is ready for sending and tcp is enabled
             else if ((protocol & REMOTED_NET_PROTOCOL_TCP) && (event & WE_WRITE)) {
-                handle_outgoing_data_to_tcp_socket(fd, &peer_info);
+                handle_outgoing_data_to_tcp_socket(fd);
             }
         }
     }
@@ -229,7 +241,7 @@ void HandleSecure()
     manager_free();
 }
 
-STATIC void handle_new_tcp_connection(wnotify_t * notify, struct sockaddr_in * peer_info)
+STATIC void handle_new_tcp_connection(wnotify_t * notify, struct sockaddr_storage * peer_info)
 {
     int sock_client = accept(logr.tcp_sock, (struct sockaddr *) peer_info, &logr.peer_size);
 
@@ -239,7 +251,7 @@ STATIC void handle_new_tcp_connection(wnotify_t * notify, struct sockaddr_in * p
 
         rem_inc_tcp();
 
-        mdebug1("New TCP connection at %s [%d]", inet_ntoa(peer_info->sin_addr), sock_client);
+        mdebug1("New TCP connection [%d]", sock_client);
 
         if (wnotify_add(notify, sock_client, WO_READ) < 0) {
             merror("wnotify_add(%d, %d): %s (%d)", notify->fd, sock_client, strerror(errno), errno);
@@ -256,7 +268,7 @@ STATIC void handle_new_tcp_connection(wnotify_t * notify, struct sockaddr_in * p
     }
 }
 
-STATIC void handle_incoming_data_from_udp_socket(struct sockaddr_in * peer_info)
+STATIC void handle_incoming_data_from_udp_socket(struct sockaddr_storage * peer_info)
 {
     char buffer[OS_MAXSTR + 1];
     memset(buffer, '\0', OS_MAXSTR + 1);
@@ -269,13 +281,13 @@ STATIC void handle_incoming_data_from_udp_socket(struct sockaddr_in * peer_info)
     }
 }
 
-STATIC void handle_incoming_data_from_tcp_socket(int sock_client, struct sockaddr_in * peer_info)
+STATIC void handle_incoming_data_from_tcp_socket(int sock_client)
 {
     int recv_b = nb_recv(&netbuffer_recv, sock_client);
 
     switch (recv_b) {
     case -2:
-        mwarn("Too big message size from %s [%d].", inet_ntoa(peer_info->sin_addr), sock_client);
+        mwarn("Too big message size from socket [%d].", sock_client);
         _close_sock(&keys, sock_client);
         return;
 
@@ -288,16 +300,14 @@ STATIC void handle_incoming_data_from_tcp_socket(int sock_client, struct sockadd
         case EWOULDBLOCK:
 #endif
         case ETIMEDOUT:
-            mdebug1("TCP peer [%d] at %s: %s (%d)", sock_client,
-                    inet_ntoa(peer_info->sin_addr), strerror(errno), errno);
+            mdebug1("TCP peer [%d]: %s (%d)", sock_client, strerror(errno), errno);
             break;
         default:
-            merror("TCP peer [%d] at %s: %s (%d)", sock_client,
-                    inet_ntoa(peer_info->sin_addr), strerror(errno), errno);
+            merror("TCP peer [%d]: %s (%d)", sock_client, strerror(errno), errno);
         }
-        fallthrough;
+        WFALLTHROUGH;
     case 0:
-        mdebug1("handle incoming close socket %s [%d].", inet_ntoa(peer_info->sin_addr), sock_client);
+        mdebug1("handle incoming close socket [%d].", sock_client);
         _close_sock(&keys, sock_client);
         return;
 
@@ -306,14 +316,13 @@ STATIC void handle_incoming_data_from_tcp_socket(int sock_client, struct sockadd
     }
 }
 
-STATIC void handle_outgoing_data_to_tcp_socket(int sock_client, struct sockaddr_in * peer_info)
+STATIC void handle_outgoing_data_to_tcp_socket(int sock_client)
 {
     int sent_b = nb_send(&netbuffer_send, sock_client);
 
     switch (sent_b) {
     case -1:
-        mdebug1("TCP peer [%d] at %s: %s (%d)", sock_client,
-                inet_ntoa(peer_info->sin_addr), strerror(errno), errno);
+        mdebug1("TCP peer [%d]: %s (%d)", sock_client, strerror(errno), errno);
 
         switch (errno) {
         case EAGAIN:
@@ -325,7 +334,7 @@ STATIC void handle_outgoing_data_to_tcp_socket(int sock_client, struct sockaddr_
         case EBADF:
         case ECONNRESET:
         default:
-            mdebug1("handle outgoing close socket %s [%d].", inet_ntoa(peer_info->sin_addr), sock_client);
+            mdebug1("handle outgoing close socket [%d].", sock_client);
             _close_sock(&keys, sock_client);
         }
         return;
@@ -338,18 +347,12 @@ STATIC void handle_outgoing_data_to_tcp_socket(int sock_client, struct sockaddr_
 // Message handler thread
 void * rem_handler_main(__attribute__((unused)) void * args) {
     message_t * message;
-    char buffer[OS_MAXSTR + 1] = "";
     int wdb_sock = -1;
     mdebug1("Message handler thread started.");
 
     while (1) {
         message = rem_msgpop();
-        if (message->sock == USING_UDP_NO_CLIENT_SOCKET || message->counter > rem_getCounter(message->sock)) {
-            memcpy(buffer, message->buffer, message->size);
-            HandleSecureMessage(buffer, message->size, &message->addr, message->sock, &wdb_sock);
-        } else {
-            rem_inc_dequeued();
-        }
+        HandleSecureMessage(message, &wdb_sock);
         rem_msgfree(message);
     }
 
@@ -365,7 +368,9 @@ void * rem_keyupdate_main(__attribute__((unused)) void * args) {
 
     while (1) {
         mdebug2("Checking for keys file changes.");
-        check_keyupdate();
+        if (check_keyupdate() == 1) {
+            rem_inc_keys_reload();
+        }
         sleep(seconds);
     }
 }
@@ -417,25 +422,40 @@ STATIC void * close_fp_main(void * args) {
     return NULL;
 }
 
-STATIC void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *peer_info, int sock_client, int *wdb_sock) {
+STATIC void HandleSecureMessage(const message_t *message, int *wdb_sock) {
     int agentid;
-    const int protocol = (sock_client == USING_UDP_NO_CLIENT_SOCKET) ? REMOTED_NET_PROTOCOL_UDP : REMOTED_NET_PROTOCOL_TCP;
+    const int protocol = (message->sock == USING_UDP_NO_CLIENT_SOCKET) ? REMOTED_NET_PROTOCOL_UDP : REMOTED_NET_PROTOCOL_TCP;
     char cleartext_msg[OS_MAXSTR + 1];
     char srcmsg[OS_FLSIZE + 1];
     char srcip[IPSIZE + 1] = {0};
     char agname[KEYSIZE + 1] = {0};
+    char *agentid_str = NULL;
+    char buffer[OS_MAXSTR + 1] = "";
     char *tmp_msg;
     size_t msg_length;
     char ip_found = 0;
     int r;
+    int recv_b = message->size;
 
     /* Set the source IP */
-    inet_ntop(peer_info->sin_family, &peer_info->sin_addr, srcip, IPSIZE);
+    switch (message->addr.ss_family) {
+    case AF_INET:
+        get_ipv4_string(((struct sockaddr_in *)&message->addr)->sin_addr, srcip, IPSIZE);
+        break;
+    case AF_INET6:
+        get_ipv6_string(((struct sockaddr_in6 *)&message->addr)->sin6_addr, srcip, IPSIZE);
+        break;
+    default:
+        merror("IP address family not supported.");
+        rem_inc_recv_unknown();
+        return;
+    }
 
     /* Initialize some variables */
     memset(cleartext_msg, '\0', OS_MAXSTR + 1);
     memset(srcmsg, '\0', OS_FLSIZE + 1);
     tmp_msg = NULL;
+    memcpy(buffer, message->buffer, recv_b);
 
     /* Get a valid agent id */
     if (buffer[0] == '!') {
@@ -453,10 +473,11 @@ STATIC void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
         if (*tmp_msg != '!') {
             merror(ENCFORMAT_ERROR, "(unknown)", srcip);
 
-            if (sock_client >= 0) {
-                _close_sock(&keys, sock_client);
+            if (message->sock >= 0) {
+                _close_sock(&keys, message->sock);
             }
 
+            rem_inc_recv_unknown();
             return;
         }
 
@@ -471,24 +492,41 @@ STATIC void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
             int id = OS_IsAllowedID(&keys, buffer + 1);
 
             if (id < 0) {
-                strncpy(agname, "unknown", sizeof(agname));
+                snprintf(agname, sizeof(agname), "unknown");
             } else {
-                strncpy(agname, keys.keyentries[id]->name, sizeof(agname));
+                snprintf(agname, sizeof(agname), "%s", keys.keyentries[id]->name);
             }
 
             key_unlock();
 
-            agname[sizeof(agname) - 1] = '\0';
-
             mwarn(ENC_IP_ERROR, buffer + 1, srcip, agname);
 
             // Send key request by id
-            push_request(buffer + 1,"id");
-            if (sock_client >= 0) {
-                _close_sock(&keys, sock_client);
+            push_request(buffer + 1, "id");
+            if (message->sock >= 0) {
+                _close_sock(&keys, message->sock);
             }
 
+            rem_inc_recv_unknown();
             return;
+        } else {
+            w_mutex_lock(&keys.keyentries[agentid]->mutex);
+
+            if ((keys.keyentries[agentid]->sock >= 0) && (keys.keyentries[agentid]->sock != message->sock)) {
+                mwarn("Agent key already in use: agent ID '%s'", keys.keyentries[agentid]->id);
+
+                w_mutex_unlock(&keys.keyentries[agentid]->mutex);
+                key_unlock();
+
+                if (message->sock >= 0) {
+                    _close_sock(&keys, message->sock);
+                }
+
+                rem_inc_recv_unknown();
+                return;
+            }
+
+            w_mutex_unlock(&keys.keyentries[agentid]->mutex);
         }
     } else if (strncmp(buffer, "#ping", 5) == 0) {
             int retval = 0;
@@ -496,34 +534,56 @@ STATIC void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
             ssize_t msg_size = strlen(msg);
 
             if (protocol == REMOTED_NET_PROTOCOL_UDP) {
-                retval = sendto(logr.udp_sock, msg, msg_size, 0, (struct sockaddr *)peer_info, logr.peer_size) == msg_size ? 0 : -1;
+                retval = sendto(logr.udp_sock, msg, msg_size, 0, (struct sockaddr *)&message->addr, logr.peer_size) == msg_size ? 0 : -1;
             } else {
-                retval = OS_SendSecureTCP(sock_client, msg_size, msg);
+                retval = OS_SendSecureTCP(message->sock, msg_size, msg);
             }
 
             if (retval < 0) {
                 mwarn("Ping operation could not be delivered completely (%d)", retval);
             }
 
+            rem_inc_recv_ping();
             return;
 
     } else {
         key_lock_read();
+
         agentid = OS_IsAllowedIP(&keys, srcip);
 
         if (agentid < 0) {
             key_unlock();
+
             mwarn(DENYIP_WARN " Source agent ID is unknown.", srcip);
 
             // Send key request by ip
-            push_request(srcip,"ip");
-            if (sock_client >= 0) {
-                _close_sock(&keys, sock_client);
+            push_request(srcip, "ip");
+            if (message->sock >= 0) {
+                _close_sock(&keys, message->sock);
             }
 
+            rem_inc_recv_unknown();
             return;
         } else {
-            ip_found = 1;
+            w_mutex_lock(&keys.keyentries[agentid]->mutex);
+
+            if ((keys.keyentries[agentid]->sock >= 0) && (keys.keyentries[agentid]->sock != message->sock)) {
+                mwarn("Agent key already in use: agent ID '%s'", keys.keyentries[agentid]->id);
+
+                w_mutex_unlock(&keys.keyentries[agentid]->mutex);
+                key_unlock();
+
+                if (message->sock >= 0) {
+                    _close_sock(&keys, message->sock);
+                }
+
+                rem_inc_recv_unknown();
+                return;
+            } else {
+                ip_found = 1;
+            }
+
+            w_mutex_unlock(&keys.keyentries[agentid]->mutex);
         }
 
         tmp_msg = buffer;
@@ -532,10 +592,11 @@ STATIC void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
     if (recv_b <= 0) {
         mwarn("Received message is empty");
         key_unlock();
-        if (sock_client >= 0) {
-            _close_sock(&keys, sock_client);
+        if (message->sock >= 0) {
+            _close_sock(&keys, message->sock);
         }
 
+        rem_inc_recv_unknown();
         return;
     }
 
@@ -546,56 +607,74 @@ STATIC void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
 
         if (r == KS_ENCKEY) {
             if (ip_found) {
-                push_request(srcip,"ip");
+                push_request(srcip, "ip");
             } else {
                 push_request(buffer + 1, "id");
             }
         }
 
-        if (sock_client >= 0) {
-            mwarn("Decrypt the message fail, socket %d", sock_client);
-            _close_sock(&keys, sock_client);
+        if (message->sock >= 0) {
+            mwarn("Decrypt the message fail, socket %d", message->sock);
+            _close_sock(&keys, message->sock);
         }
 
+        rem_inc_recv_unknown();
         return;
     }
 
     /* Check if it is a control message */
     if (IsValidHeader(tmp_msg)) {
 
-        /* We need to save the peerinfo if it is a control msg */
+        /* let through new and shutdown messages */
+        if (message->sock == USING_UDP_NO_CLIENT_SOCKET || message->counter > rem_getCounter(message->sock) || (strncmp(tmp_msg, HC_SHUTDOWN, strlen(HC_SHUTDOWN)) == 0)) {
+            /* We need to save the peerinfo if it is a control msg */
 
-        keys.keyentries[agentid]->net_protocol = protocol;
+            w_mutex_lock(&keys.keyentries[agentid]->mutex);
+            keys.keyentries[agentid]->net_protocol = protocol;
+            keys.keyentries[agentid]->rcvd = time(0);
+            memcpy(&keys.keyentries[agentid]->peer_info, &message->addr, logr.peer_size);
 
-        memcpy(&keys.keyentries[agentid]->peer_info, peer_info, logr.peer_size);
-        keyentry * key = OS_DupKeyEntry(keys.keyentries[agentid]);
-        r = (protocol == REMOTED_NET_PROTOCOL_TCP) ? OS_AddSocket(&keys, agentid, sock_client) : REMOTED_USING_UDP;
-        keys.keyentries[agentid]->rcvd = time(0);
+            keyentry * key = OS_DupKeyEntry(keys.keyentries[agentid]);
 
-        switch (r) {
-        case OS_ADDSOCKET_ERROR:
-            merror("Couldn't add TCP socket to keystore.");
-            break;
-        case OS_ADDSOCKET_KEY_UPDATED:
-            mdebug2("TCP socket %d already in keystore. Updating...", sock_client);
-            break;
-        case OS_ADDSOCKET_KEY_ADDED:
-            mdebug2("TCP socket %d added to keystore.", sock_client);
-            break;
-        case REMOTED_USING_UDP:
-            keys.keyentries[agentid]->sock = USING_UDP_NO_CLIENT_SOCKET;
-            break;
-        default:
-            ;
+            if (protocol == REMOTED_NET_PROTOCOL_TCP) {
+                if (message->counter > rem_getCounter(message->sock)) {
+                    keys.keyentries[agentid]->sock = message->sock;
+                }
+
+                w_mutex_unlock(&keys.keyentries[agentid]->mutex);
+                if ((strncmp(tmp_msg, HC_SHUTDOWN, strlen(HC_SHUTDOWN)) != 0)) {
+                    r = OS_AddSocket(&keys, agentid, message->sock);
+
+                    switch (r) {
+                    case OS_ADDSOCKET_ERROR:
+                        merror("Couldn't add TCP socket to keystore.");
+                        break;
+                    case OS_ADDSOCKET_KEY_UPDATED:
+                        mdebug2("TCP socket %d already in keystore. Updating...", message->sock);
+                        break;
+                    case OS_ADDSOCKET_KEY_ADDED:
+                        mdebug2("TCP socket %d added to keystore.", message->sock);
+                        break;
+                    default:
+                        ;
+                    }
+                }
+            } else {
+                keys.keyentries[agentid]->sock = USING_UDP_NO_CLIENT_SOCKET;
+                w_mutex_unlock(&keys.keyentries[agentid]->mutex);
+            }
+
+            key_unlock();
+
+            // The critical section for readers closes within this function
+            save_controlmsg(key, tmp_msg, msg_length - 3, wdb_sock);
+            rem_inc_recv_ctrl(key->id);
+
+            OS_FreeKey(key);
+        } else {
+            key_unlock();
+            rem_inc_recv_dequeued();
         }
-
-        key_unlock();
-
-        // The critical section for readers closes within this function
-        save_controlmsg(key, tmp_msg, msg_length - 3, wdb_sock);
-        rem_inc_ctrl_msg();
-
-        OS_FreeKey(key);
         return;
     }
 
@@ -604,13 +683,14 @@ STATIC void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
     snprintf(srcmsg, OS_FLSIZE, "[%s] (%s) %s", keys.keyentries[agentid]->id,
              keys.keyentries[agentid]->name, keys.keyentries[agentid]->ip->ip);
 
+    os_strdup(keys.keyentries[agentid]->id, agentid_str);
+
     key_unlock();
 
     /* If we can't send the message, try to connect to the
      * socket again. If it not exit.
      */
-    if (SendMSG(logr.m_queue, tmp_msg, srcmsg,
-                SECURE_MQ) < 0) {
+    if (SendMSG(logr.m_queue, tmp_msg, srcmsg, SECURE_MQ) < 0) {
         merror(QUEUE_ERROR, DEFAULTQUEUE, strerror(errno));
 
         // Try to reconnect infinitely
@@ -621,15 +701,21 @@ STATIC void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
         if (SendMSG(logr.m_queue, tmp_msg, srcmsg, SECURE_MQ) < 0) {
             // Something went wrong sending a message after an immediate reconnection...
             merror(QUEUE_ERROR, DEFAULTQUEUE, strerror(errno));
+        } else {
+            rem_inc_recv_evt(agentid_str);
         }
     } else {
-        rem_inc_evt();
+        rem_inc_recv_evt(agentid_str);
     }
+
+    os_free(agentid_str);
 }
 
 // Close and remove socket from keystore
 int _close_sock(keystore * keys, int sock) {
     int retval = 0;
+
+    rem_setCounter(sock, global_counter);
 
     key_lock_read();
     retval = OS_DeleteSocket(keys, sock);
@@ -641,7 +727,6 @@ int _close_sock(keystore * keys, int sock) {
         rem_dec_tcp();
     }
 
-    rem_setCounter(sock, global_counter);
     mdebug1("TCP peer disconnected [%d]", sock);
 
     return retval;
@@ -649,7 +734,7 @@ int _close_sock(keystore * keys, int sock) {
 
 int key_request_connect() {
 #ifndef WIN32
-    return OS_ConnectUnixDomain(WM_KEY_REQUEST_SOCK, SOCK_DGRAM, OS_MAXSTR);
+    return OS_ConnectUnixDomain(KEY_REQUEST_SOCK, SOCK_DGRAM, OS_MAXSTR);
 #else
     return -1;
 #endif
@@ -662,8 +747,8 @@ static int send_key_request(int socket,const char *msg) {
 static void _push_request(const char *request,const char *type) {
     char *msg = NULL;
 
-    os_calloc(OS_MAXSTR,sizeof(char),msg);
-    snprintf(msg,OS_MAXSTR,"%s:%s",type,request);
+    os_calloc(OS_MAXSTR, sizeof(char), msg);
+    snprintf(msg, OS_MAXSTR, "%s:%s", type, request);
 
     if(queue_push_ex(key_request_queue, msg) < 0) {
         os_free(msg);
@@ -688,12 +773,12 @@ int key_request_reconnect() {
                 return socket;
             }
         }
-        mdebug1("Key-polling wodle is not available. Retrying connection in %d seconds.", KEY_RECONNECT_INTERVAL);
+        mdebug1("Key-request feature is not available. Retrying connection in %d seconds.", KEY_RECONNECT_INTERVAL);
         sleep(KEY_RECONNECT_INTERVAL);
     }
 }
 
-void * w_key_request_thread(__attribute__((unused)) void * args) {
+void * key_request_thread(__attribute__((unused)) void * args) {
     char * msg = NULL;
     int socket = -1;
 

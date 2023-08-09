@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for Azure integration
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * September, 2018.
  *
  * This program is free software; you can redistribute it
@@ -10,7 +10,6 @@
  */
 
 #ifndef WIN32
-#ifndef CLIENT
 
 #include "wmodules.h"
 #include "wm_azure.h"
@@ -33,12 +32,13 @@ cJSON *wm_azure_dump(const wm_azure_t *azure);                          // Dump 
 //  Azure module context definition
 
 const wm_context WM_AZURE_CONTEXT = {
-    AZ_WM_NAME,
-    (wm_routine)wm_azure_main,
-    (wm_routine)(void *)wm_azure_destroy,
-    (cJSON * (*)(const void *))wm_azure_dump,
-    NULL,
-    NULL
+    .name = AZ_WM_NAME,
+    .start = (wm_routine)wm_azure_main,
+    .destroy = (void(*)(void *))wm_azure_destroy,
+    .dump = (cJSON * (*)(const void *))wm_azure_dump,
+    .sync = NULL,
+    .stop = NULL,
+    .query = NULL,
 };
 
 // Module main function. It won't return.
@@ -149,8 +149,18 @@ void wm_azure_log_analytics(wm_azure_api_t *log_analytics) {
         wm_strcat(&command, "--workspace", ' ');
         wm_strcat(&command, curr_request->workspace, ' ');
 
-        wm_strcat(&command, "--la_time_offset", ' ');
-        wm_strcat(&command, curr_request->time_offset, ' ');
+        if (curr_request->time_offset) {
+            wm_strcat(&command, "--la_time_offset", ' ');
+            wm_strcat(&command, curr_request->time_offset, ' ');
+        }
+        if (isDebug()) {
+            char *int_to_string;
+            os_malloc(OS_SIZE_1024, int_to_string);
+            sprintf(int_to_string, "%d", isDebug());
+            wm_strcat(&command, "--debug", ' ');
+            wm_strcat(&command, int_to_string, ' ');
+            os_free(int_to_string);
+        }
 
         // Check timeout defined
         if (curr_request->timeout)
@@ -163,8 +173,8 @@ void wm_azure_log_analytics(wm_azure_api_t *log_analytics) {
         switch (wm_exec(command, &output, &status, timeout, NULL)) {
             case 0:
                 if (status > 0) {
-                    mtwarn(WM_AZURE_LOGTAG, "%s: Returned error code: '%d'.", curr_request->tag, status);
-                    mtdebug2(WM_AZURE_LOGTAG, "OUTPUT: %s", output);
+                    mterror(WM_AZURE_LOGTAG, "%s: Returned error code: '%d'.", curr_request->tag, status);
+                    mtdebug1(WM_AZURE_LOGTAG, "OUTPUT: %s", output);
                 }
                 break;
             case WM_ERROR_TIMEOUT:
@@ -225,8 +235,19 @@ void wm_azure_graphs(wm_azure_api_t *graph) {
         snprintf(query, OS_SIZE_1024 - 1, "\'%s\'", curr_request->query);
         wm_strcat(&command, query, ' ');
 
-        wm_strcat(&command, "--graph_time_offset", ' ');
-        wm_strcat(&command, curr_request->time_offset, ' ');
+        if (curr_request->time_offset) {
+            wm_strcat(&command, "--graph_time_offset", ' ');
+            wm_strcat(&command, curr_request->time_offset, ' ');
+        }
+
+        if (isDebug()) {
+            char *int_to_string;
+            os_malloc(OS_SIZE_1024, int_to_string);
+            sprintf(int_to_string, "%d", isDebug());
+            wm_strcat(&command, "--debug", ' ');
+            wm_strcat(&command, int_to_string, ' ');
+            os_free(int_to_string);
+        }
 
         // Check timeout defined
         if (curr_request->timeout)
@@ -239,8 +260,8 @@ void wm_azure_graphs(wm_azure_api_t *graph) {
         switch (wm_exec(command, &output, &status, timeout, NULL)) {
             case 0:
                 if (status > 0) {
-                    mtwarn(WM_AZURE_LOGTAG, "%s: Returned error code: '%d'.", curr_request->tag, status);
-                    mtdebug2(WM_AZURE_LOGTAG, "OUTPUT: %s", output);
+                    mterror(WM_AZURE_LOGTAG, "%s: Returned error code: '%d'.", curr_request->tag, status);
+                    mtdebug1(WM_AZURE_LOGTAG, "OUTPUT: %s", output);
                 }
                 break;
             case WM_ERROR_TIMEOUT:
@@ -297,20 +318,41 @@ void wm_azure_storage(wm_azure_storage_t *storage) {
         wm_strcat(&command, name, ' ');
 
         wm_strcat(&command, "--blobs", ' ');
-        snprintf(blobs, OS_SIZE_256 - 1, "\"%s\"", curr_container->blobs);
+        if (curr_container->blobs)
+            snprintf(blobs, OS_SIZE_256 - 1, "\"%s\"", curr_container->blobs);
+        else
+            snprintf(blobs, OS_SIZE_256 -1, "\"*\"");
         wm_strcat(&command, blobs, ' ');
 
         wm_strcat(&command, "--storage_tag", ' ');
         wm_strcat(&command, storage->tag, ' ');
 
-        if (!strncmp(curr_container->content_type, "json_file", 9)) {
-            wm_strcat(&command, "--json_file", ' ');
-        } else if (!strncmp(curr_container->content_type, "json_inline", 11)) {
-            wm_strcat(&command, "--json_inline", ' ');
+        if (curr_container->content_type) {
+            if (!strncmp(curr_container->content_type, "json_file", 9)) {
+                wm_strcat(&command, "--json_file", ' ');
+            } else if (!strncmp(curr_container->content_type, "json_inline", 11)) {
+                wm_strcat(&command, "--json_inline", ' ');
+            }
         }
 
-        wm_strcat(&command, "--storage_time_offset", ' ');
-        wm_strcat(&command, curr_container->time_offset, ' ');
+        if (curr_container->time_offset) {
+            wm_strcat(&command, "--storage_time_offset", ' ');
+            wm_strcat(&command, curr_container->time_offset, ' ');
+        }
+
+        if (curr_container->path) {
+            wm_strcat(&command, "--prefix", ' ');
+            wm_strcat(&command, curr_container->path, ' ');
+        }
+
+        if (isDebug()) {
+            char *int_to_string;
+            os_malloc(OS_SIZE_1024, int_to_string);
+            sprintf(int_to_string, "%d", isDebug());
+            wm_strcat(&command, "--debug", ' ');
+            wm_strcat(&command, int_to_string, ' ');
+            os_free(int_to_string);
+        }
 
         // Check timeout defined
         if (curr_container->timeout)
@@ -323,8 +365,8 @@ void wm_azure_storage(wm_azure_storage_t *storage) {
         switch (wm_exec(command, &output, &status, timeout, NULL)) {
             case 0:
                 if (status > 0) {
-                    mtwarn(WM_AZURE_LOGTAG, "%s: Returned error code: '%d'.", curr_container->name, status);
-                    mtdebug2(WM_AZURE_LOGTAG, "OUTPUT: %s", output);
+                    mterror(WM_AZURE_LOGTAG, "%s: Returned error code: '%d'.", curr_container->name, status);
+                    mtdebug1(WM_AZURE_LOGTAG, "OUTPUT: %s", output);
                 }
                 break;
             case WM_ERROR_TIMEOUT:
@@ -457,6 +499,7 @@ void wm_azure_destroy(wm_azure_t *azure_config) {
             free(curr_container->blobs);
             free(curr_container->content_type);
             free(curr_container->time_offset);
+            free(curr_container->path);
             free(curr_container);
 
         }
@@ -521,6 +564,7 @@ cJSON *wm_azure_dump(const wm_azure_t * azure) {
                     cJSON_AddStringToObject(container, "blobs", container_conf->blobs);
                     cJSON_AddStringToObject(container, "content_type", container_conf->content_type);
                     cJSON_AddStringToObject(container, "time_offset", container_conf->time_offset);
+                    cJSON_AddStringToObject(container, "prefix", container_conf->path);
                     if (container_conf->timeout) cJSON_AddNumberToObject(container, "timeout", container_conf->timeout);
                     cJSON_AddItemToArray(containers, container);
                 }
@@ -535,5 +579,4 @@ cJSON *wm_azure_dump(const wm_azure_t * azure) {
     return root;
 }
 
-#endif
 #endif

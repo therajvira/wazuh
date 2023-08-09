@@ -1,6 +1,6 @@
 /*
  * Wazuh RSYNC
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * September 7, 2020.
  *
  * This program is free software; you can redistribute it
@@ -13,6 +13,7 @@
 #define _MSGDECODER_SYNC_H
 
 #include <iostream>
+#include <mutex>
 #include "commonDefs.h"
 #include "rsync_exception.h"
 #include "messageDecoderFactory.h"

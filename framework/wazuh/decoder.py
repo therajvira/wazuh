@@ -1,8 +1,8 @@
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
 from os import remove
-from os.path import join, exists
+from os.path import join, exists, normpath
 from typing import Union
 from xml.parsers.expat import ExpatError
 
@@ -19,27 +19,48 @@ from wazuh.core.utils import process_array, safe_move, validate_wazuh_xml, \
 from wazuh.rbac.decorators import expose_resources
 
 
-def get_decoders(names=None, status=None, filename=None, relative_dirname=None, parents=False, offset=0,
-                 limit=common.database_limit, select=None, sort_by=None, sort_ascending=True, search_text=None,
-                 complementary_search=False, search_in_fields=None, q=''):
-    """Gets a list of available decoders.
+def get_decoders(names: list = None, status: str = None, filename: list = None, relative_dirname: str = None,
+                 parents: bool = False, offset: int = 0, limit: int = common.DATABASE_LIMIT, select: list = None,
+                 sort_by: list = None, sort_ascending: bool = True, search_text: str = None,
+                 complementary_search: bool = False, search_in_fields: list = None,
+                 q: str = '') -> AffectedItemsWazuhResult:
+    """Get a list of available decoders.
 
-    :param names: Filters by decoder name.
-    :param filename: List of filenames to filter by.
-    :param status: Filters by status: enabled, disabled, all.
-    :param relative_dirname: Filters by relative dirname.
-    :param parents: Just parent decoders.
-    :param offset: First item to return.
-    :param limit: Maximum number of items to return.
-    :param select: List of selected fields to return
-    :param sort_by: Fields to sort the items by
-    :param sort_ascending: Sort in ascending (true) or descending (false) order
-    :param search_text: Text to search
-    :param complementary_search: Find items without the text to search
-    :param search_in_fields: Fields to search in
-    :param q: Defines query to filter.
+    Parameters
+    ----------
+    names : list
+        Filters by decoder name.
+    filename : list
+        List of filenames to filter by.
+    status : str
+        Filters by status: enabled, disabled, all.
+    parents : bool
+        Just parent decoders.
+    relative_dirname : str
+        Filters by relative dirname.
+    search_text : str
+        Text to search.
+    complementary_search : bool
+        Find items without the text to search. Default: False
+    search_in_fields : list
+        Fields to search in.
+    select : list
+        List of selected fields to return
+    sort_by : list
+        Fields to sort the items by.
+    sort_ascending : bool
+        Sort in ascending (true) or descending (false) order. Default: True
+    offset : int
+        First element to return.
+    limit : int
+        Maximum number of elements to return.
+    q : str
+        Defines query to filter.
 
-    :return: AffectedItemsWazuhResult
+    Returns
+    -------
+    AffectedItemsWazuhResult
+        Affected items.
     """
     result = AffectedItemsWazuhResult(none_msg='No decoder was returned',
                                       some_msg='Some decoders were not returned',
@@ -54,7 +75,8 @@ def get_decoders(names=None, status=None, filename=None, relative_dirname=None, 
 
     status = check_status(status)
     status = ['enabled', 'disabled'] if status == 'all' else [status]
-    parameters = {'relative_dirname': relative_dirname, 'filename': filename, 'name': names, 'parents': parents, 'status': status}
+    parameters = {'relative_dirname': relative_dirname, 'filename': filename, 'name': names, 'parents': parents,
+                  'status': status}
     decoders = list(all_decoders)
     no_existent_files = names[:]
     for d in all_decoders:
@@ -88,22 +110,44 @@ def get_decoders(names=None, status=None, filename=None, relative_dirname=None, 
 
 
 @expose_resources(actions=['decoders:read'], resources=['decoder:file:{filename}'])
-def get_decoders_files(status=None, relative_dirname=None, filename=None, offset=0, limit=common.database_limit,
-                       sort_by=None, sort_ascending=True, search_text=None, complementary_search=False,
-                       search_in_fields=None):
-    """Gets a list of the available decoder files.
+def get_decoders_files(status: str = None, relative_dirname: str = None, filename: list = None, offset: int = 0,
+                       limit: int = common.DATABASE_LIMIT, sort_by: list = None, sort_ascending: bool = True,
+                       search_text: str = None, complementary_search: bool = False,
+                       search_in_fields: list = None) -> AffectedItemsWazuhResult:
+    """Get a list of the available decoder files.
 
-    :param status: Filters by status: enabled, disabled, all.
-    :param relative_dirname: Filters by relative dirname.
-    :param filename: List of filenames to filter by.
-    :param offset: First item to return.
-    :param limit: Maximum number of items to return.
-    :param sort_by: Fields to sort the items by
-    :param sort_ascending: Sort in ascending (true) or descending (false) order
-    :param search_text: Text to search
-    :param complementary_search: Find items without the text to search
-    :param search_in_fields: Fields to search in
-    :return: AffectedItemsWazuhResult
+    Parameters
+    ----------
+    filename : list
+        List of filenames to filter by.
+    status : str
+        Filters by status: enabled, disabled, all.
+    relative_dirname : str
+        Filters by relative dirname.
+    search_text : str
+        Text to search.
+    complementary_search : bool
+        Find items without the text to search. Default: False
+    search_in_fields : list
+        Fields to search in.
+    sort_by : list
+        Fields to sort the items by.
+    sort_ascending : bool
+        Sort in ascending (true) or descending (false) order. Default: True
+    offset : int
+        First element to return.
+    limit : int
+        Maximum number of elements to return.
+
+    Raises
+    ------
+    WazuhInternalError(1500)
+        Error reading decoders from ossec.conf.
+
+    Returns
+    -------
+    AffectedItemsWazuhResult
+        Affected items.
     """
     result = AffectedItemsWazuhResult(none_msg='No decoder files were returned',
                                       some_msg='Some decoder files were not returned',
@@ -135,47 +179,63 @@ def get_decoders_files(status=None, relative_dirname=None, filename=None, offset
     return result
 
 
-def get_decoder_file(filename: str, raw: bool = False) -> Union[str, AffectedItemsWazuhResult]:
-    """Read content of specified file.
+def get_decoder_file(filename: str, raw: bool = False, 
+                     relative_dirname: str = None) -> Union[str, AffectedItemsWazuhResult]:
+    """Read content of a specified file.
 
     Parameters
     ----------
-    filename : str
-        Name of the decoder file.
+    filename : list. Mandatory.
+        List of one element with the complete relative path of the decoder file.
     raw : bool
         Whether to return the content in raw format (str->XML) or JSON.
+    relative_dirname : str
+        Relative directory where de decoder is found. Default None.
 
     Returns
     -------
-    str or dict
+    str or AffectedItemsWazuhResult
         Content of the file. AffectedItemsWazuhResult format if `raw=False`.
     """
     result = AffectedItemsWazuhResult(none_msg='No decoder was returned',
                                       all_msg='Selected decoder was returned')
-    decoders = get_decoders_files(filename=filename).affected_items
 
-    if len(decoders) > 0:
-        decoder_path = decoders[0]['relative_dirname']
-        try:
-            full_path = join(common.wazuh_path, decoder_path, filename)
-            with open(full_path) as f:
-                file_content = f.read()
-            if raw:
-                result = file_content
-            else:
-                # Missing root tag in decoder file
-                result.affected_items.append(xmltodict.parse(f'<root>{file_content}</root>')['root'])
-                result.total_affected_items = 1
-        except ExpatError as e:
-            result.add_failed_item(id_=filename,
-                                   error=WazuhError(1501, extra_message=f"{join('WAZUH_HOME', decoder_path, filename)}:"     
-                                                                        f" {str(e)}"))
-        except OSError:
-            result.add_failed_item(id_=filename,
-                                   error=WazuhError(1502, extra_message=join('WAZUH_HOME', decoder_path, filename)))
-
+    # if the filename doesn't have a relative path, the search is only by name
+    # relative_dirname parameter is set to None.
+    relative_dirname = relative_dirname.rstrip('/') if relative_dirname else None
+    decoders = get_decoders_files(filename=[filename], 
+                                  relative_dirname=relative_dirname).affected_items
+    if len(decoders) == 0:
+        result.add_failed_item(id_=filename, 
+                               error=WazuhError(1503, extra_message=f"{filename}"))
+        return result
+    elif len(decoders) > 1:
+        # if many files match the filename criteria, 
+        # filter decoders that starts with rel_dir of the file
+        # and from the result, select the decoder with the shorter
+        # relative path length
+        relative_dirname = relative_dirname if relative_dirname else ''
+        decoders = list(filter(lambda x: x['relative_dirname'].startswith(relative_dirname), decoders))
+        decoder = min(decoders, key=lambda x: len(x['relative_dirname']))
+        full_path = join(common.WAZUH_PATH, decoder['relative_dirname'], filename)
     else:
-        result.add_failed_item(id_=filename, error=WazuhError(1503))
+        full_path = normpath(join(common.WAZUH_PATH,  decoders[0]['relative_dirname'], filename))
+        
+    try:
+        with open(full_path) as f:
+            file_content = f.read()
+        if raw:
+            result = file_content
+        else:
+            # Missing root tag in decoder file
+            result.affected_items.append(xmltodict.parse(f'<root>{file_content}</root>')['root'])
+            result.total_affected_items = 1
+    except ExpatError as e:
+        result.add_failed_item(id_=filename, 
+                               error=WazuhError(1501, extra_message=f"{filename}: {str(e)}"))
+    except OSError:
+        result.add_failed_item(id_=filename, 
+                               error=WazuhError(1502, extra_message=f"{filename}"))
 
     return result
 
@@ -196,11 +256,12 @@ def upload_decoder_file(filename: str, content: str, overwrite: bool = False) ->
     Returns
     -------
     AffectedItemsWazuhResult
+        Affected items.
     """
     result = AffectedItemsWazuhResult(all_msg='Decoder was successfully uploaded',
                                       none_msg='Could not upload decoder'
                                       )
-    full_path = join(common.user_decoders_path, filename)
+    full_path = join(common.USER_DECODERS_PATH, filename)
     backup_file = ''
     try:
         if len(content) == 0:
@@ -221,7 +282,7 @@ def upload_decoder_file(filename: str, content: str, overwrite: bool = False) ->
     except WazuhError as e:
         result.add_failed_item(id_=to_relative_path(full_path), error=e)
     finally:
-        exists(backup_file) and safe_move(backup_file, full_path, permissions=0o0660)
+        exists(backup_file) and safe_move(backup_file, full_path)
 
     return result
 
@@ -238,12 +299,13 @@ def delete_decoder_file(filename: str) -> AffectedItemsWazuhResult:
     Returns
     -------
     AffectedItemsWazuhResult
+        Affected items.
     """
     result = AffectedItemsWazuhResult(all_msg='Decoder file was successfully deleted',
                                       none_msg='Could not delete decoder file'
                                       )
 
-    full_path = join(common.user_decoders_path, filename[0])
+    full_path = join(common.USER_DECODERS_PATH, filename[0])
 
     try:
         if exists(full_path):

@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -39,8 +39,14 @@ int __wrap_sqlite3_bind_int64(__attribute__((unused)) sqlite3_stmt *stmt,
     return mock();
 }
 
-int __wrap_sqlite3_bind_null(__attribute__((unused)) sqlite3_stmt *stmt,
-                              int index) {
+int __wrap_sqlite3_bind_double(__attribute__((unused)) sqlite3_stmt *pStmt, int index, double value) {
+    check_expected(index);
+    check_expected(value);
+
+    return mock();
+}
+
+int __wrap_sqlite3_bind_null(__attribute__((unused)) sqlite3_stmt *pStmt, int index) {
     check_expected(index);
 
     return mock();
@@ -79,7 +85,6 @@ int __wrap_sqlite3_bind_parameter_index(__attribute__((unused)) sqlite3_stmt * s
 
     return mock();
 }
-
 
 int __wrap_sqlite3_clear_bindings(__attribute__((unused)) sqlite3_stmt* pStmt) {
     return mock();
@@ -157,8 +162,10 @@ int __wrap_sqlite3_open_v2(const char *filename,                           /* Da
 int __wrap_sqlite3_prepare_v2(__attribute__((unused)) sqlite3 *db,            /* Database handle */
                               __attribute__((unused)) const char *zSql,       /* SQL statement, UTF-8 encoded */
                               __attribute__((unused)) int nByte,              /* Maximum length of zSql in bytes. */
-                              __attribute__((unused)) sqlite3_stmt **ppStmt,  /* OUT: Statement handle */
-                              const char **pzTail){                          /* OUT: Pointer to unused portion of zSql */
+                              sqlite3_stmt **ppStmt,                          /* OUT: Statement handle */
+                              const char **pzTail){                           /* OUT: Pointer to unused portion of zSql */
+
+    *ppStmt = mock_type(sqlite3_stmt *);
     if(pzTail){
         *pzTail = 0;
     }
@@ -210,4 +217,8 @@ int __wrap_sqlite3_changes(__attribute__((unused)) sqlite3 * db){
 
 int __wrap_sqlite3_get_autocommit(__attribute__((unused)) sqlite3 * db) {
     return mock();
+}
+
+const char*  __wrap_sqlite3_sql(__attribute__((unused)) sqlite3_stmt *pStmt){
+    return mock_ptr_type(char*);
 }

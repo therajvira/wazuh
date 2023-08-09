@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
 import json
@@ -21,6 +21,7 @@ with patch('wazuh.core.common.wazuh_uid'):
         wazuh.rbac.decorators.expose_resources = RBAC_bypasser
 
         from wazuh.manager import *
+        from wazuh.core.manager import LoggingFormat
         from wazuh.core.tests.test_manager import get_logs
         from wazuh import WazuhInternalError
 
@@ -29,7 +30,7 @@ test_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data
 
 @pytest.fixture(scope='module', autouse=True)
 def mock_wazuh_path():
-    with patch('wazuh.core.common.wazuh_path', new=test_data_path):
+    with patch('wazuh.core.common.WAZUH_PATH', new=test_data_path):
         yield
 
 
@@ -90,7 +91,9 @@ def test_get_status(mock_status):
     (None, 'random', 0, None, True),
     (None, 'warning', 2, None, False)
 ])
-def test_ossec_log(tag, level, total_items, sort_by, sort_ascending):
+@patch("wazuh.core.manager.get_wazuh_active_logging_format", return_value=LoggingFormat.plain)
+@patch("wazuh.core.manager.exists", return_value=True)
+def test_ossec_log(mock_exists, mock_active_logging_format, tag, level, total_items, sort_by, sort_ascending):
     """Test reading ossec.log file contents.
 
     Parameters
@@ -131,7 +134,9 @@ def test_ossec_log(tag, level, total_items, sort_by, sort_ascending):
     ('timestamp=2019/03/26 19:49:15', 'timestamp', '=', '2019/03/26T19:49:15Z'),
     ('timestamp<2019/03/26 19:49:14', 'timestamp', '<', '2019/03/26T19:49:15Z'),
 ])
-def test_ossec_log_q(q, field, operation, values):
+@patch("wazuh.core.manager.get_wazuh_active_logging_format", return_value=LoggingFormat.plain)
+@patch("wazuh.core.manager.exists", return_value=True)
+def test_ossec_log_q(mock_exists, mock_active_logging_format, q, field, operation, values):
     """Check that the 'q' parameter is working correctly.
 
     Parameters
@@ -158,7 +163,9 @@ def test_ossec_log_q(q, field, operation, values):
             assert all(log[field] in values for log in result.render()['data']['affected_items'])
 
 
-def test_ossec_log_summary():
+@patch("wazuh.core.manager.get_wazuh_active_logging_format", return_value=LoggingFormat.plain)
+@patch("wazuh.core.manager.exists", return_value=True)
+def test_ossec_log_summary(mock_exists, mock_active_logging_format):
     """Tests ossec_log_summary function works and returned data match with expected"""
     expected_result = {
         'wazuh-csyslogd': {'all': 2, 'info': 2, 'error': 0, 'critical': 0, 'warning': 0, 'debug': 0},
@@ -179,6 +186,7 @@ def test_ossec_log_summary():
         assert all(all(value == expected_result[key] for key, value in item.items())
                    for item in result.render()['data']['affected_items'])
 
+
 def test_get_api_config():
     """Checks that get_api_config method is returning current api_conf dict."""
     result = get_api_config().render()
@@ -190,8 +198,8 @@ def test_get_api_config():
 @patch('socket.socket')
 @patch('wazuh.core.cluster.utils.fcntl')
 @patch('wazuh.core.cluster.utils.open')
-@patch("wazuh.core.cluster.utils.exists", return_value=True)
-def test_restart_ok(mock_exist, mock_path, mock_fcntl, mock_socket):
+@patch('os.path.exists', return_value=True)
+def test_restart_ok(mock_exists, mock_path, mock_fcntl, mock_socket):
     """Tests restarting a manager"""
     result = restart()
 
@@ -202,8 +210,8 @@ def test_restart_ok(mock_exist, mock_path, mock_fcntl, mock_socket):
 
 @patch('wazuh.core.cluster.utils.open')
 @patch('wazuh.core.cluster.utils.fcntl')
-@patch('wazuh.core.cluster.utils.exists', return_value=False)
-def test_restart_ko_socket(mock_exist, mock_fcntl, mock_open):
+@patch('os.path.exists', return_value=False)
+def test_restart_ko_socket(mock_exists, mock_fcntl, mock_open):
     """Tests restarting a manager exceptions"""
 
     # Socket path not exists
@@ -211,7 +219,7 @@ def test_restart_ko_socket(mock_exist, mock_fcntl, mock_open):
         restart()
 
     # Socket error
-    with patch("wazuh.core.cluster.utils.exists", return_value=True):
+    with patch("os.path.exists", return_value=True):
         with patch('socket.socket', side_effect=socket.error):
             with pytest.raises(WazuhInternalError, match='.* 1902 .*'):
                 restart()
@@ -230,10 +238,8 @@ def test_restart_ko_socket(mock_exist, mock_fcntl, mock_open):
         "'use_source_i'.\n2019/02/27 11:30:24 wazuh-authd: ERROR: (1202): Configuration error at "
         "'/var/ossec/etc/ossec.conf'.")
 ])
-@patch('wazuh.core.manager.open')
-@patch('wazuh.core.manager.fcntl')
 @patch("wazuh.core.manager.exists", return_value=True)
-def test_validation(mock_exists, mock_fcntl, mock_open, error_flag, error_msg):
+def test_validation(mock_exists, error_flag, error_msg):
     """Test validation() method works as expected
 
     Tests configuration validation function with multiple scenarios:
@@ -324,11 +330,12 @@ def test_get_basic_info(mock_open):
 @patch('wazuh.manager.validate_ossec_conf', return_value={'status': 'OK'})
 @patch('wazuh.manager.write_ossec_conf')
 @patch('wazuh.manager.validate_wazuh_xml')
-@patch('wazuh.manager.copyfile')
+@patch('wazuh.manager.full_copy')
 @patch('wazuh.manager.exists', return_value=True)
 @patch('wazuh.manager.remove')
 @patch('wazuh.manager.safe_move')
-def test_update_ossec_conf(move_mock, remove_mock, exists_mock, copy_mock, prettify_mock, write_mock, validate_mock):
+def test_update_ossec_conf(move_mock, remove_mock, exists_mock, full_copy_mock, prettify_mock, write_mock,
+                           validate_mock):
     """Test update_ossec_conf works as expected."""
     result = update_ossec_conf(new_conf="placeholder config")
     write_mock.assert_called_once()
@@ -344,11 +351,12 @@ def test_update_ossec_conf(move_mock, remove_mock, exists_mock, copy_mock, prett
 @patch('wazuh.manager.validate_ossec_conf')
 @patch('wazuh.manager.write_ossec_conf')
 @patch('wazuh.manager.validate_wazuh_xml')
-@patch('wazuh.manager.copyfile')
+@patch('wazuh.manager.full_copy')
 @patch('wazuh.manager.exists', return_value=True)
 @patch('wazuh.manager.remove')
 @patch('wazuh.manager.safe_move')
-def test_update_ossec_conf_ko(move_mock, remove_mock, exists_mock, copy_mock, prettify_mock, write_mock, validate_mock, new_conf):
+def test_update_ossec_conf_ko(move_mock, remove_mock, exists_mock, full_copy_mock, prettify_mock, write_mock,
+                              validate_mock, new_conf):
     """Test update_ossec_conf() function return an error and restore the configuration if the provided configuration
     is not valid."""
     result = update_ossec_conf(new_conf=new_conf)

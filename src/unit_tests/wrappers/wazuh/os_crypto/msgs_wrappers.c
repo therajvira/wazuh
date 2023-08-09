@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -25,4 +25,11 @@ size_t __wrap_CreateSecMSG(__attribute__((unused)) keystore *keys, const char *m
     strncpy(msg_encrypted, mock_type(char*), size);
 
     return size;
+}
+
+int __wrap_ReadSecMSG(keystore *keys, char *buffer, char *cleartext, int id, unsigned int buffer_size, size_t *final_size, const char *srcip, char **output) {
+    check_expected(buffer);
+    *final_size = (int)mock();
+    *output = (char*)mock_ptr_type(char *);
+    return (int)mock();
 }

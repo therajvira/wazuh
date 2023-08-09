@@ -1,6 +1,6 @@
 /*
  * Wazuh SysInfo
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * October 19, 2020.
  *
  * This program is free software; you can redistribute it
@@ -11,6 +11,7 @@
 #include "sysInfo_test.h"
 #include "sysInfo.hpp"
 #include "sysInfo.h"
+#include "cjsonSmartDeleter.hpp"
 
 void SysInfoTest::SetUp() {};
 
@@ -29,25 +30,13 @@ auto PACKAGES_EXPECTED
 };
 
 using ::testing::_;
+using ::testing::DoAll;
 using ::testing::Return;
 
-std::string SysInfo::getSerialNumber() const
+nlohmann::json SysInfo::getHardware() const
 {
     return "";
 }
-std::string SysInfo::getCpuName() const
-{
-    return "";
-}
-int SysInfo::getCpuMHz() const
-{
-    return 0;
-}
-int SysInfo::getCpuCores() const
-{
-    return 0;
-}
-void SysInfo::getMemory(nlohmann::json&) const {}
 nlohmann::json SysInfo::getPackages() const
 {
     return "";
@@ -92,20 +81,12 @@ class CallbackMock
         MOCK_METHOD(void, callbackMock, (nlohmann::json&), ());
 };
 
-struct CJsonDeleter final
-{
-    void operator()(char* json)
-    {
-        cJSON_free(json);
-    }
-};
-
 static void callback(const ReturnTypeCallback type,
                      const cJSON* json,
                      void* ctx)
 {
     CallbackMock* wrapper { reinterpret_cast<CallbackMock*>(ctx)};
-    const std::unique_ptr<char, CJsonDeleter> spJsonBytes{ cJSON_PrintUnformatted(json) };
+    const std::unique_ptr<char, CJsonSmartFree> spJsonBytes{ cJSON_PrintUnformatted(json) };
     wrapper->callbackMock(type, std::string(spJsonBytes.get()));
 }
 
@@ -114,11 +95,7 @@ class SysInfoWrapper: public SysInfo
     public:
         SysInfoWrapper() = default;
         ~SysInfoWrapper() = default;
-        MOCK_METHOD(std::string, getSerialNumber, (), (const override));
-        MOCK_METHOD(std::string, getCpuName, (), (const override));
-        MOCK_METHOD(int, getCpuMHz, (), (const override));
-        MOCK_METHOD(int, getCpuCores, (), (const override));
-        MOCK_METHOD(void, getMemory, (nlohmann::json&), (const override));
+        MOCK_METHOD(nlohmann::json, getHardware, (), (const override));
         MOCK_METHOD(nlohmann::json, getPackages, (), (const override));
         MOCK_METHOD(nlohmann::json, getOsInfo, (), (const override));
         MOCK_METHOD(nlohmann::json, getProcessesInfo, (), (const override));
@@ -133,11 +110,7 @@ class SysInfoWrapper: public SysInfo
 TEST_F(SysInfoTest, hardware)
 {
     SysInfoWrapper info;
-    EXPECT_CALL(info, getSerialNumber()).WillOnce(Return("serial"));
-    EXPECT_CALL(info, getCpuName()).WillOnce(Return("name"));
-    EXPECT_CALL(info, getCpuCores()).WillOnce(Return(1));
-    EXPECT_CALL(info, getCpuMHz()).WillOnce(Return(2902));
-    EXPECT_CALL(info, getMemory(_));
+    EXPECT_CALL(info, getHardware()).WillOnce(Return("hardware"));
     const auto result {info.hardware()};
     EXPECT_FALSE(result.empty());
 }

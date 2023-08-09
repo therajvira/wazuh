@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for Docker integration
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * October, 2018.
  *
  * This program is free software; you can redistribute it
@@ -25,12 +25,13 @@ cJSON *wm_docker_dump(const wm_docker_t *docker_conf);         // Dump docker co
 // Docker module context definition
 
 const wm_context WM_DOCKER_CONTEXT = {
-    "docker-listener",
-    (wm_routine)wm_docker_main,
-    (wm_routine)(void *)wm_docker_destroy,
-    (cJSON * (*)(const void *))wm_docker_dump,
-    NULL,
-    NULL
+    .name = "docker-listener",
+    .start = (wm_routine)wm_docker_main,
+    .destroy = (void(*)(void *))wm_docker_destroy,
+    .dump = (cJSON * (*)(const void *))wm_docker_dump,
+    .sync = NULL,
+    .stop = NULL,
+    .query = NULL,
 };
 
 // Module module main function. It won't return.

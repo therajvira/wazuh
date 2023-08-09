@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -14,7 +14,14 @@
 #include <time.h>
 #include <pthread.h>
 #include "shared.h"
-#include "os_crypto/sha1/sha1_op.h"
+#include "../os_crypto/sha1/sha1_op.h"
+
+/* Defines to switch according to different OS_AddSocket or, failing that, the case of using UDP protocol */
+#define OS_ADDSOCKET_ERROR          0   ///< OSHash_Set_ex returns 0 on error (* see OS_AddSocket and OSHash_Set_ex)
+#define OS_ADDSOCKET_KEY_UPDATED    1   ///< OSHash_Set_ex returns 1 when key existed, so it is update (*)
+#define OS_ADDSOCKET_KEY_ADDED      2   ///< OSHash_Set_ex returns 2 when key didn't existed, so it is added  (*)
+
+#define USING_UDP_NO_CLIENT_SOCKET  -1  ///< When using UDP, no valid client socket FD is set
 
 typedef enum _crypt_method {
     W_METH_BLOWFISH, W_METH_AES
@@ -52,9 +59,9 @@ typedef struct _keyentry {
     int net_protocol;                   ///< Client current protocol
     time_t time_added;
     pthread_mutex_t mutex;
-    struct sockaddr_in peer_info;
+    struct sockaddr_storage peer_info;
     FILE *fp;
-    crypt_method crypto_method;
+    _Atomic (crypt_method) crypto_method;
 
     w_linked_queue_node_t *rids_node;
 } keyentry;

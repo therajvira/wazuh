@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2015-2021, Wazuh Inc.
+* Copyright (C) 2015, Wazuh Inc.
 * August 30, 2017.
 *
 * This program is free software; you can redistribute it
@@ -16,19 +16,25 @@
 #include "decoder.h"
 #include "external/cJSON/cJSON.h"
 #include "plugin_decoders.h"
-#include "wazuh_modules/wmodules.h"
 #include "os_net/os_net.h"
 #include "string_op.h"
 #include "buffer_op.h"
 #include <time.h>
 #include "wazuhdb_op.h"
+#include "wazuh_db/wdb.h"
 
-static int error_package = 0;
-static int prev_package_id = 0;
-static int error_port = 0;
-static int prev_port_id = 0;
-static int error_process = 0;
-static int prev_process_id = 0;
+#ifdef WAZUH_UNIT_TESTING
+#define STATIC
+#else
+#define STATIC static
+#endif
+
+STATIC int error_package = 0;
+STATIC int prev_package_id = 0;
+STATIC int error_port = 0;
+STATIC int prev_port_id = 0;
+STATIC int error_process = 0;
+STATIC int prev_process_id = 0;
 
 static int decode_netinfo( Eventinfo *lf, cJSON * logJSON, int *socket);
 static int decode_osinfo( Eventinfo *lf, cJSON * logJSON, int *socket);
@@ -37,168 +43,186 @@ static int decode_package( Eventinfo *lf, cJSON * logJSON, int *socket);
 static int decode_hotfix(Eventinfo *lf, cJSON * logJSON, int *socket);
 static int decode_port( Eventinfo *lf, cJSON * logJSON, int *socket);
 static int decode_process( Eventinfo *lf, cJSON * logJSON, int *socket);
-static int decode_dbsync( char const *agent_id, char *msg_type, cJSON * logJSON, int *socket);
+static int decode_dbsync( Eventinfo *lf, char *msg_type, cJSON * logJSON, int *socket);
 
 static OSDecoderInfo *sysc_decoder = NULL;
 
-static const char* HOTFIXES_FIELDS[] = {
-    "scan_time",
-    "hotfix",
-    "checksum",
-    NULL
+
+//
+// The following deltas_fields_match_list structs (key-value) represent a 1:1 matching between upcoming agent syscollector
+// data fields and their corresponding table.
+// This will be use to generate the needed events once the EventInfo struct is filled.
+// Note: the fields which have "" in the value mean that no event will be generated for that specific field.
+//
+
+static struct deltas_fields_match_list const HOTFIXES_FIELDS[] = {
+    { .current = { "scan_time", NULL }, .next = &HOTFIXES_FIELDS[1]},
+    { .current = { "hotfix", "hotfix" }, .next = &HOTFIXES_FIELDS[2]},
+    { .current = { "checksum", NULL }, .next = NULL},
 };
 
-static const char* PACKAGES_FIELDS[] = {
-    "scan_time",
-    "format",
-    "name",
-    "priority",
-    "groups",
-    "size",
-    "vendor",
-    "install_time",
-    "version",
-    "architecture",
-    "multiarch",
-    "source",
-    "description",
-    "location",
-    "triaged",
-    "cpe",
-    "msu_name",
-    "checksum",
-    "item_id",
-    NULL
+static struct deltas_fields_match_list const PACKAGES_FIELDS[] = {
+    { .current = { "scan_time", NULL }, .next = &PACKAGES_FIELDS[1]},
+    { .current = { "format", "program.format" }, .next = &PACKAGES_FIELDS[2]},
+    { .current = { "name", "program.name" }, .next = &PACKAGES_FIELDS[3]},
+    { .current = { "priority", "program.priority" }, .next = &PACKAGES_FIELDS[4]},
+    { .current = { "groups", "program.section" }, .next = &PACKAGES_FIELDS[5]},
+    { .current = { "size", "program.size" }, .next = &PACKAGES_FIELDS[6]},
+    { .current = { "vendor", "program.vendor" }, .next = &PACKAGES_FIELDS[7]},
+    { .current = { "install_time", "program.install_time" }, .next = &PACKAGES_FIELDS[8]},
+    { .current = { "version", "program.version" }, .next = &PACKAGES_FIELDS[9]},
+    { .current = { "architecture", "program.architecture" }, .next = &PACKAGES_FIELDS[10]},
+    { .current = { "multiarch", "program.multiarch" }, .next = &PACKAGES_FIELDS[11]},
+    { .current = { "source", "program.source" }, .next = &PACKAGES_FIELDS[12]},
+    { .current = { "description", "program.description" }, .next = &PACKAGES_FIELDS[13]},
+    { .current = { "location", "program.location" }, .next = &PACKAGES_FIELDS[14]},
+    { .current = { "checksum", NULL }, .next = &PACKAGES_FIELDS[15]},
+    { .current = { "item_id", NULL }, .next = NULL},
 };
 
-
-static const char* PROCESSES_FIELDS[] = {
-    "scan_time",
-    "pid",
-    "name",
-    "state",
-    "ppid",
-    "utime",
-    "stime",
-    "cmd",
-    "argvs",
-    "euser",
-    "ruser",
-    "suser",
-    "egroup",
-    "rgroup",
-    "sgroup",
-    "fgroup",
-    "priority",
-    "nice",
-    "size",
-    "vm_size",
-    "resident",
-    "share",
-    "start_time",
-    "pgrp",
-    "session",
-    "nlwp",
-    "tgid",
-    "tty",
-    "processor",
-    "checksum",
-    NULL
+static struct deltas_fields_match_list const PROCESSES_FIELDS[] = {
+    { .current = { "scan_time", NULL }, .next = &PROCESSES_FIELDS[1]},
+    { .current = { "pid", "process.pid" }, .next = &PROCESSES_FIELDS[2]},
+    { .current = { "name", "process.name" }, .next = &PROCESSES_FIELDS[3]},
+    { .current = { "state", "process.state" }, .next = &PROCESSES_FIELDS[4]},
+    { .current = { "ppid", "process.ppid" }, .next = &PROCESSES_FIELDS[5]},
+    { .current = { "utime", "process.utime" }, .next = &PROCESSES_FIELDS[6]},
+    { .current = { "stime", "process.stime" }, .next = &PROCESSES_FIELDS[7]},
+    { .current = { "cmd", "process.cmd" }, .next = &PROCESSES_FIELDS[8]},
+    { .current = { "argvs", "process.args" }, .next = &PROCESSES_FIELDS[9]},
+    { .current = { "euser", "process.euser" }, .next = &PROCESSES_FIELDS[10]},
+    { .current = { "ruser", "process.ruser" }, .next = &PROCESSES_FIELDS[11]},
+    { .current = { "suser", "process.suser" }, .next = &PROCESSES_FIELDS[12]},
+    { .current = { "egroup", "process.egroup" }, .next = &PROCESSES_FIELDS[13]},
+    { .current = { "rgroup", "process.rgroup" }, .next = &PROCESSES_FIELDS[14]},
+    { .current = { "sgroup", "process.sgroup" }, .next = &PROCESSES_FIELDS[15]},
+    { .current = { "fgroup", "process.fgroup" }, .next = &PROCESSES_FIELDS[16]},
+    { .current = { "priority", "process.priority" }, .next = &PROCESSES_FIELDS[17]},
+    { .current = { "nice", "process.nice" }, .next = &PROCESSES_FIELDS[18]},
+    { .current = { "size", "process.size" }, .next = &PROCESSES_FIELDS[19]},
+    { .current = { "vm_size", "process.vm_size" }, .next = &PROCESSES_FIELDS[20]},
+    { .current = { "resident", "process.resident" }, .next = &PROCESSES_FIELDS[21]},
+    { .current = { "share", "process.share" }, .next = &PROCESSES_FIELDS[22]},
+    { .current = { "start_time", "process.start_time" }, .next = &PROCESSES_FIELDS[23]},
+    { .current = { "pgrp", "process.pgrp" }, .next = &PROCESSES_FIELDS[24]},
+    { .current = { "session", "process.session" }, .next = &PROCESSES_FIELDS[25]},
+    { .current = { "nlwp", "process.nlwp" }, .next = &PROCESSES_FIELDS[26]},
+    { .current = { "tgid", "process.tgid" }, .next = &PROCESSES_FIELDS[27]},
+    { .current = { "tty", "process.tty" }, .next = &PROCESSES_FIELDS[28]},
+    { .current = { "processor", "process.processor" }, .next = &PROCESSES_FIELDS[29]},
+    { .current = { "checksum", NULL }, .next = NULL},
 };
 
-static const char* PORTS_FIELDS[] = {
-    "scan_time",
-    "protocol",
-    "local_ip",
-    "local_port",
-    "remote_ip",
-    "remote_port",
-    "tx_queue",
-    "rx_queue",
-    "inode",
-    "state",
-    "pid",
-    "process",
-    "checksum",
-    "item_id",
-    NULL
+static struct deltas_fields_match_list const PORTS_FIELDS[] = {
+    { .current = { "scan_time", NULL }, .next = &PORTS_FIELDS[1]},
+    { .current = { "protocol", "port.protocol" }, .next = &PORTS_FIELDS[2]},
+    { .current = { "local_ip", "port.local_ip" }, .next = &PORTS_FIELDS[3]},
+    { .current = { "local_port", "port.local_port" }, .next = &PORTS_FIELDS[4]},
+    { .current = { "remote_ip", "port.remote_ip" }, .next = &PORTS_FIELDS[5]},
+    { .current = { "remote_port", "port.remote_port" }, .next = &PORTS_FIELDS[6]},
+    { .current = { "tx_queue", "port.tx_queue" }, .next = &PORTS_FIELDS[7]},
+    { .current = { "rx_queue", "port.rx_queue" }, .next = &PORTS_FIELDS[8]},
+    { .current = { "inode", "port.inode" }, .next = &PORTS_FIELDS[9]},
+    { .current = { "state", "port.state" }, .next = &PORTS_FIELDS[10]},
+    { .current = { "pid", "port.pid" }, .next = &PORTS_FIELDS[11]},
+    { .current = { "process", "port.process" }, .next = &PORTS_FIELDS[12]},
+    { .current = { "checksum", NULL }, .next = &PORTS_FIELDS[13]},
+    { .current = { "item_id", NULL }, .next = NULL},
 };
 
-static const char* NETWORK_IFACE_FIELDS[] = {
-    "scan_time",
-    "name",
-    "adapter",
-    "type",
-    "state",
-    "mtu",
-    "mac",
-    "tx_packets",
-    "rx_packets",
-    "tx_bytes",
-    "rx_bytes",
-    "tx_errors",
-    "rx_errors",
-    "tx_dropped",
-    "rx_dropped",
-    "checksum",
-    "item_id",
-    NULL
+static struct deltas_fields_match_list const NETWORK_IFACE_FIELDS[] = {
+    { .current = { "scan_time", NULL }, .next = &NETWORK_IFACE_FIELDS[1]},
+    { .current = { "name", "netinfo.iface.name" }, .next = &NETWORK_IFACE_FIELDS[2]},
+    { .current = { "adapter", "netinfo.iface.adapter" }, .next = &NETWORK_IFACE_FIELDS[3]},
+    { .current = { "type", "netinfo.iface.type" }, .next = &NETWORK_IFACE_FIELDS[4]},
+    { .current = { "state", "netinfo.iface.state" }, .next = &NETWORK_IFACE_FIELDS[5]},
+    { .current = { "mtu", "netinfo.iface.mtu" }, .next = &NETWORK_IFACE_FIELDS[6]},
+    { .current = { "mac", "netinfo.iface.mac" }, .next = &NETWORK_IFACE_FIELDS[7]},
+    { .current = { "tx_packets", "netinfo.iface.tx_packets" }, .next = &NETWORK_IFACE_FIELDS[8]},
+    { .current = { "rx_packets", "netinfo.iface.rx_packets" }, .next = &NETWORK_IFACE_FIELDS[9]},
+    { .current = { "tx_bytes", "netinfo.iface.tx_bytes" }, .next = &NETWORK_IFACE_FIELDS[10]},
+    { .current = { "rx_bytes", "netinfo.iface.rx_bytes" }, .next = &NETWORK_IFACE_FIELDS[11]},
+    { .current = { "tx_errors", "netinfo.iface.tx_errors" }, .next = &NETWORK_IFACE_FIELDS[12]},
+    { .current = { "rx_errors", "netinfo.iface.rx_errors" }, .next = &NETWORK_IFACE_FIELDS[13]},
+    { .current = { "tx_dropped", "netinfo.iface.tx_dropped" }, .next = &NETWORK_IFACE_FIELDS[14]},
+    { .current = { "rx_dropped", "netinfo.iface.rx_dropped" }, .next = &NETWORK_IFACE_FIELDS[15]},
+    { .current = { "checksum", NULL }, .next = &NETWORK_IFACE_FIELDS[16]},
+    { .current = { "item_id", NULL }, .next = NULL},
 };
 
-static const char* NETWORK_PROTOCOL_FIELDS[] = {
-    "iface",
-    "type",
-    "gateway",
-    "dhcp",
-    "metric",
-    "checksum",
-    "item_id",
-    NULL
+static struct deltas_fields_match_list const NETWORK_PROTOCOL_FIELDS[] = {
+    { .current = { "iface", "netinfo.proto.iface" }, .next = &NETWORK_PROTOCOL_FIELDS[1]},
+    { .current = { "type", "netinfo.proto.type" }, .next = &NETWORK_PROTOCOL_FIELDS[2]},
+    { .current = { "gateway", "netinfo.proto.gateway" }, .next = &NETWORK_PROTOCOL_FIELDS[3]},
+    { .current = { "dhcp", "netinfo.proto.dhcp" }, .next = &NETWORK_PROTOCOL_FIELDS[4]},
+    { .current = { "metric", "netinfo.proto.metric" }, .next = &NETWORK_PROTOCOL_FIELDS[5]},
+    { .current = { "checksum", NULL }, .next = &NETWORK_PROTOCOL_FIELDS[6]},
+    { .current = { "item_id", NULL }, .next = NULL},
 };
 
-static const char* NETWORK_ADDRESS_FIELDS[] = {
-    "iface",
-    "proto",
-    "address",
-    "netmask",
-    "broadcast",
-    "checksum",
-    "item_id",
-    NULL
+/**
+ * @brief Allow to map 'protocol' numeric value into string representation
+ * @param data Delta information
+ * @param value Key to search for
+ * @return true value was mapped correctly
+ * @return false value cannot be mapped
+ */
+bool protocol_mapping(cJSON * data, const char * key) {
+    bool retval = false;
+    cJSON * protocol = cJSON_GetObjectItem(data, key);
+    if (protocol && cJSON_IsNumber(protocol)) {
+        const char * proto = WDB_NETADDR_IPV4 == protocol->valueint ? "ipv4" : "ipv6";
+        cJSON_ReplaceItemInObject(data, key, cJSON_CreateString(proto));
+        retval = true;
+    } else {
+        mdebug2("Field '%s' cannot be obtained.", key);
+    }
+    return retval;
+}
+
+static struct deltas_fields_match_list const NETWORK_ADDRESS_FIELDS[] = {
+    { .current = { "iface", "netinfo.addr.iface" }, .next = &NETWORK_ADDRESS_FIELDS[1]},
+    { .current = { "proto", "netinfo.addr.proto" }, .next = &NETWORK_ADDRESS_FIELDS[2]},
+    { .current = { "address", "netinfo.addr.address" }, .next = &NETWORK_ADDRESS_FIELDS[3]},
+    { .current = { "netmask", "netinfo.addr.netmask" }, .next = &NETWORK_ADDRESS_FIELDS[4]},
+    { .current = { "broadcast", "netinfo.addr.broadcast" }, .next = &NETWORK_ADDRESS_FIELDS[5]},
+    { .current = { "checksum", NULL }, .next = &NETWORK_ADDRESS_FIELDS[6]},
+    { .current = { "item_id", NULL }, .next = NULL},
 };
 
-static const char* HARDWARE_FIELDS[] = {
-    "scan_time",
-    "board_serial",
-    "cpu_name",
-    "cpu_cores",
-    "cpu_mhz",
-    "ram_total",
-    "ram_free",
-    "ram_usage",
-    "checksum",
-    NULL
+static struct delta_values_mapping_list const NETWORK_ADDRESS_MAPPING[] = {
+    {.current = {"proto", protocol_mapping}, .next = NULL}};
+
+static struct deltas_fields_match_list const HARDWARE_FIELDS[] = {
+    { .current = { "scan_time", NULL }, .next = &HARDWARE_FIELDS[1]},
+    { .current = { "board_serial", "hardware.serial" }, .next = &HARDWARE_FIELDS[2]},
+    { .current = { "cpu_name", "hardware.cpu_name" }, .next = &HARDWARE_FIELDS[3]},
+    { .current = { "cpu_cores", "hardware.cpu_cores" }, .next = &HARDWARE_FIELDS[4]},
+    { .current = { "cpu_mhz", "hardware.cpu_mhz" }, .next = &HARDWARE_FIELDS[5]},
+    { .current = { "ram_total", "hardware.ram_total" }, .next = &HARDWARE_FIELDS[6]},
+    { .current = { "ram_free", "hardware.ram_free" }, .next = &HARDWARE_FIELDS[7]},
+    { .current = { "ram_usage", "hardware.ram_usage" }, .next = &HARDWARE_FIELDS[8]},
+    { .current = { "checksum", NULL }, .next = NULL},
 };
 
-static const char* OS_FIELDS[] = {
-    "scan_time",
-    "hostname",
-    "architecture",
-    "os_name",
-    "os_version",
-    "os_codename",
-    "os_major",
-    "os_minor",
-    "os_patch",
-    "os_build",
-    "os_platform",
-    "sysname",
-    "release",
-    "version",
-    "os_release",
-    "os_display_version",
-    "checksum",
-    NULL
+static struct deltas_fields_match_list const OS_FIELDS[] = {
+    { .current = { "scan_time", NULL }, .next = &OS_FIELDS[1]},
+    { .current = { "hostname", "os.hostname" }, .next = &OS_FIELDS[2]},
+    { .current = { "architecture", "os.architecture" }, .next = &OS_FIELDS[3]},
+    { .current = { "os_name", "os.name" }, .next = &OS_FIELDS[4]},
+    { .current = { "os_version", "os.version" }, .next = &OS_FIELDS[5]},
+    { .current = { "os_codename", "os.codename" }, .next = &OS_FIELDS[6]},
+    { .current = { "os_major", "os.major" }, .next = &OS_FIELDS[7]},
+    { .current = { "os_minor", "os.minor" }, .next = &OS_FIELDS[8]},
+    { .current = { "os_patch", "os.patch" }, .next = &OS_FIELDS[9]},
+    { .current = { "os_build", "os.build" }, .next = &OS_FIELDS[10]},
+    { .current = { "os_platform", "os.platform" }, .next = &OS_FIELDS[11]},
+    { .current = { "sysname", "os.sysname" }, .next = &OS_FIELDS[12]},
+    { .current = { "release", "os.release" }, .next = &OS_FIELDS[13]},
+    { .current = { "version", "os.version" }, .next = &OS_FIELDS[14]},
+    { .current = { "os_release", "os.os_release" }, .next = &OS_FIELDS[15]},
+    { .current = { "os_display_version", "os.display_version" }, .next = &OS_FIELDS[16]},
+    { .current = { "checksum", NULL }, .next = NULL},
 };
 
 void SyscollectorInit(){
@@ -307,8 +331,8 @@ int DecodeSyscollector(Eventinfo *lf,int *socket)
         }
     }
     else if (strncmp(msg_type, "dbsync_", 7) == 0) {
-        if (decode_dbsync(lf->agent_id, msg_type, logJSON, socket) < 0) {
-            mdebug1("Unable to send %s information to Wazuh DB.", msg_type);
+        if (decode_dbsync(lf, msg_type, logJSON, socket) < 0) {
+            mdebug1(UNABLE_TO_SEND_INFORMATION_TO_WDB);
             cJSON_Delete (logJSON);
             return (0);
         }
@@ -822,8 +846,8 @@ int decode_netinfo(Eventinfo *lf, cJSON * logJSON, int *socket) {
         msg_type = cJSON_GetObjectItem(logJSON, "type")->valuestring;
 
         if (!msg_type) {
-            merror("Invalid message. Type not found.");
-            goto end;
+            merror("Invalid message. Type not found."); // LCOV_EXCL_LINE
+            goto end;                                   // LCOV_EXCL_LINE
         } else if (strcmp(msg_type, "network_end") == 0) {
 
             cJSON * scan_id = cJSON_GetObjectItem(logJSON, "ID");
@@ -838,8 +862,8 @@ int decode_netinfo(Eventinfo *lf, cJSON * logJSON, int *socket) {
                 goto end;
             }
         } else {
-            merror("at decode_netinfo(): unknown type found.");
-            goto end;
+            merror("at decode_netinfo(): unknown type found."); // LCOV_EXCL_LINE
+            goto end;                                           // LCOV_EXCL_LINE
         }
     }
 
@@ -877,7 +901,7 @@ int decode_osinfo( Eventinfo *lf, cJSON * logJSON,int *socket) {
 
         os_calloc(OS_SIZE_6144, sizeof(char), msg);
 
-        snprintf(msg, OS_SIZE_6144 - 1, "agent %s osinfo save", lf->agent_id);
+        snprintf(msg, OS_SIZE_6144 - 1, "agent %s osinfo set", lf->agent_id);
 
         if (scan_id) {
             char id[OS_SIZE_1024];
@@ -1174,8 +1198,8 @@ int decode_port( Eventinfo *lf, cJSON * logJSON,int *socket) {
         msg_type = cJSON_GetObjectItem(logJSON, "type")->valuestring;
 
         if (!msg_type) {
-            merror("Invalid message. Type not found.");
-            goto end;
+            merror("Invalid message. Type not found."); // LCOV_EXCL_LINE
+            goto end;                                   // LCOV_EXCL_LINE
         } else if (strcmp(msg_type, "port_end") == 0) {
             if (error_port) {
                 if (scan_id->valueint == prev_port_id) {
@@ -1346,6 +1370,7 @@ int decode_package( Eventinfo *lf,cJSON * logJSON,int *socket) {
                 error_package = 0;
             }
         }
+
         cJSON * scan_time = cJSON_GetObjectItem(logJSON, "timestamp");
         cJSON * format = cJSON_GetObjectItem(package, "format");
         cJSON * name = cJSON_GetObjectItem(package, "name");
@@ -1466,6 +1491,16 @@ int decode_package( Eventinfo *lf,cJSON * logJSON,int *socket) {
             wm_strcat(&msg, "NULL", '|');
         }
 
+        // The reference for packages is calculated with the name, version and architecture
+        os_sha1 hexdigest;
+        wdbi_strings_hash(hexdigest,
+                          name && name->valuestring ? name->valuestring : "",
+                          version && version->valuestring ? version->valuestring : "",
+                          architecture && architecture->valuestring ? architecture->valuestring : "",
+                          NULL);
+
+        wm_strcat(&msg, hexdigest, '|');
+
         char *message;
         if (wdbc_query_ex(socket, msg, response, OS_SIZE_6144) == 0) {
             if (wdbc_parse_result(response, &message) != WDBC_OK) {
@@ -1485,8 +1520,8 @@ int decode_package( Eventinfo *lf,cJSON * logJSON,int *socket) {
         msg_type = cJSON_GetObjectItem(logJSON, "type")->valuestring;
 
         if (!msg_type) {
-            merror("Invalid message. Type not found.");
-            goto end;
+            merror("Invalid message. Type not found."); // LCOV_EXCL_LINE
+            goto end;                                   // LCOV_EXCL_LINE
         } else if (strcmp(msg_type, "program_end") == 0) {
             if (error_package) {
                 if (scan_id->valueint == prev_package_id) {
@@ -1555,9 +1590,9 @@ int decode_hotfix(Eventinfo *lf, cJSON * logJSON, int *socket) {
         msg_type = cJSON_GetObjectItem(logJSON, "type")->valuestring;
 
         if (!msg_type) {
-            merror("Invalid message. Type not found.");
-            free(msg);
-            return -1;
+            merror("Invalid message. Type not found."); // LCOV_EXCL_LINE
+            free(msg);                                  // LCOV_EXCL_LINE
+            return -1;                                  // LCOV_EXCL_LINE                 
         } else if (strcmp(msg_type, "hotfix_end") == 0) {
             snprintf(msg, OS_SIZE_1024 - 1, "agent %s hotfix del %d", lf->agent_id, scan_id->valueint);
 
@@ -1897,8 +1932,8 @@ int decode_process(Eventinfo *lf, cJSON * logJSON,int *socket) {
         msg_type = cJSON_GetObjectItem(logJSON, "type")->valuestring;
 
         if (!msg_type) {
-            merror("Invalid message. Type not found.");
-            goto end;
+            merror("Invalid message. Type not found."); // LCOV_EXCL_LINE
+            goto end;                                   // LCOV_EXCL_LINE
         } else if (strcmp(msg_type, "process_end") == 0) {
 
             if (error_process) {
@@ -1934,115 +1969,205 @@ end:
     return retval;
 }
 
-const char** get_field_list(const char *type) {
-    char const **ret_val = NULL;
-    if (NULL != type) {
-        if (strcmp(type, "hotfixes") == 0) {
-            ret_val = HOTFIXES_FIELDS;
-        } else if(strcmp(type, "packages") == 0) {
-            ret_val = PACKAGES_FIELDS;
-        } else if(strcmp(type, "processes") == 0) {
-            ret_val = PROCESSES_FIELDS;
-        } else if(strcmp(type, "ports") == 0) {
-            ret_val = PORTS_FIELDS;
-        } else if(strcmp(type, "network_iface") == 0) {
-            ret_val = NETWORK_IFACE_FIELDS;
-        } else if(strcmp(type, "network_protocol") == 0) {
-            ret_val = NETWORK_PROTOCOL_FIELDS;
-        } else if(strcmp(type, "network_address") == 0) {
-            ret_val = NETWORK_ADDRESS_FIELDS;
-        } else if(strcmp(type, "hwinfo") == 0) {
-            ret_val = HARDWARE_FIELDS;
-        } else if(strcmp(type, "osinfo") == 0) {
-            ret_val = OS_FIELDS;
-        } else {
-            merror("Incorrect/unknown type value %s.", type);
-        }
+static const struct deltas_fields_match_list * get_field_list(const char *type) {
+    const struct deltas_fields_match_list * ret_val = NULL;
+    // 'type' will not be NULL because this function is being called after checking the type value
+    if (strcmp(type, "hotfixes") == 0) {
+        ret_val = HOTFIXES_FIELDS;
+    } else if(strcmp(type, "packages") == 0) {
+        ret_val = PACKAGES_FIELDS;
+    } else if(strcmp(type, "processes") == 0) {
+        ret_val = PROCESSES_FIELDS;
+    } else if(strcmp(type, "ports") == 0) {
+        ret_val = PORTS_FIELDS;
+    } else if(strcmp(type, "network_iface") == 0) {
+        ret_val = NETWORK_IFACE_FIELDS;
+    } else if(strcmp(type, "network_protocol") == 0) {
+        ret_val = NETWORK_PROTOCOL_FIELDS;
+    } else if(strcmp(type, "network_address") == 0) {
+        ret_val = NETWORK_ADDRESS_FIELDS;
+    } else if(strcmp(type, "hwinfo") == 0) {
+        ret_val = HARDWARE_FIELDS;
+    } else if(strcmp(type, "osinfo") == 0) {
+        ret_val = OS_FIELDS;
     } else {
-        merror("null type value.");
+        /* This could be a new type of synchronization that is not yet implemented or corrupted data. */
+        merror(INVALID_TYPE, type);
     }
     return ret_val;
 }
 
-bool fill_data_dbsync(cJSON *data, const char *field_list[], buffer_t * const msg) {
-    bool ret_val = false;
-    static const int NULL_TEXT_LENGTH = 4;
-    static const int SEPARATOR_LENGTH = 1;
-    while (NULL != *field_list) {
-        const cJSON *key = cJSON_GetObjectItem(data, *field_list);
-        if (NULL != key) {
-            if (cJSON_IsNumber(key)) {
-                char value[OS_SIZE_128] = { 0 };
-                const int value_size = os_snprintf(value, OS_SIZE_128 - 1, "%d", key->valueint);
-                buffer_push(msg, value, value_size);
-            } else if (cJSON_IsString(key)) {
-                if(strlen(key->valuestring) == 0) {
-                    buffer_push(msg, "NULL", NULL_TEXT_LENGTH);
+static void fill_event_alert(Eventinfo * lf,                                        /* Event information */
+                             const struct deltas_fields_match_list * field_list,    /* List of fields to be filled */
+                             const char * operation,                                /* Operation type */
+                             cJSON * data_object) {                                 /* JSON object with the data */
+
+    struct deltas_fields_match_list const * head = field_list;                      /* Table metadata to generate the
+                                                                                       event based on specific field
+                                                                                       information and the JSON Schema.*/
+
+    while (NULL != head) {
+        /* This filter is to avoid filling the fields that are from the metadata of the synchronization. */
+        if (head->current.value != NULL) {
+            cJSON * kv = cJSON_GetObjectItem(data_object, head->current.key);       /* Get the value of the field. */
+            /* If the field is not NULL, fill the event. */
+            if (NULL != kv) {
+                if (cJSON_IsString(kv)) {
+                    /* If the format is string, fill the event with the value. */
+                    fillData(lf, head->current.value, kv->valuestring);
+                } else if (cJSON_IsNumber(kv)) {
+                    /* If the format is number, convert it to string, and fill the event with the value. */
+                    char value[OS_SIZE_64] = {0};                                   /* Buffer to store the converted
+                                                                                       value. */
+                    /* Verify if the value is integer or double. */
+                    if ((double)kv->valueint == kv->valuedouble) {
+                        snprintf(value, OS_SIZE_64 - 1, "%d", kv->valueint);
+                    } else {
+                        snprintf(value, OS_SIZE_64 - 1, "%f", kv->valuedouble);
+                    }
+                    fillData(lf, head->current.value, value);
                 } else {
-                    char *value_string = wstr_replace(key->valuestring, FIELD_SEPARATOR_DBSYNC, "?");
-                    if (NULL != value_string) {
-                        buffer_push(msg, value_string, strlen(value_string));
-                        os_free(value_string);
-                    } else {
-                        buffer_push(msg, "NULL", NULL_TEXT_LENGTH);
-                    }
+                    /* If the format is not string or number, fill it with an empty string. */
+                    fillData(lf, head->current.value, "");
                 }
             } else {
-                buffer_push(msg, "NULL", NULL_TEXT_LENGTH);
+                /* If the field is not found, fill it with an empty string. */
+                fillData(lf, head->current.value, "");
             }
-        } else {
-            buffer_push(msg, "NULL", NULL_TEXT_LENGTH);
         }
-        // Message separated by \0, includes the values to be processed in the wazuhdb
-        // this must maintain order and must always be completed, and the values that
-        // do not correspond will not be proccessed in wazuh-db
-        buffer_push(msg, FIELD_SEPARATOR_DBSYNC, SEPARATOR_LENGTH);
-        ++field_list;
-        ret_val = true;
+        head = head->next;
+    }
+    fillData(lf, "operation_type", operation);
+}
+
+/**
+ * @brief Get the mapping list object
+ * 
+ * @param type Scan type
+ * @return mapping list if exist. NULL otherwise
+ */
+static const struct delta_values_mapping_list * get_mapping_list(const char *type) {
+    const struct delta_values_mapping_list * ret_val = NULL;
+    if (strcmp(type, "hotfixes") == 0) {
+        ret_val = NULL;
+    } else if(strcmp(type, "packages") == 0) {
+        ret_val = NULL;
+    } else if(strcmp(type, "processes") == 0) {
+        ret_val = NULL;
+    } else if(strcmp(type, "ports") == 0) {
+        ret_val = NULL;
+    } else if(strcmp(type, "network_iface") == 0) {
+        ret_val = NULL;
+    } else if(strcmp(type, "network_protocol") == 0) {
+        ret_val = NULL;
+    } else if(strcmp(type, "network_address") == 0) {
+        ret_val = NETWORK_ADDRESS_MAPPING;
+    } else if(strcmp(type, "hwinfo") == 0) {
+        ret_val = NULL;
+    } else if(strcmp(type, "osinfo") == 0) {
+        ret_val = NULL;
+    } else {
+        merror(INVALID_TYPE, type);
     }
     return ret_val;
 }
 
-int decode_dbsync(char const *agent_id, char *msg_type, cJSON *logJSON, int *socket) {
-    int ret_val = -1;
-    if (NULL != msg_type && NULL != agent_id && NULL != logJSON) {
-        char *type = NULL;
-        if (strtok(msg_type, "_")) {
-            type = strtok(NULL, "\0");
+/**
+ * @brief Map delta values according to scan type 
+ * 
+ * @param type scan type
+ * @param data delta information
+ */
+void delta_map_values(const char * type, cJSON * data) {
+    struct delta_values_mapping_list const * head = get_mapping_list(type);
+    while (NULL != head) {
+        if (NULL != head->current.mapping) {
+            bool mapping_result = (head->current.mapping)(data, head->current.key);
+            if (!mapping_result) {
+                mdebug2("Error while mapping '%s' field value.", head->current.key);
+            }
         }
-        if (NULL != type) {
-            cJSON * operation_object = cJSON_GetObjectItem(logJSON, "operation");
-            cJSON * data = cJSON_GetObjectItem(logJSON, "data");
-            if (NULL != operation_object && NULL != data && cJSON_IsString(operation_object) && cJSON_IsObject(data)) {
-                const char **field_list = get_field_list(type);
+        head = head->next;
+    }
+}
 
-                if (NULL != field_list) {
-                    char *response = NULL;
-                    char header[OS_SIZE_256] = { 0 };
-                    os_calloc(OS_SIZE_128, sizeof(char), response);
-                    int header_size = snprintf(header, OS_SIZE_256 - 1, "agent %s dbsync %s %s ", agent_id, type, cJSON_GetStringValue(operation_object));
+static int decode_dbsync(Eventinfo * lf,   /* Event information */
+                         char *msg_type,   /* Message type */
+                         cJSON *logJSON,   /* JSON object with the message */
+                         int *socket) {    /* Socket to communicate with the DB */
 
-                    buffer_t *msg = buffer_initialize(OS_SIZE_6144);
-                    buffer_push(msg, header, header_size);
-                    if (fill_data_dbsync(data, field_list, msg) && TRUE == msg->status) {
-                        ret_val = wdbc_query_ex(socket, msg->data, response, OS_SIZE_128);
-                        if (ret_val != 0) {
-                            merror("Wazuh-db query error, check wdb logs.");
+    int ret_val = OS_INVALID;   /* Return value */
+
+    if (NULL != lf->agent_id) {
+        char * type = NULL;     /* Type is the first token of the msg_type, basically is the table name. */
+        strtok_r(msg_type, "_", &type);
+
+        if (strlen(type) > 0) {
+            cJSON * operation_object = cJSON_GetObjectItem(logJSON, "operation");   /* Operation is the operation to be
+                                                                                       performed in the table. */
+            cJSON * data_object = cJSON_GetObjectItem(logJSON, "data");             /* Data is the JSON object with the
+                                                                                       values to be processed. */
+            struct deltas_fields_match_list const * field_list = get_field_list(type); /* List of fields to be filled */
+
+            /* Validation if the type is valid and the operation and data are not NULL. */
+            if (NULL != field_list) {
+                if (cJSON_IsString(operation_object) && cJSON_IsObject(data_object)) {
+
+                    delta_map_values(type, data_object);                            /* Map field's values if applies */
+                    char * operation = operation_object->valuestring;               /* Operation is the operation to be
+                                                                                       performed in the table. */                    
+                    char * data = cJSON_PrintUnformatted(data_object);              /* Data is the JSON object with the
+                                                                                       values to be processed. */
+                    if (NULL != data) {
+                        const size_t data_len = strlen(data) + 1;                   /* Data length is the size of the
+                                                                                       data string. */
+                        char *response = NULL;                                      /* Response is the string that will
+                                                                                       contain the response from
+                                                                                       wazuh-db. */
+                        char * msg = NULL;                                          /* Message is the string that will
+                                                                                       be sent to wazuh-db. */
+
+                        os_calloc(OS_SIZE_1024, sizeof(char), response);
+                        os_calloc(data_len + OS_SIZE_256, sizeof(char), msg);
+                        snprintf(msg,
+                                 data_len + OS_SIZE_256 - 1,
+                                 "agent %s dbsync %s %s %s",
+                                 lf->agent_id,
+                                 type,
+                                 operation,
+                                 data);                                             /* Header size is the real size of
+                                                                                       the header string. */
+
+                        fill_event_alert(lf, field_list, operation, data_object);
+
+                        ret_val = wdbc_query_ex(socket, msg, response, OS_SIZE_1024);
+
+                        if (ret_val == 0) {
+                            if (strncmp(response, "err", 3) == 0) {
+                                /* If some error come to this point, it means that the error comes from wazuh-db. */
+                                mdebug1(A_QUERY_ERROR);
+                            } else if (strncmp(response, "ok ", 3) != 0) {
+                                /* If the response is not ok, it means that the response is invalid. */
+                                merror(INVALID_RESPONSE);
+                            }
+                        } else {
+                            /* If the return value is not 0, it means that the query to wazuh-db failed. */
+                            mdebug2(WDBC_QUERY_EX_ERROR);
                         }
-                    } else {
-                        merror("Error in fill data population");
+
+                        os_free(response);
+                        os_free(msg);
+                        cJSON_free(data);
                     }
-                    buffer_free(msg);
-                    os_free(response);
+                } else {
+                    /* If the operation or data is not a string or object, it means that the JSON is invalid. */
+                    merror(INVALID_OPERATION, type);
                 }
-            } else {
-                merror("Incorrect/unknown operation, type: %s.", type);
             }
         } else {
-            merror("Incorrect prefix message, message type: %s.", msg_type);
+            /* If the type is empty, it means that the msg_type is invalid. */
+            merror(INVALID_PREFIX, msg_type);
         }
     }
     return ret_val;
 }
-
-

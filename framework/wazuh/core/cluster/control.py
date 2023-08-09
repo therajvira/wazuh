@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
 import json
@@ -8,11 +8,11 @@ from wazuh.core import common
 from wazuh.core.agent import Agent
 from wazuh.core.cluster import local_client
 from wazuh.core.cluster.common import as_wazuh_object, WazuhJSONEncoder
-from wazuh.core.exception import WazuhError, WazuhClusterError
+from wazuh.core.exception import WazuhError
 from wazuh.core.utils import filter_array_by_query
 
 
-async def get_nodes(lc: local_client.LocalClient, filter_node=None, offset=0, limit=common.database_limit,
+async def get_nodes(lc: local_client.LocalClient, filter_node=None, offset=0, limit=common.DATABASE_LIMIT,
                     sort=None, search=None, select=None, filter_type='all', q=''):
     """Get basic information of each of the cluster nodes.
 
@@ -44,18 +44,14 @@ async def get_nodes(lc: local_client.LocalClient, filter_node=None, offset=0, li
     """
     if q:
         # If exists q parameter, apply limit and offset after filtering by q.
-        arguments = {'filter_node': filter_node, 'offset': 0, 'limit': common.database_limit, 'sort': sort,
+        arguments = {'filter_node': filter_node, 'offset': 0, 'limit': common.DATABASE_LIMIT, 'sort': sort,
                      'search': search, 'select': select, 'filter_type': filter_type}
     else:
         arguments = {'filter_node': filter_node, 'offset': offset, 'limit': limit, 'sort': sort, 'search': search,
                      'select': select, 'filter_type': filter_type}
-    response = await lc.execute(command=b'get_nodes',
-                                data=json.dumps(arguments).encode(),
-                                wait_for_complete=False)
-    try:
-        result = json.loads(response, object_hook=as_wazuh_object)
-    except json.JSONDecodeError as e:
-        raise WazuhClusterError(3020) if 'timeout' in response else e
+
+    response = await lc.execute(command=b'get_nodes', data=json.dumps(arguments).encode())
+    result = json.loads(response, object_hook=as_wazuh_object)
 
     if isinstance(result, Exception):
         raise result
@@ -87,15 +83,11 @@ async def get_node(lc: local_client.LocalClient, filter_node=None, select=None):
     result : dict
         Data of the node.
     """
-    arguments = {'filter_node': filter_node, 'offset': 0, 'limit': common.database_limit, 'sort': None, 'search': None,
+    arguments = {'filter_node': filter_node, 'offset': 0, 'limit': common.DATABASE_LIMIT, 'sort': None, 'search': None,
                  'select': select, 'filter_type': 'all'}
 
-    response = await lc.execute(command=b'get_nodes', data=json.dumps(arguments).encode(),
-                                wait_for_complete=False)
-    try:
-        node_info_array = json.loads(response, object_hook=as_wazuh_object)
-    except json.JSONDecodeError as e:
-        raise WazuhClusterError(3020) if 'timeout' in response else e
+    response = await lc.execute(command=b'get_nodes', data=json.dumps(arguments).encode())
+    node_info_array = json.loads(response, object_hook=as_wazuh_object)
 
     if isinstance(node_info_array, Exception):
         raise node_info_array
@@ -121,14 +113,8 @@ async def get_health(lc: local_client.LocalClient, filter_node=None):
     result : dict
         Basic information of each node and synchronization process related information.
     """
-    response = await lc.execute(command=b'get_health',
-                                data=json.dumps(filter_node).encode(),
-                                wait_for_complete=False)
-
-    try:
-        result = json.loads(response, object_hook=as_wazuh_object)
-    except json.JSONDecodeError as e:
-        raise WazuhClusterError(3020) if 'timeout' in response else e
+    response = await lc.execute(command=b'get_health', data=json.dumps(filter_node).encode())
+    result = json.loads(response, object_hook=as_wazuh_object)
 
     if isinstance(result, Exception):
         raise result
@@ -167,14 +153,8 @@ async def get_agents(lc: local_client.LocalClient, filter_node=None, filter_stat
                   'wait_for_complete': False
                   }
 
-    response = await lc.execute(command=b'dapi',
-                                data=json.dumps(input_json, cls=WazuhJSONEncoder).encode(),
-                                wait_for_complete=False)
-
-    try:
-        result = json.loads(response, object_hook=as_wazuh_object)
-    except json.JSONDecodeError as e:
-        raise WazuhClusterError(3020) if 'timeout' in response else e
+    response = await lc.execute(command=b'dapi', data=json.dumps(input_json, cls=WazuhJSONEncoder).encode())
+    result = json.loads(response, object_hook=as_wazuh_object)
 
     if isinstance(result, Exception):
         raise result
@@ -201,3 +181,25 @@ async def get_system_nodes():
         if e.code == 3012:
             return WazuhError(3013)
         raise e
+
+
+async def get_node_ruleset_integrity(lc: local_client.LocalClient) -> dict:
+    """Retrieve custom ruleset integrity.
+
+    Parameters
+    ----------
+    lc : LocalClient
+        LocalClient instance.
+
+    Returns
+    -------
+    dict
+        Dictionary with results
+    """
+    response = await lc.execute(command=b"get_hash", data=b"")
+    result = json.loads(response, object_hook=as_wazuh_object)
+
+    if isinstance(result, Exception):
+        raise result
+
+    return result

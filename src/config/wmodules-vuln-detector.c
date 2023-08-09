@@ -1,6 +1,6 @@
 /*
  * Wazuh Module Configuration
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * January, 2018.
  *
  * This program is free software; you can redistribute it
@@ -46,7 +46,7 @@ static int wm_vuldet_provider_os_list(xml_node **node, vu_os_feed **feeds, char 
 static void wm_vuldet_set_port_to_url(char **url, int port);
 static int wm_vuldet_add_allow_os(update_node *update, char *os_tags);
 static int wm_vuldet_read_provider_content(xml_node **node, char *name, char multi_provider, provider_options *options);
-static char wm_vuldet_provider_type(char *pr_name);
+static int wm_vuldet_provider_type(char *pr_name);
 static void wm_vuldet_remove_os_feed(vu_os_feed *feed, char full_r);
 static void wm_vuldet_remove_os_feed_list(vu_os_feed *feeds);
 static void wm_vuldet_init_provider_options(provider_options *options);
@@ -61,7 +61,8 @@ static const char *XML_NAME = "name";
 static const char *XML_OS = "os";
 static const char *XML_UPDATE_INTERVAL = "update_interval";
 static const char *XML_RUN_ON_START = "run_on_start";
-static const char *XML_IGNORE_TIME = "ignore_time";
+static const char *XML_MIN_FULL_SCAN_INTERVAL = "min_full_scan_interval";
+static const char *XML_RETRY_INTERVAL = "retry_interval";
 static const char *XML_URL = "url";
 static const char *XML_PATH = "path";
 static const char *XML_PORT = "port";
@@ -77,6 +78,7 @@ static const char *XML_END = "end";
 static const char *XML_FEED = "feed";
 static const char *XML_UPDATE_UBUNTU_OVAL = "update_ubuntu_oval";
 static const char *XML_UPDATE_REDHAT_OVAL = "update_redhat_oval";
+static const char *XML_IGNORE_TIME = "ignore_time";
 
 int format_os_version(char *OS, char **os_name, char **os_ver) {
     char OS_cpy[OS_SIZE_1024] = {'\0'};
@@ -108,7 +110,7 @@ int format_os_version(char *OS, char **os_name, char **os_ver) {
     } else if (elements == 1) {
         snprintf(*os_name, size, "%s", distr);
     } else {
-        free(*os_name);
+        os_free(*os_name);
         return OS_INVALID;
     }
 
@@ -118,7 +120,7 @@ int format_os_version(char *OS, char **os_name, char **os_ver) {
         *ver_end = '\0';
     }
     if (size = strlen(ver), size >= 20) {
-        free(*os_name);
+        os_free(*os_name);
         return OS_INVALID;
     }
     os_strdup(ver, *os_ver);
@@ -159,12 +161,18 @@ int wm_vuldet_set_feed_version(char *feed, char *version, update_node **upd_list
             os_strdup(vu_feed_tag[FEED_FOCAL], upd->version);
             upd->dist_tag_ref = FEED_FOCAL;
             upd->dist_ext = vu_feed_ext[FEED_FOCAL];
+        } else if (!strcmp(version, "22") || strcasestr(version, vu_feed_tag[FEED_JAMMY])) {
+            os_index = CVE_JAMMY;
+            os_strdup(vu_feed_tag[FEED_JAMMY], upd->version);
+            upd->dist_tag_ref = FEED_JAMMY;
+            upd->dist_ext = vu_feed_ext[FEED_JAMMY];
         } else {
             merror("Invalid Ubuntu version '%s'", version);
             retval = OS_INVALID;
             goto end;
         }
         upd->dist_ref = FEED_UBUNTU;
+
     } else if (strcasestr(feed, vu_feed_tag[FEED_DEBIAN]) && version) {
         if (!strcmp(version, "11") || strcasestr(version, vu_feed_tag[FEED_BULLSEYE])) {
             os_index = CVE_BULLSEYE;
@@ -176,11 +184,10 @@ int wm_vuldet_set_feed_version(char *feed, char *version, update_node **upd_list
             os_strdup(vu_feed_tag[FEED_BUSTER], upd->version);
             upd->dist_tag_ref = FEED_BUSTER;
             upd->dist_ext = vu_feed_ext[FEED_BUSTER];
-        } else if (!strcmp(version, "9") || strcasestr(version, vu_feed_tag[FEED_STRETCH])) {
-            os_index = CVE_STRETCH;
-            os_strdup(vu_feed_tag[FEED_STRETCH], upd->version);
-            upd->dist_tag_ref = FEED_STRETCH;
-            upd->dist_ext = vu_feed_ext[FEED_STRETCH];
+        } else if (!strcmp(version, "9") || strcasestr(version, "STRETCH")) {
+            mwarn("Debian Stretch is no longer supported.");
+            retval = OS_DEPRECATED;
+            goto end;
         } else if (!strcmp(version, "8") || strcasestr(version, "JESSIE")) {
             mwarn("Debian Jessie is no longer supported.");
             retval = OS_DEPRECATED;
@@ -210,8 +217,14 @@ int wm_vuldet_set_feed_version(char *feed, char *version, update_node **upd_list
             retval = OS_INVALID;
             goto end;
         }
+        // RHEL9
+        if (!strcmp(version, "9")) {
+            os_index = CVE_REDHAT9;
+            upd->dist_tag_ref = FEED_RHEL9;
+            os_strdup(version, upd->version);
+            upd->dist_ext = vu_feed_ext[FEED_RHEL9];
         // RHEL8
-        if (!strcmp(version, "8")) {
+        } else if (!strcmp(version, "8")) {
             os_index = CVE_REDHAT8;
             upd->dist_tag_ref = FEED_RHEL8;
             os_strdup(version, upd->version);
@@ -240,18 +253,100 @@ int wm_vuldet_set_feed_version(char *feed, char *version, update_node **upd_list
             goto end;
         }
         upd->dist_ref = FEED_REDHAT;
+
+    } else if (strcasestr(feed, vu_feed_tag[FEED_ALAS])) {
+        if (!version) {
+            retval = OS_INVALID;
+            goto end;
+        }
+        // Amazon Linux 1
+        else if (!strcmp(version, "1") || strcasestr(vu_feed_tag[FEED_ALAS1], version)) {
+            os_index = CVE_ALAS1;
+            upd->dist_tag_ref = FEED_ALAS1;
+            os_strdup(vu_feed_tag[FEED_ALAS1], upd->version);
+            upd->dist_ext = vu_feed_ext[FEED_ALAS1];
+        // Amazon Linux 2
+        } else if (!strcmp(version, "2") || strcasestr(vu_feed_tag[FEED_ALAS2], version)) {
+            os_index = CVE_ALAS2;
+            upd->dist_tag_ref = FEED_ALAS2;
+            os_strdup(vu_feed_tag[FEED_ALAS2], upd->version);
+            upd->dist_ext = vu_feed_ext[FEED_ALAS2];
+        // Amazon Linux 2022
+        } else if (!strcmp(version, "2022") || strcasestr(vu_feed_tag[FEED_ALAS2022], version)) {
+            os_index = CVE_ALAS2022;
+            upd->dist_tag_ref = FEED_ALAS2022;
+            os_strdup(vu_feed_tag[FEED_ALAS2022], upd->version);
+            upd->dist_ext = vu_feed_ext[FEED_ALAS2022];
+        } else {
+            merror("Invalid Amazon Linux version '%s'", version);
+            retval = OS_INVALID;
+            goto end;
+        }
+        upd->dist_ref = FEED_ALAS;
+        upd->json_format = 1;
+
+    } else if (strcasestr(feed, vu_feed_tag[FEED_SUSE])) {
+        if (!version) {
+            retval = OS_INVALID;
+            goto end;
+        }
+        // SLES 15
+        if (!strcmp(version, "15-server") || strcasestr(vu_feed_tag[FEED_SLES15], version)) {
+            os_index = CVE_SLES15;
+            os_strdup(vu_feed_tag[FEED_SLES15], upd->version);
+            upd->dist_tag_ref = FEED_SLES15;
+            upd->dist_ext = vu_feed_ext[FEED_SLES15];
+        // SLED 15
+        } else if (!strcmp(version, "15-desktop") || strcasestr(vu_feed_tag[FEED_SLED15], version)) {
+            os_index = CVE_SLED15;
+            os_strdup(vu_feed_tag[FEED_SLED15], upd->version);
+            upd->dist_tag_ref = FEED_SLED15;
+            upd->dist_ext = vu_feed_ext[FEED_SLED15];
+        // SLES 12
+        } else if (!strcmp(version, "12-server") || strcasestr(vu_feed_tag[FEED_SLES12], version)) {
+            os_index = CVE_SLES12;
+            os_strdup(vu_feed_tag[FEED_SLES12], upd->version);
+            upd->dist_tag_ref = FEED_SLES12;
+            upd->dist_ext = vu_feed_ext[FEED_SLES12];
+        // SLED 12
+        } else if (!strcmp(version, "12-desktop") || strcasestr(vu_feed_tag[FEED_SLED12], version)) {
+            os_index = CVE_SLED12;
+            os_strdup(vu_feed_tag[FEED_SLED12], upd->version);
+            upd->dist_tag_ref = FEED_SLED12;
+            upd->dist_ext = vu_feed_ext[FEED_SLED12];
+        // SLES 11
+        } else if (!strcmp(version, "11-server") || strcasestr(vu_feed_tag[FEED_SLES11], version)) {
+            os_index = CVE_SLES11;
+            os_strdup(vu_feed_tag[FEED_SLES11], upd->version);
+            upd->dist_tag_ref = FEED_SLES11;
+            upd->dist_ext = vu_feed_ext[FEED_SLES11];
+        // SLED 11
+        } else if (!strcmp(version, "11-desktop") || strcasestr(vu_feed_tag[FEED_SLED11], version)) {
+            os_index = CVE_SLED11;
+            os_strdup(vu_feed_tag[FEED_SLED11], upd->version);
+            upd->dist_tag_ref = FEED_SLED11;
+            upd->dist_ext = vu_feed_ext[FEED_SLED11];
+        } else {
+            merror("Invalid SUSE version '%s'", version);
+            retval = OS_INVALID;
+            goto end;
+        }
+        upd->dist_ref = FEED_SUSE;
+
     } else if (strcasestr(feed, vu_feed_tag[FEED_ARCH])) {
         os_index = CVE_ARCH;
         upd->dist_tag_ref = FEED_ARCH;
         upd->dist_ext = vu_feed_ext[FEED_ARCH];
         upd->dist_ref = FEED_ARCH;
         upd->json_format = 1;
+
     } else if (strcasestr(feed, vu_feed_tag[FEED_MSU])) {
         os_index = CVE_MSU;
         upd->dist_tag_ref = FEED_MSU;
         upd->dist_ext = vu_feed_ext[FEED_MSU];
         upd->dist_ref = FEED_MSU;
         upd->json_format = 1;
+
     } else if (strcasestr(feed, vu_feed_tag[FEED_NVD])) {
         os_index = CVE_NVD;
         upd->dist_tag_ref = FEED_NVD;
@@ -267,6 +362,7 @@ int wm_vuldet_set_feed_version(char *feed, char *version, update_node **upd_list
         upd_list[CPE_WDIC]->dist_ext = vu_feed_ext[FEED_CPEW];
         upd_list[CPE_WDIC]->dist_ref = FEED_CPEW;
         upd_list[CPE_WDIC]->json_format = 1;
+
     } else {
         merror("Invalid feed '%s' at module '%s'", feed, WM_VULNDETECTOR_CONTEXT.name);
         retval = OS_INVALID;
@@ -277,8 +373,7 @@ int wm_vuldet_set_feed_version(char *feed, char *version, update_node **upd_list
 
     if (upd_list[os_index]) {
         mdebug1("Duplicate OVAL configuration for '%s%s%s'", upd->dist, upd->version ? " " : "", upd->version ? upd->version : "");
-        wm_vuldet_free_update_node(upd_list[os_index]);
-        free(upd_list[os_index]);
+        wm_vuldet_release_update_node(upd_list, os_index);
     }
 
     upd_list[os_index] = upd;
@@ -369,9 +464,10 @@ int Read_Vuln(const OS_XML *xml, xml_node **nodes, void *d1, char d2) {
     vuldet->flags.patch_scan = 1;
     vuldet->flags.permissive_patch_scan = 0;
     vuldet->flags.enabled = 1;
-    vuldet->ignore_time = VU_DEF_IGNORE_TIME;
-    vuldet->detection_interval = WM_VULNDETECTOR_DEFAULT_INTERVAL;
-    vuldet->agents_software = NULL;
+    vuldet->min_full_scan_interval = VU_DEF_MIN_FULL_SCAN_INTERVAL;
+    vuldet->retry_interval = VU_DEF_RETRY_INTERVAL;
+    vuldet->scan_interval = WM_VULNDETECTOR_DEFAULT_INTERVAL;
+    vuldet->scan_agents = NULL;
     cur_wmodule->context = &WM_VULNDETECTOR_CONTEXT;
     cur_wmodule->tag = strdup(cur_wmodule->context->name);
     cur_wmodule->data = vuldet;
@@ -405,7 +501,7 @@ int Read_Vuln(const OS_XML *xml, xml_node **nodes, void *d1, char d2) {
                 return OS_INVALID;
             }
         } else if (!strcmp(nodes[i]->element, XML_INTERVAL)) {
-            if (wm_vuldet_get_interval(nodes[i]->content, &vuldet->detection_interval)) {
+            if (wm_vuldet_get_interval(nodes[i]->content, &vuldet->scan_interval)) {
                 merror("Invalid interval at module '%s'", WM_VULNDETECTOR_CONTEXT.name);
                 return OS_INVALID;
             }
@@ -427,9 +523,16 @@ int Read_Vuln(const OS_XML *xml, xml_node **nodes, void *d1, char d2) {
                 merror("Invalid content for tag '%s' at module '%s'", XML_RUN_ON_START, WM_VULNDETECTOR_CONTEXT.name);
                 return OS_INVALID;
             }
-        } else if (!strcmp(nodes[i]->element, XML_IGNORE_TIME)) {
-            if (wm_vuldet_get_interval(nodes[i]->content, &vuldet->ignore_time)) {
-                merror("Invalid ignore_time at module '%s'", WM_VULNDETECTOR_CONTEXT.name);
+        } else if (!strcmp(nodes[i]->element, XML_IGNORE_TIME)){
+            mwarn("The <%s> tag at module '%s' is deprecated for version newer than 4.3.", nodes[i]->element, WM_VULNDETECTOR_CONTEXT.name);
+        } else if (!strcmp(nodes[i]->element, XML_MIN_FULL_SCAN_INTERVAL)) {
+            if (wm_vuldet_get_interval(nodes[i]->content, &vuldet->min_full_scan_interval)) {
+                merror("Invalid min_full_scan_interval at module '%s'", WM_VULNDETECTOR_CONTEXT.name);
+                return OS_INVALID;
+            }
+        } else if (!strcmp(nodes[i]->element, XML_RETRY_INTERVAL)) {
+            if (wm_vuldet_get_interval(nodes[i]->content, &vuldet->retry_interval)) {
+                merror("Invalid retry_interval at module '%s'", WM_VULNDETECTOR_CONTEXT.name);
                 return OS_INVALID;
             }
         } else {
@@ -449,7 +552,7 @@ void wm_vuldet_enable_rhel_json_feed(update_node **updates) {
     int8_t rhel_enabled = 0;
 
     // Search for any enabled rhel feed
-    for (int i = 0; i <= CVE_JREDHAT; i++) {
+    for (int i = 0; i < CVE_JREDHAT; ++i) {
         if (updates[i] && updates[i]->dist_ref == FEED_REDHAT) {
             rhel_enabled = i;
             break;
@@ -468,10 +571,12 @@ void wm_vuldet_enable_rhel_json_feed(update_node **updates) {
         if (updates[rhel_enabled]->path || updates[rhel_enabled]->url) {
             mwarn(VU_OFFLINE_CONFLICT, updates[rhel_enabled]->dist);
         }
-        // As soon as a valid RedHat O.S. is detected, enable the RedHat JSON feed
+        // As soon as a valid RedHat O.S. is detected, enable the RedHat JSON feed and set the update interval time
         int retval;
         if (retval = wm_vuldet_set_feed_version("jredhat", NULL, updates), retval == OS_INVALID) {
             mwarn("Unable to load the RedHat JSON feed at module '%s'", WM_VULNDETECTOR_CONTEXT.name);
+        } else {
+            updates[CVE_JREDHAT]->interval = updates[rhel_enabled]->interval;
         }
     }
 }
@@ -482,7 +587,7 @@ int wm_vuldet_read_provider(const OS_XML *xml, xml_node *node, update_node **upd
     char *pr_name = NULL;
     vu_os_feed *os_list = NULL;
     int result;
-    char multi_provider;
+    int multi_provider;
     provider_options p_options = { .multi_path = 0 };
     int retval = OS_INVALID;
 
@@ -521,7 +626,7 @@ int wm_vuldet_read_provider(const OS_XML *xml, xml_node *node, update_node **upd
     }
 
     /**
-     *  single_provider = Ubuntu, Debian and RedHat.
+     *  single_provider = Ubuntu, Debian, Amazon and RedHat.
      *  Those which use the <os> tag.
      **/
     if (!multi_provider) {
@@ -854,15 +959,18 @@ int wm_vuldet_add_allow_os(update_node *update, char *os_tags) {
         }
         mdebug1("'%s' successfully added to the monitored OS list.", os_tags);
         update->allowed_os_name[size + 1] = NULL;
+        update->allowed_os_ver[size + 1] = NULL;
         os_tags = found;
     }
     os_realloc(update->allowed_os_name, (size + 2)*sizeof(char *), update->allowed_os_name);
+    os_realloc(update->allowed_os_ver, (size + 2)*sizeof(char *), update->allowed_os_ver);
     if (format_os_version(os_tags, &update->allowed_os_name[size], &update->allowed_os_ver[size])) {
         merror("Invalid OS entered in %s: %s", WM_VULNDETECTOR_CONTEXT.name, os_tags);
         return OS_INVALID;
     }
     mdebug1("'%s' successfully added to the monitored OS list.", os_tags);
     update->allowed_os_name[size + 1] = NULL;
+    update->allowed_os_ver[size + 1] = NULL;
 
     return 0;
 }
@@ -956,9 +1064,11 @@ int wm_vuldet_read_provider_content(xml_node **node, char *name, char multi_prov
     return 0;
 }
 
-char wm_vuldet_provider_type(char *pr_name) {
+int wm_vuldet_provider_type(char *pr_name) {
     if (strcasestr(pr_name, vu_feed_tag[FEED_CANONICAL]) ||
         strcasestr(pr_name, vu_feed_tag[FEED_DEBIAN]) ||
+        strcasestr(pr_name, vu_feed_tag[FEED_ALAS]) ||
+        strcasestr(pr_name, vu_feed_tag[FEED_SUSE]) ||
         strcasestr(pr_name, vu_feed_tag[FEED_REDHAT])) {
         return 0;
     } else if (strcasestr(pr_name, vu_feed_tag[FEED_NVD]) ||

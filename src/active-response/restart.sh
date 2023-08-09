@@ -1,6 +1,6 @@
 #!/bin/sh
 # Restarts Wazuh.
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 
 
 PARAM_TYPE=$1
@@ -41,16 +41,6 @@ if [ "$TYPE" = "manager" ]; then
     fi
 fi
 
-if command -v systemctl > /dev/null 2>&1 && systemctl > /dev/null 2>&1; then
-    touch ${PWD}/var/run/.restart
-    systemctl restart wazuh-$TYPE
-    rm -f ${PWD}/var/run/.restart
-elif command -v service > /dev/null 2>&1; then
-    touch ${PWD}/var/run/.restart
-    service wazuh-$TYPE restart
-    rm -f ${PWD}/var/run/.restart
-else
-    ${PWD}/bin/wazuh-control restart
-fi
+${PWD}/bin/wazuh-control restart
 
 exit $?;

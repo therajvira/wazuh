@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -18,6 +18,8 @@ void __wrap_w_sleep_until(const time_t new_time);
 void __wrap_w_time_delay(unsigned long int msec);
 
 char* __wrap_w_get_timestamp(time_t time);
+
+double __wrap_time_diff(__attribute__((unused)) const struct timespec * a, __attribute__((unused)) const struct timespec * b);
 
 extern time_t current_time;
 

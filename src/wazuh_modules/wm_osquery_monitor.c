@@ -1,6 +1,6 @@
 /*
  * Wazuh Integration with Osquery
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * April 5, 2018.
  *
  * This program is free software; you can redistribute it
@@ -37,22 +37,34 @@
 #define mdebug1(msg, ...) _mtdebug1(WM_OSQUERYMONITOR_LOGTAG, __FILE__, __LINE__, __func__, msg, ##__VA_ARGS__)
 #define mdebug2(msg, ...) _mtdebug2(WM_OSQUERYMONITOR_LOGTAG, __FILE__, __LINE__, __func__, msg, ##__VA_ARGS__)
 
+#ifdef WAZUH_UNIT_TESTING
+// Remove static qualifier when unit testing
+#define STATIC
+#else
+#define STATIC static
+#endif
+
+#ifdef WIN32
+static DWORD WINAPI wm_osquery_monitor_main(void *arg);
+#else
 static void *wm_osquery_monitor_main(wm_osquery_monitor_t *osquery_monitor);
+#endif
 static void wm_osquery_monitor_destroy(wm_osquery_monitor_t *osquery_monitor);
 static int wm_osquery_check_logfile(const char * path, FILE * fp);
 static int wm_osquery_packs(wm_osquery_monitor_t *osquery);
-static char * wm_osquery_already_running(char * text);
+STATIC char * wm_osquery_already_running(char * text);
 cJSON *wm_osquery_dump(const wm_osquery_monitor_t *osquery_monitor);
 
 static volatile int active = 1;
 
 const wm_context WM_OSQUERYMONITOR_CONTEXT = {
-    "osquery",
-    (wm_routine)wm_osquery_monitor_main,
-    (wm_routine)(void *)wm_osquery_monitor_destroy,
-    (cJSON * (*)(const void *))wm_osquery_dump,
-    NULL,
-    NULL
+    .name = "osquery",
+    .start = (wm_routine)wm_osquery_monitor_main,
+    .destroy = (void(*)(void *))wm_osquery_monitor_destroy,
+    .dump = (cJSON * (*)(const void *))wm_osquery_dump,
+    .sync = NULL,
+    .stop = NULL,
+    .query = NULL,
 };
 
 void *Read_Log(wm_osquery_monitor_t * osquery)
@@ -338,7 +350,7 @@ void *Execute_Osquery(wm_osquery_monitor_t *osquery)
                 } else if (strstr(text, "[Ref #1629]")) {
                     mwarn("osqueryd initialize failed: Could not initialize database.");
                 } else if (end = wm_osquery_already_running(text), end) {
-                    free(strpid);
+                    os_free(strpid);
                     strpid = end;
 
                     // Don't report the first time
@@ -401,25 +413,30 @@ void *Execute_Osquery(wm_osquery_monitor_t *osquery)
         }
     }
 
-    free(strpid);
+    os_free(strpid);
     return NULL;
 }
 
 char * wm_osquery_already_running(char * text) {
-    const char * PATTERNS[] = { "osqueryd (", ") is already running" };
+    const char * PATTERNS[] = { "osqueryd (", ") is already running" , "Pidfile::Error::Busy" };
     char * begin;
     char * end;
 
     // Find "osqueryd (xxxx) is already running"
+    if (text != NULL) {
+        if (begin = strstr(text, PATTERNS[0]), begin && (end = strstr(begin += strlen(PATTERNS[0]), PATTERNS[1]), end)) {
+            *end = '\0';
+            os_strdup(begin, text);
+            *end = *PATTERNS[1];
 
-    if (begin = strstr(text, PATTERNS[0]), begin && (end = strstr(begin += strlen(PATTERNS[0]), PATTERNS[1]), end)) {
-        *end = '\0';
-        os_strdup(begin, text);
-        *end = *PATTERNS[1];
-        return text;
-    } else {
-        return NULL;
+            // Find "Pidfile::Error::Busy"
+        } else if (strstr(text, PATTERNS[2]) != NULL) {
+            os_strdup("unknown", text);
+        } else {
+            text = NULL;
+        }
     }
+    return text;
 }
 
 int wm_osquery_decorators(wm_osquery_monitor_t * osquery)
@@ -587,14 +604,22 @@ int wm_osquery_packs(wm_osquery_monitor_t *osquery)
     return retval;
 }
 
-void *wm_osquery_monitor_main(wm_osquery_monitor_t *osquery)
-{
+#ifdef WIN32
+DWORD WINAPI wm_osquery_monitor_main(void *arg) {
+    wm_osquery_monitor_t *osquery = (wm_osquery_monitor_t *)arg;
+#else
+void *wm_osquery_monitor_main(wm_osquery_monitor_t *osquery) {
+#endif
     pthread_t tlauncher = 0;
     pthread_t treader = 0;
 
     if (osquery->disable) {
         minfo("Module disabled. Exiting...");
+#ifdef WIN32
+        return 0;
+#else
         return NULL;
+#endif
     }
 
     minfo("Module started.");
@@ -613,19 +638,31 @@ void *wm_osquery_monitor_main(wm_osquery_monitor_t *osquery)
 
     if( pthread_create(&treader, NULL, (void *)&Read_Log, osquery) != 0){
         merror("Error while creating Read_Log thread.");
+#ifdef WIN32
+        return 0;
+#else
         return NULL;
+#endif
     }
 
     if (osquery->run_daemon) {
         // Handle configuration
 
         if (wm_osquery_packs(osquery) < 0 || wm_osquery_decorators(osquery) < 0) {
+#ifdef WIN32
+            return 0;
+#else
             return NULL;
+#endif
         }
 
         if( pthread_create(&tlauncher, NULL, (void *)&Execute_Osquery, osquery) != 0){
             merror("Error while creating Execute_Osquery thread.");
+#ifdef WIN32
+            return 0;
+#else
             return NULL;
+#endif
         }
         pthread_join(tlauncher, NULL);
     } else {
@@ -635,12 +672,14 @@ void *wm_osquery_monitor_main(wm_osquery_monitor_t *osquery)
     pthread_join(treader, NULL);
 
     minfo("Closing module.");
+#ifdef WIN32
+    return 0;
+#else
     return NULL;
+#endif
 }
 
-
-void wm_osquery_monitor_destroy(wm_osquery_monitor_t *osquery_monitor)
-{
+void wm_osquery_monitor_destroy(wm_osquery_monitor_t *osquery_monitor) {
     int i;
 
     if (osquery_monitor)
@@ -652,12 +691,13 @@ void wm_osquery_monitor_destroy(wm_osquery_monitor_t *osquery_monitor)
         for (i = 0; osquery_monitor->packs[i]; ++i) {
             free(osquery_monitor->packs[i]->name);
             free(osquery_monitor->packs[i]->path);
+            free(osquery_monitor->packs[i]);
         }
 
+        free(osquery_monitor->packs);
         free(osquery_monitor);
     }
 }
-
 
 // Get read data
 cJSON *wm_osquery_dump(const wm_osquery_monitor_t *osquery_monitor) {

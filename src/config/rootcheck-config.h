@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -12,7 +12,7 @@
 #define CROOTCHECK_H
 
 #include <stdio.h>
-#include "os_regex/os_regex.h"
+#include "../os_regex/os_regex.h"
 
 #define RK_CONF_UNPARSED -2
 #define RK_CONF_UNDEFINED -1

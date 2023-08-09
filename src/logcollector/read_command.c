@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -55,6 +55,11 @@ void *read_command(logreader *lf, int *rc, int drop_it) {
         }
 #endif
         if (str[0] == '\0') {
+            continue;
+        }
+
+        /* Check ignore and restrict log regex, if configured. */
+        if (check_ignore_and_restrict(lf->regex_ignore, lf->regex_restrict, str)) {
             continue;
         }
 

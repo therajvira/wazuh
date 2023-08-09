@@ -1,6 +1,6 @@
 /*
  * SQL Schema SCA tests
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * March 21, 2019.
  * This program is a free software, you can redistribute it
  * and/or modify it under the terms of GPLv2.
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS sys_hwinfo (
 CREATE TABLE IF NOT EXISTS sys_programs (
     scan_id INTEGER,
     scan_time TEXT,
-    format TEXT NOT NULL CHECK (format IN ('deb', 'rpm', 'win', 'pkg')),
+    format TEXT NOT NULL CHECK (format IN ('deb', 'rpm', 'win', 'pkg', 'apk')),
     name TEXT,
     priority TEXT,
     section TEXT,
@@ -201,7 +201,7 @@ INSERT INTO sys_programs VALUES (1554688024, '2019/03/21 14:18:35', 'deb', 'libn
                                  null, 0);
 
 INSERT INTO sys_processes VALUES (1794805470, '2019/03/21 13:25:06', 8012, 'python3', 'S', 1, 850, 111,
-                                  '/var/ossec/framework/python/bin/python3', '/var/ossec/framework/scripts/wazuh-clusterd.py',
+                                  '/var/ossec/framework/python/bin/python3', '/var/ossec/framework/scripts/wazuh_clusterd.py',
                                   'ossec', 'ossec', 'ossec', 'ossec', 'ossec', 'ossec', 'ossec', 20, 0, 30264, 121056,
                                   5621, 1211, 15073, 8011, 8011, 1, 8012, 0, 0);
 INSERT INTO sys_processes VALUES (1794805470, '2019/03/21 13:25:06', 1, 'systemd', 'S', 0, 146, 744, '/sbin/init', null,

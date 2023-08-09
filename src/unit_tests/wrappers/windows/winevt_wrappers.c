@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -58,4 +58,8 @@ EVT_HANDLE wrap_EvtSubscribe(EVT_HANDLE             Session,
     check_expected_ptr(Callback);
     check_expected(Flags);
     return mock_type(EVT_HANDLE);
+}
+
+BOOL wrap_EvtClose(__UNUSED_PARAM(EVT_HANDLE object)) {
+    return mock_type(BOOL);
 }

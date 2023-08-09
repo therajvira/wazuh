@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -13,17 +13,17 @@
 #include <cmocka.h>
 #include <stdio.h>
 
-#include "../../syscheckd/syscheck.h"
+#include "../syscheckd/include/syscheck.h"
 #include "../wrappers/common.h"
 #include "../wrappers/wazuh/shared/debug_op_wrappers.h"
 #include "../../headers/shared.h"
 
-syscheck_config syscheck;
+syscheck_config config;
 
 static int setup_syscheck_dir_links(void **state) {
 
-    syscheck.directories = OSList_Create();
-    if (syscheck.directories == NULL) {
+    config.directories = OSList_Create();
+    if (config.directories == NULL) {
         return (1);
     }
 
@@ -39,13 +39,13 @@ static int teardown_syscheck_dir_links(void **state) {
     expect_function_call_any(__wrap_pthread_mutex_lock);
     expect_function_call_any(__wrap_pthread_mutex_unlock);
 
-    if (syscheck.directories) {
-        OSList_foreach(node_it, syscheck.directories) {
+    if (config.directories) {
+        OSList_foreach(node_it, config.directories) {
             free_directory(node_it->data);
             node_it->data = NULL;
         }
-        OSList_Destroy(syscheck.directories);
-        syscheck.directories = NULL;
+        OSList_Destroy(config.directories);
+        config.directories = NULL;
     }
 
     return 0;
@@ -74,7 +74,7 @@ void test_OSList_GetNext_null_return(void **state) {
 
 void test_OSList_GetNext_node_return(void **state) {
 
-    OSList *list = syscheck.directories;
+    OSList *list = config.directories;
     OSListNode *node;
     OSListNode *node_returned;
 
@@ -100,7 +100,7 @@ void test_OSList_GetNext_node_return(void **state) {
 
 void test_OSList_GetDataFromIndex_null_return(void **state) {
 
-    OSList *list = syscheck.directories;
+    OSList *list = config.directories;
     int data_index = 0;
     void* data_return;
 
@@ -119,7 +119,7 @@ void test_OSList_GetDataFromIndex_null_return(void **state) {
 
 void test_OSList_GetDataFromIndex_data_return(void **state) {
 
-    OSList *list = syscheck.directories;
+    OSList *list = config.directories;
     int data_index = 0;
     void* data_return;
     char* data = malloc(sizeof(char)*5);
@@ -141,14 +141,13 @@ void test_OSList_GetDataFromIndex_data_return(void **state) {
 
     assert_ptr_equal(data_return, list->first_node->data);
 
-    list->free_data_function = NULL;
-
     OSList_CleanNodes(list);
+    list->free_data_function = NULL;
 }
 
 void test_OSList_InsertData_insert_at_first_position(void **state) {
 
-    OSList *list = syscheck.directories;
+    OSList *list = config.directories;
     OSListNode *node = NULL;
     void *data = NULL;
     int return_code;
@@ -176,7 +175,7 @@ void test_OSList_InsertData_insert_at_first_position(void **state) {
 
 void test_OSList_InsertData_insert_at_last_position(void **state) {
 
-    OSList *list = syscheck.directories;
+    OSList *list = config.directories;
     OSListNode *node = NULL;
     char *data = malloc(sizeof(char)*5);
     int return_code;
@@ -207,7 +206,7 @@ void test_OSList_InsertData_insert_at_last_position(void **state) {
 
 void test_OSList_InsertData_insert_at_first_position_before_node(void **state) {
 
-    OSList *list = syscheck.directories;
+    OSList *list = config.directories;
     OSListNode *node;
     char *data = malloc(sizeof(char)*5);
     int return_code;
@@ -239,7 +238,7 @@ void test_OSList_InsertData_insert_at_first_position_before_node(void **state) {
 
 void test_OSList_InsertData_insert_at_n_position_before_node(void **state) {
 
-    OSList *list = syscheck.directories;
+    OSList *list = config.directories;
     OSListNode *node;
     char *data = malloc(sizeof(char)*5);
     int return_code;

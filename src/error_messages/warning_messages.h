@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021
+ * Copyright (C) 2015
  * January 17
  *
  * This program is free software; you can redistribute it
@@ -10,6 +10,9 @@
 
 #ifndef WARN_MESSAGES_H
 #define WARN_MESSAGES_H
+
+/* Active Response */
+#define AR_SERVER_AGENT "(1306): Invalid agent ID. Use location=server to run AR on the manager."
 
 /* File integrity monitoring warning messages*/
 #define FIM_WARN_ACCESS                         "(6900): Accessing  '%s': [(%d) - (%s)]"
@@ -36,10 +39,11 @@
 #define FIM_WARN_FILE_REALTIME                  "(6921): Unable to configure real-time option for file: '%s'"
 #define FIM_PATH_NOT_OPEN                       "(6922): Cannot open '%s': %s"
 
-#define FIM_AUDIT_NORUNNING                     "(6924): Who-data engine cannot start because Auditd is not running."
-#define FIM_INVALID_OPTION_SKIP                 "(6925): Invalid option '%s' for attribute '%s'. The paths '%s' will not be monitored."
-#define FIM_WARN_WHODATA_ADD_RULE               "(6926): Unable to add audit rule for '%s'"
-#define FIM_DB_FULL_ALERT                       "(6927): Sending DB 100%% full alert."
+#define FIM_AUDIT_NORUNNING                     "(6923): Who-data engine cannot start because Auditd is not running."
+#define FIM_INVALID_OPTION_SKIP                 "(6924): Invalid option '%s' for attribute '%s'. The paths '%s' will not be monitored."
+#define FIM_WARN_WHODATA_ADD_RULE               "(6925): Unable to add audit rule for '%s'"
+#define FIM_DB_FULL_ALERT_FILE                  "(6926): File database is 100%% full."
+#define FIM_DB_FULL_ALERT_REG                   "(6927): Registry database is 100%% full."
 #define FIM_WARN_WHODATA_GETID                  "(6928): Couldn't get event ID from Audit message. Line: '%s'."
 #define FIM_WARN_WHODATA_EVENT_TOOLONG          "(6929): Caching Audit message: event too long. Event with ID: '%s' will be discarded."
 #define FIM_WARN_MAX_DIR_REACH                  "(6930): Maximum number of directories to be monitored in the same tag reached (%d) Excess are discarded: '%s'"
@@ -61,6 +65,12 @@
 #define FIM_AUDIT_DISABLED                      "(6946): Audit is disabled."
 #define FIM_WARN_FORMAT_PATH                    "(6947): Error formatting path: '%s'"
 #define FIM_DATABASE_NODES_COUNT_FAIL           "(6948): Unable to get the number of entries in database."
+#define FIM_CJSON_ERROR_CREATE_ITEM             "(6949): Cannot create a cJSON item"
+#define FIM_REGISTRY_ACC_SID                    "(6950): Error in LookupAccountSid getting %s. (%ld): %s"
+#define FIM_WHODATA_ERROR_CHECKING_POL          "(6951): Unable to check the necessary policies for whodata: %s (%lu)."
+#define FIM_WHODATA_POLICY_CHANGE_CHECKER       "(6952): Audit policy change detected. Switching directories to realtime."
+#define FIM_WHODATA_POLICY_CHANGE_CHANNEL       "(6953): Event 4719 received due to changes in audit policy. Switching directories to realtime."
+#define FIM_EMPTY_CHANGED_ATTRIBUTES            "(6954): Entry '%s' does not have any modified fields. No event will be generated."
 
 /* Monitord warning messages */
 #define ROTATE_LOG_LONG_PATH                    "(7500): The path of the rotated log is too long."
@@ -79,13 +89,38 @@
 
 
 /* Ruleset reading warnings */
-#define ANALYSISD_INV_VALUE_RULE                "(7600): Invalid value '%s' for attribute '%s' in rule %d"
+#define ANALYSISD_INV_VALUE_RULE                "(7600): Invalid value '%s' for attribute '%s' in rule %d."
 #define ANALYSISD_INV_VALUE_DEFAULT             "(7601): Invalid value for attribute '%s' in '%s' option " \
-                                                "(decoder `%s`). Default value will be used"
+                                                        "(decoder `%s`). Default value will be used."
 #define ANALYSISD_INV_OPT_VALUE_DEFAULT         "(7602): Invalid value '%s' in '%s' option " \
-                                                "(decoder `%s`). Default value will be used"
+                                                        "(decoder `%s`). Default value will be used."
 #define ANALYSISD_DEC_DEPRECATED_OPT_VALUE      "(7603): Deprecated value '%s' in '%s' option " \
-                                                "(decoder `%s`). Default value will be used"
+                                                        "(decoder `%s`). Default value will be used."
+#define ANALYSISD_IGNORE_RULE                   "(7604): Rule '%d' will be ignored."
+#define ANALYSISD_INV_OVERWRITE                 "(7605): It is not possible to overwrite '%s' value " \
+                                                        "in rule '%d'. The original value is retained."
+#define ANALYSISD_INV_SIG_ID                    "(7607): Invalid '%s'. Signature ID must be an integer. " \
+                                                        "Rule '%d' will be ignored."
+#define ANALYSISD_LEVEL_NOT_FOUND               "(7608): Level ID '%d' was not found. Invalid 'if_level'. " \
+                                                        "Rule '%d' will be ignored."
+#define ANALYSISD_INV_IF_LEVEL                  "(7609): Invalid 'if_level' value: '%s'. Rule '%d' will be ignored."
+#define ANALYSISD_GROUP_NOT_FOUND               "(7610): Group '%s' was not found. Invalid 'if_group'. " \
+                                                        "Rule '%d' will be ignored."
+#define ANALYSISD_CATEGORY_NOT_FOUND            "(7611): Category was not found. Invalid 'category'. " \
+                                                        "Rule '%d' will be ignored."
+#define ANALYSISD_DUPLICATED_SIG_ID             "(7612): Rule ID '%d' is duplicated. Only the first occurrence will be "\
+                                                        "considered."
+#define ANALYSISD_OVERWRITE_MISSING_RULE        "(7613): Rule ID '%d' does not exist but 'overwrite' is set to 'yes'. "\
+                                                        "Still, the rule will be loaded."
+#define ANALYSISD_NULL_RULE                     "(7614): Rule pointer is NULL. Skipping."
+#define ANALYSISD_INV_IF_MATCHED_SID            "(7615): Invalid 'if_matched_sid' value: '%s'. Rule '%d' will be ignored."
+#define ANALYSISD_LIST_NOT_LOADED               "(7616): List '%s' could not be loaded. Rule '%d' will be ignored."
+#define ANALYSISD_SIG_ID_NOT_FOUND              "(7617): Signature ID '%d' was not found and will be ignored "\
+                                                        "in the 'if_sid' option of rule '%d'."
+#define ANALYSISD_INVALID_IF_SID                "(7618): Invalid 'if_sid' value: '%s'. Rule '%d' will be ignored."
+#define ANALYSISD_EMPTY_SID                     "(7619): Empty 'if_sid' value. Rule '%d' will be ignored."
+#define ANALYSISD_SIG_ID_NOT_FOUND_MID          "(7620): Signature ID '%d' was not found. Invalid 'if_matched_sid'."\
+                                                         "Rule '%d' will be ignored."
 
 /* Logcollector */
 #define LOGCOLLECTOR_INV_VALUE_DEFAULT          "(8000): Invalid value '%s' for attribute '%s' in '%s' option. " \
@@ -94,14 +129,21 @@
                                                 " Will be ignored."
 #define LOGCOLLECTOR_MULTILINE_AGE_TIMEOUT      "(8002): 'age' cannot be less than 'timeout' in multiline_regex option."\
                                                 " 'age' will be ignored."
+#define LOGCOLLECTOR_INV_VALUE_IGNORE           "(8003): Invalid value '%s' for attribute '%s' in '%s' option. " \
+                                                "Attribute will be ignored."
+#define LOGCOLLECTOR_OPTION_IGNORED             "(8004): log_format '%s' does not support '%s' option." \
+                                                " Option will be ignored."
+#define LOGCOLLECTOR_INV_MACOS                  "(8005): Invalid location value '%s' when using 'macos' as " \
+                                                "'log_format'. Default value will be used."
+#define LOGCOLLECTOR_MISSING_LOCATION_MACOS     "(8006): Missing 'location' element when using 'macos' as " \
+                                                "'log_format'. Default value will be used."
+#define LOGCOLLECTOR_DEFAULT_REGEX_TYPE         "(8007): Invalid type in '%s' regex '%s', setting by default PCRE2 regex."
 
 /* Remoted */
 #define REMOTED_NET_PROTOCOL_ERROR              "(9000): Error getting protocol. Default value (%s) will be used."
 #define REMOTED_INV_VALUE_IGNORE                "(9001): Ignored invalid value '%s' for '%s'."
 #define REMOTED_NET_PROTOCOL_ONLY_SECURE        "(9002): Only secure connection supports TCP and UDP at the same time."\
                                                 " Default value (%s) will be used."
-#define REMOTED_INET6_SECURE_CONNNECTION        "(9003): Secure connection does not support IPv6. "\
-                                                "IPv4 will be used instead."
 #define REMOTED_INV_VALUE_DEFAULT               "(9004): Invalid value '%s' in '%s' option. " \
                                                 "Default value will be used."
 #endif /* WARN_MESSAGES_H */

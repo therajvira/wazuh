@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -18,5 +18,7 @@ int __wrap_OS_DeleteSocket(__attribute__((unused)) keystore * keys, int sock);
 int __wrap_OS_IsAllowedIP(__attribute__((unused)) keystore *keys, const char *srcip);
 
 int __wrap_OS_IsAllowedID(__attribute__((unused)) keystore *keys, const char *id);
+
+int __wrap_OS_AddSocket(__attribute__((unused)) keystore *keys, unsigned int i, int sock);
 
 #endif

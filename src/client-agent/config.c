@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -31,7 +31,6 @@ int ClientConf(const char *cfgfile)
     int modules = 0;
 
     agt->server = NULL;
-    agt->lip = NULL;
     agt->rip_id = 0;
     agt->execdq = 0;
     agt->cfgadq = -1;
@@ -41,6 +40,11 @@ int ClientConf(const char *cfgfile)
     agt->events_persec = 500;
     agt->flags.auto_restart = 1;
     agt->crypto_method = W_METH_AES;
+    agt->notify_time = 0;
+    agt->max_time_reconnect_try = 0;
+    agt->force_reconnect_interval = 0;
+    agt->main_ip_update_interval = 0;
+    agt->server_count = 0;
 
     os_calloc(1, sizeof(wlabel_t), agt->labels);
     modules |= CCLIENT;
@@ -61,6 +65,7 @@ int ClientConf(const char *cfgfile)
     if(agt->flags.remote_conf = getDefine_Int("agent", "remote_conf", 0, 1), agt->flags.remote_conf) {
         remote_conf = agt->flags.remote_conf;
         ReadConfig(CLABELS | CBUFFER | CAGENT_CONFIG, AGENTCONFIG, &agt->labels, agt);
+        ReadConfig(CCLIENT | CAGENT_CONFIG, AGENTCONFIG, agt, NULL);
     }
 #endif
 
@@ -88,7 +93,6 @@ cJSON *getClientConfig(void) {
     cJSON_AddNumberToObject(client,"time-reconnect",agt->max_time_reconnect_try);
     cJSON_AddNumberToObject(client,"force_reconnect_interval",agt->force_reconnect_interval);
     cJSON_AddNumberToObject(client,"ip_update_interval",agt->main_ip_update_interval);
-    if (agt->lip) cJSON_AddStringToObject(client,"local_ip",agt->lip);
     if (agt->flags.auto_restart) cJSON_AddStringToObject(client,"auto_restart","yes"); else cJSON_AddStringToObject(client,"auto_restart","no");
     if (agt->flags.remote_conf) cJSON_AddStringToObject(client,"remote_conf","yes"); else cJSON_AddStringToObject(client,"remote_conf","no");
     if (agt->crypto_method == W_METH_BLOWFISH)
@@ -99,10 +103,14 @@ cJSON *getClientConfig(void) {
         cJSON *servers = cJSON_CreateArray();
         for (i=0;agt->server[i].rip;i++) {
             cJSON *server = cJSON_CreateObject();
-            cJSON_AddStringToObject(server,"address",agt->server[i].rip);
-            cJSON_AddNumberToObject(server,"port",agt->server[i].port);
-            cJSON_AddNumberToObject(server,"max_retries", agt->server[i].max_retries);
-            cJSON_AddNumberToObject(server,"retry_interval", agt->server[i].retry_interval);
+            cJSON_AddStringToObject(server, "address", agt->server[i].rip);
+            cJSON_AddNumberToObject(server, "port", agt->server[i].port);
+
+            if (agt->server[i].network_interface)
+                cJSON_AddNumberToObject(server, "interface_index", agt->server[i].network_interface);
+
+            cJSON_AddNumberToObject(server, "max_retries", agt->server[i].max_retries);
+            cJSON_AddNumberToObject(server, "retry_interval", agt->server[i].retry_interval);
 
             if (agt->server[i].protocol == IPPROTO_UDP) cJSON_AddStringToObject(server,"protocol","udp"); else cJSON_AddStringToObject(server,"protocol","tcp");
             cJSON_AddItemToArray(servers,server);
@@ -117,6 +125,9 @@ cJSON *getClientConfig(void) {
 
         if (agt->enrollment_cfg->target_cfg->manager_name)
             cJSON_AddStringToObject(enrollment_cfg, "manager_address", agt->enrollment_cfg->target_cfg->manager_name);
+
+        if (agt->enrollment_cfg->target_cfg->network_interface)
+            cJSON_AddNumberToObject(enrollment_cfg, "interface_index", agt->enrollment_cfg->target_cfg->network_interface);
 
         cJSON_AddNumberToObject(enrollment_cfg, "port", agt->enrollment_cfg->target_cfg->port);
 

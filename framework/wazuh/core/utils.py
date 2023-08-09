@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
 
@@ -14,15 +14,13 @@ import sys
 import tempfile
 import typing
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from itertools import groupby, chain
-from os import chmod, chown, path, listdir, mkdir, curdir, rename, utime, remove, walk
-from os.path import join, basename, relpath
+from os import chmod, chown, listdir, mkdir, curdir, rename, utime, remove, walk, path
 from pyexpat import ExpatError
-from shutil import Error, copyfile, move
-from subprocess import CalledProcessError, check_output
-from xml.etree.ElementTree import ElementTree
+from shutil import Error, move, copy2
+from signal import signal, alarm, SIGALRM, SIGKILL
 
 from cachetools import cached, TTLCache
 from defusedxml.ElementTree import fromstring
@@ -31,7 +29,6 @@ from defusedxml.minidom import parseString
 import wazuh.core.results as results
 from api import configuration
 from wazuh.core import common
-from wazuh.core.common import pidfiles_path
 from wazuh.core.database import Connection
 from wazuh.core.exception import WazuhError, WazuhInternalError
 from wazuh.core.wdb import WazuhDBConnection
@@ -44,7 +41,7 @@ if sys.version_info[0] == 3:
 t_cache = TTLCache(maxsize=4500, ttl=60)
 
 
-def check_pid(daemon):
+def clean_pid_files(daemon: str):
     """Check the existence of '.pid' files for a specified daemon.
 
     Parameters
@@ -52,17 +49,19 @@ def check_pid(daemon):
     daemon : str
         Daemon's name.
     """
-    regex = rf'{daemon}-(.*).pid'
-    for pidfile in os.listdir(pidfiles_path):
-        if match := re.match(regex, pidfile):
+    regex = rf'{daemon}[\w_]*-(\d+).pid'
+    for pid_file in os.listdir(common.OSSEC_PIDFILE_PATH):
+        if match := re.match(regex, pid_file):
             try:
-                os.kill(int(match.group(1)), 0)
+                os.kill(int(match.group(1)), SIGKILL)
+                print(f"{daemon}: Orphan child process {match.group(1)} was terminated.")
             except OSError:
-                print(f'{daemon}: Process {match.group(1)} not used by Wazuh, removing...')
-                os.remove(f'{pidfiles_path}/{pidfile}')
+                print(f'{daemon}: Non existent process {match.group(1)}, removing from {common.WAZUH_PATH}/var/run...')
+            finally:
+                os.remove(path.join(common.OSSEC_PIDFILE_PATH, pid_file))
 
 
-def find_nth(string, substring, n):
+def find_nth(string: str, substring: str, n: int) -> int:
     """Return the index corresponding to the n'th occurrence of a substring within a string.
 
     Parameters
@@ -87,14 +86,21 @@ def find_nth(string, substring, n):
     return start
 
 
-def previous_month(n=1):
-    """Returns the first date of the previous n month.
+def previous_month(n: int = 1) -> datetime.date:
+    """Return the first date of the previous n month.
 
-    :param n: Number of months.
-    :return: First date of the previous n month.
+    Parameters
+    ----------
+    n : int
+        Number of months.
+
+    Returns
+    -------
+    datetime.date
+        First date of the previous n month.
     """
 
-    date = datetime.utcnow().replace(day=1)  # First day of current month
+    date = get_utc_now().replace(day=1)  # First day of current month
 
     for i in range(0, int(n)):
         date = (date - timedelta(days=1)).replace(day=1)  # (first_day - 1) = previous month
@@ -102,73 +108,48 @@ def previous_month(n=1):
     return date.replace(hour=00, minute=00, second=00, microsecond=00)
 
 
-def execute(command):
-    """Executes a command. It is used to execute Wazuh commands.
-
-    :param command: Command as list.
-    :return: If output.error !=0 returns output.data, otherwise launches a WazuhException with output.error as error code and output.message as description.
-    """
-    try:
-        output = check_output(command)
-    except CalledProcessError as error:
-        output = error.output
-    except Exception as e:
-        raise WazuhInternalError(1002, "{0}: {1}".format(command, e))  # Error executing command
-
-    try:
-        output_json = json.loads(output)
-    except Exception as e:
-        raise WazuhInternalError(1003, command)  # Command output not in json
-
-    keys = output_json.keys()  # error and (data or message)
-    if 'error' not in keys or ('data' not in keys and 'message' not in keys):
-        raise WazuhInternalError(1004, command)  # Malformed command output
-
-    if output_json['error'] != 0:
-        raise WazuhInternalError(output_json['error'], output_json['message'], True)
-    else:
-        return output_json['data']
-
-
-def process_array(array, search_text=None, complementary_search=False, search_in_fields=None, select=None, sort_by=None,
-                  sort_ascending=True, allowed_sort_fields=None, offset=0, limit=None, q='', required_fields=None,
-                  allowed_select_fields=None, filters=None):
-    """ Process a Wazuh framework data array
+def process_array(array: list, search_text: str = None, complementary_search: bool = False,
+                  search_in_fields: list = None, select: list = None, sort_by: list = None,
+                  sort_ascending: bool = True, allowed_sort_fields: list = None, offset: int = 0, limit: int = None,
+                  q: str = '', required_fields: list = None, allowed_select_fields: list = None,
+                  filters: dict = None) -> dict:
+    """Process a Wazuh framework data array.
 
     Parameters
     ----------
     array : list
-        Array to process
+        Array to process.
     search_text : str
-        Text to search and search type
+        Text to search and search type.
     complementary_search : bool
-        Perform a complementary search
+        Perform a complementary search.
     search_in_fields : list
-        Fields to search in
+        Fields to search in.
     select : list
-        Select fields to return
+        Select fields to return.
     sort_by : list
-        Fields to sort_by. Will sort the array directly if [''] is received
+        Fields to sort_by. Will sort the array directly if [''] is received.
     sort_ascending : bool
-        Sort order ascending or descending
+        Sort order ascending or descending.
     allowed_sort_fields : list
-        Allowed fields to sort_by
+        Allowed fields to sort_by.
     offset : int
         First element to return.
     limit : int
-        Maximum number of elements to return
+        Maximum number of elements to return.
     q : str
-        Query to filter by
+        Query to filter by.
     required_fields : list
-        Required fields that must appear in the response
+        Required fields that must appear in the response.
     allowed_select_fields: list
-        List of fields allowed to select from
+        List of fields allowed to select from.
     filters : dict
         Defines required field filters. Format: {"field1":"value1", "field2":["value2","value3"]}
 
     Returns
     -------
-    Dictionary: {'items': Processed array, 'totalItems': Number of items, before applying offset and limit)}
+    dict
+        Dictionary: {'items': Processed array, 'totalItems': Number of items, before applying offset and limit)}
     """
     if not array:
         return {'items': list(), 'totalItems': 0}
@@ -188,10 +169,6 @@ def process_array(array, search_text=None, complementary_search=False, search_in
         array = sort_array(array, sort_by=sort_by, sort_ascending=sort_ascending,
                            allowed_sort_fields=allowed_sort_fields)
 
-    if select:
-        array = select_array(array, select=select, required_fields=required_fields,
-                             allowed_select_fields=allowed_select_fields)
-
     if search_text:
         array = search_array(array, search_text=search_text, complementary_search=complementary_search,
                              search_in_fields=search_in_fields)
@@ -199,20 +176,44 @@ def process_array(array, search_text=None, complementary_search=False, search_in
     if q:
         array = filter_array_by_query(q, array)
 
+    if select:
+        array = select_array(array, select=select, required_fields=required_fields,
+                             allowed_select_fields=allowed_select_fields)
+
     return {'items': cut_array(array, offset=offset, limit=limit), 'totalItems': len(array)}
 
 
-def cut_array(array, offset=0, limit=common.database_limit):
-    """Returns a part of the array: from offset to offset + limit.
+def cut_array(array: list, offset: int = 0, limit: int = common.DATABASE_LIMIT) -> list:
+    """Return a part of the array: from offset to offset + limit.
 
-    :param array: Array to cut.
-    :param offset: First element to return.
-    :param limit: Maximum number of elements to return. 0 means no cut array.
-    :return: cut array.
+    Parameters
+    ----------
+    array : list
+        Array to cut.
+    offset : int
+        First element to return.
+    limit : int
+        Maximum number of elements to return. 0 means no cut array.
+
+    Raises
+    ------
+    WazuhError(1400)
+        Invalid offset.
+    WazuhError(1401)
+        Invalid limit.
+    WazuhError(1405)
+        Limit exceeding the maximum permitted.
+    WazuhError(1406)
+        Invalid limit (0).
+
+    Returns
+    -------
+    list
+        Cut array.
     """
 
     if limit is not None:
-        if limit > common.maximum_database_limit:
+        if limit > common.MAXIMUM_DATABASE_LIMIT:
             raise WazuhError(1405, extra_message=str(limit))
         elif limit == 0:
             raise WazuhError(1406)
@@ -231,14 +232,32 @@ def cut_array(array, offset=0, limit=common.database_limit):
         return array[offset:offset + limit]
 
 
-def sort_array(array, sort_by=None, sort_ascending=True, allowed_sort_fields=None):
-    """Sorts an array.
+def sort_array(array: list, sort_by: list = None, sort_ascending: bool = True,
+               allowed_sort_fields: list = None) -> list:
+    """Sort an array.
 
-    :param array: Array to sort.
-    :param sort_by: Array of fields.
-    :param sort_ascending: Ascending if true and descending if false
-    :param allowed_sort_fields: Check sort_by with allowed_sort_fields (array).
-    :return: sorted array.
+    Parameters
+    ----------
+    array : list
+        Array to sort.
+    sort_by : list
+        Array of fields.
+    sort_ascending : bool
+        Ascending if true and descending if false.
+    allowed_sort_fields : list
+        Check sort_by with allowed_sort_fields (array).
+
+    Raises
+    ------
+    WazuhError(1403)
+        Not a valid sort field.
+    WazuhError(1402)
+        Invalid sort_ascending field.
+
+    Returns
+    -------
+    list
+        Sorted array.
     """
 
     def check_sort_fields(allowed_sort_fields, sort_by):
@@ -299,12 +318,20 @@ def sort_array(array, sort_by=None, sort_ascending=True, allowed_sort_fields=Non
             return array
 
 
-def get_values(o, fields=None):
-    """Converts the values of an object to an array of strings.
+def get_values(o: object, fields: list = None) -> list:
+    """Convert the values of an object to an array of strings.
 
-    :param o: Object.
-    :param fields: fields to get values of (only for dictionaries)
-    :return: Array of strings.
+    Parameters
+    ----------
+    o : object
+        Object.
+    fields : list
+        Fields to get values of (only for dictionaries).
+
+    Returns
+    -------
+    list
+        Array of strings.
     """
     strings = []
 
@@ -326,14 +353,25 @@ def get_values(o, fields=None):
     return strings
 
 
-def search_array(array, search_text=None, complementary_search=False, search_in_fields=None):
-    """Looks for the string 'text' in the elements of the array.
+def search_array(array, search_text: str = None, complementary_search: bool = False,
+                 search_in_fields: list = None) -> list:
+    """Look for the string 'text' in the elements of the array.
 
-    :param array: Array.
-    :param search_text: Text to search.
-    :param complementary_search: The text must not be in the array.
-    :param search_in_fields: Fields of the array to search in
-    :return: Filtered array.
+    Parameters
+    ----------
+    array : list
+        Array.
+    search_text : str
+        Text to search.
+    complementary_search : bool
+        The text must not be in the array.
+    search_in_fields : list
+        Fields of the array to search in.
+
+    Returns
+    -------
+    list
+        Filtered array.
     """
 
     found = []
@@ -359,7 +397,8 @@ def search_array(array, search_text=None, complementary_search=False, search_in_
     return found
 
 
-def select_array(array, select=None, required_fields=None, allowed_select_fields=None):
+def select_array(array: list, select: list = None, required_fields: set = None,
+                 allowed_select_fields: list = None) -> list:
     """Get only those values from each element in the array that matches the select values.
 
     Parameters
@@ -372,7 +411,7 @@ def select_array(array, select=None, required_fields=None, allowed_select_fields
     required_fields : set, optional
         Set of fields that must be in the response. These depends on the framework function.
     allowed_select_fields: list
-        List of fields allowed to select from
+        List of fields allowed to select from.
 
     Raises
     ------
@@ -461,11 +500,18 @@ _filemode_table = (
 )
 
 
-def filemode(mode):
+def filemode(mode: int) -> str:
     """Convert a file's mode to a string of the form '-rwxrwxrwx'.
 
-    :param mode: Mode.
-    :return: String.
+    Parameters
+    ----------
+    mode : int
+        Mode.
+
+    Returns
+    -------
+    str
+        String.
     """
     perm = []
     for table in _filemode_table:
@@ -478,12 +524,20 @@ def filemode(mode):
     return "".join(perm)
 
 
-def tail(filename, n=20):
+def tail(filename: str, n: int = 20) -> list:
     """Returns last 'n' lines of the file 'filename'.
 
-    :param filename: Path to the file.
-    :param n: number of lines.
-    :return: Array of last lines.
+    Parameters
+    ----------
+    filename : str
+        Path to the file.
+    n : int
+        Number of lines.
+
+    Returns
+    -------
+    list
+        Array of last lines.
     """
     with open(filename, 'rb') as f:
         total_lines_wanted = n
@@ -513,42 +567,52 @@ def tail(filename, n=20):
     return all_read_text.splitlines()[-total_lines_wanted:]
 
 
-def chmod_r(filepath, mode):
+def chmod_r(file_path: str, mode: int):
     """Recursive chmod.
 
-    :param filepath: Path to the file.
-    :param mode: file mode in octal.
+    Parameters
+    ----------
+    file_path: str
+        Path to the file.
+    mode: int
+        File mode in octal.
     """
-    if path.isdir(filepath):
-        for item in listdir(filepath):
-            itempath = path.join(filepath, item)
-            if path.isfile(itempath):
-                chmod(itempath, mode)
-            elif path.isdir(itempath):
-                chmod_r(itempath, mode)
 
-    chmod(filepath, mode)
+    if path.isdir(file_path):
+        for item in listdir(file_path):
+            item_path = path.join(file_path, item)
+            if path.isfile(item_path):
+                chmod(item_path, mode)
+            elif path.isdir(item_path):
+                chmod_r(item_path, mode)
+
+    chmod(file_path, mode)
 
 
-def chown_r(filepath, uid, gid):
-    """Recursive chmod.
+def chown_r(file_path: str, uid: int, gid: int):
+    """Recursive chown.
 
-    :param filepath: Path to the file.
-    :param uid: user ID.
-    :param gid: group ID.
+    Parameters
+    ----------
+    file_path: str
+        Path to the file.
+    uid: int
+        User ID.
+    gid: int
+        Group ID.
     """
-    chown(filepath, uid, gid)
+    chown(file_path, uid, gid)
 
-    if path.isdir(filepath):
-        for item in listdir(filepath):
-            itempath = path.join(filepath, item)
-            if path.isfile(itempath):
-                chown(itempath, uid, gid)
-            elif path.isdir(itempath):
-                chown_r(itempath, uid, gid)
+    if path.isdir(file_path):
+        for item in listdir(file_path):
+            item_path = path.join(file_path, item)
+            if path.isfile(item_path):
+                chown(item_path, uid, gid)
+            elif path.isdir(item_path):
+                chown_r(item_path, uid, gid)
 
 
-def delete_wazuh_file(full_path):
+def delete_wazuh_file(full_path: str) -> bool:
     """Delete a Wazuh file.
 
     Parameters
@@ -556,12 +620,19 @@ def delete_wazuh_file(full_path):
     full_path : str
         Full path of the file to delete.
 
+    Raises
+    ------
+    WazuhError(1906)
+        File does not exist.
+    WazuhError(1907)
+        File could not be deleted.
+
     Returns
     -------
     bool
         True if success.
     """
-    if not full_path.startswith(common.wazuh_path) or '..' in full_path:
+    if not full_path.startswith(common.WAZUH_PATH) or '..' in full_path:
         raise WazuhError(1907)
 
     if path.exists(full_path):
@@ -574,8 +645,8 @@ def delete_wazuh_file(full_path):
         raise WazuhError(1906)
 
 
-def safe_move(source, target, ownership=(common.wazuh_uid(), common.wazuh_gid()), time=None, permissions=None):
-    """Moves a file even between filesystems
+def safe_move(source: str, target: str, ownership: tuple = None, time: tuple = None, permissions: int = None):
+    """Move a file even between filesystems
 
     This function is useful to move files even when target directory is in a different filesystem from the source.
     Write permissions are required on target directory.
@@ -590,16 +661,17 @@ def safe_move(source, target, ownership=(common.wazuh_uid(), common.wazuh_gid())
         Tuple in the form (user, group) to be set up after the file is moved.
     time : tuple
         Tuple in the form (addition_timestamp, modified_timestamp).
-    permissions : str
-        String mask in octal notation. I.e.: '0o640'.
+    permissions : int
+        String mask in octal notation. I.e.: 0o640.
     """
     # Create temp file. Move between
     tmp_path, tmp_filename = path.split(target)
     tmp_target = path.join(tmp_path, f".{tmp_filename}.tmp")
-    move(source, tmp_target, copy_function=copyfile)
+    move(source, tmp_target, copy_function=full_copy)
 
     # Set up metadata
-    chown(tmp_target, *ownership)
+    if ownership is not None:
+        chown(tmp_target, *ownership)
     if permissions is not None:
         chmod(tmp_target, permissions)
     if time is not None:
@@ -613,14 +685,18 @@ def safe_move(source, target, ownership=(common.wazuh_uid(), common.wazuh_gid())
         # For example, when target is a mounted file in a Docker container
         # However, this is not an atomic operation and could lead to race conditions
         # if the file is read/written simultaneously with other processes
-        move(tmp_target, target, copy_function=copyfile)
+        move(tmp_target, target, copy_function=full_copy)
 
 
-def mkdir_with_mode(name, mode=0o770):
-    """Creates a directory with specified permissions.
+def mkdir_with_mode(name: str, mode: int = 0o770):
+    """Create a directory with specified permissions.
 
-    :param directory: directory path
-    :param mode: permissions to set to the directory
+    Parameters
+    ----------
+    name : str
+        Directory path.
+    mode : int
+        Permissions to set to the directory.
     """
     head, tail = path.split(name)
     if not tail:
@@ -650,6 +726,14 @@ def md5(fname):
         for chunk in iter(lambda: f.read(4096), b""):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
+
+
+def blake2b(fname):
+    hash_blake2b = hashlib.blake2b()
+    with open(fname, 'rb') as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_blake2b.update(chunk)
+    return hash_blake2b.hexdigest()
 
 
 def _get_hashing_algorithm(hash_algorithm):
@@ -756,15 +840,15 @@ def plain_dict_to_nested_dict(data, nested=None, non_nested=None, force_fields=[
     return nested_dict
 
 
-def check_remote_commands(data):
-    """Check if remote commands are allowed.
-    If not, it will check if the found command is in the list of exceptions.
+def check_remote_commands(data: str):
+    """Check if remote commands are allowed. If not, it will check if the found command is in the list of exceptions.
 
     Parameters
     ----------
     data : str
         Configuration file
     """
+    blocked_configurations = configuration.api_conf['upload_configuration']
 
     def check_section(command_regex, section, split_section):
         try:
@@ -774,26 +858,82 @@ def check_remote_commands(data):
                 if command_matches and \
                         (line.count('<command>') > 1 or
                          command_matches.group(2) not in
-                         configuration.api_conf['remote_commands'][section]['exceptions']):
+                         blocked_configurations['remote_commands'][section].get('exceptions', [])):
                     raise WazuhError(1124)
         except IndexError:
             pass
 
-    if configuration.api_conf['remote_commands']['localfile']['enabled'] is not None and \
-            not configuration.api_conf['remote_commands']['localfile']['enabled']:
+    if not blocked_configurations['remote_commands']['localfile']['allow']:
         command_section = re.compile(r"<localfile>(.*)</localfile>", flags=re.MULTILINE | re.DOTALL)
         check_section(command_section, section='localfile', split_section='</localfile>')
 
-    if configuration.api_conf['remote_commands']['wodle_command']['enabled'] is not None and not \
-            configuration.api_conf['remote_commands']['wodle_command']['enabled']:
+    if not blocked_configurations['remote_commands']['wodle_command']['allow']:
         command_section = re.compile(r"<wodle name=\"command\">(.*)</wodle>", flags=re.MULTILINE | re.DOTALL)
         check_section(command_section, section='wodle_command', split_section='<wodle name=\"command\">')
+
+
+def check_wazuh_limits_unchanged(new_conf, original_conf):
+    """Check if Wazuh limits remain unchanged.
+
+    Parameters
+    ----------
+    new_conf : str
+        New configuration file.
+    original_conf : str
+        Original configuration file.
+
+    Raises
+    -------
+    WazuhError(1127)
+        Raised if one of the protected limits is modified in the configuration to upload.
+    """
+
+    def xml_to_dict(conf, section_name):
+        """Convert XML to list of dictionaries.
+
+        Parameters
+        ----------
+        conf : str
+            XML configuration file.
+        section_name : str
+            Name of the section to extract from the configuration file.
+
+        Returns
+        -------
+        matched_configurations : list
+            Dictionaries with the configuration.
+        """
+        matched_configurations = []
+
+        for str_conf in re.findall(r'<ossec_config>.*?</ossec_config>', conf, re.MULTILINE | re.DOTALL | re.IGNORECASE):
+            ossec_config_section = fromstring(str_conf)
+            for global_section in ossec_config_section.iter('global'):
+                for limits_section in global_section.iter('limits'):
+                    for section in limits_section.iter(section_name):
+                        section_dict = {section.tag: {}}
+                        for config in section:
+                            section_dict[section.tag].update({config.tag: {'attrib': config.attrib,
+                                                                           'value': config.text.strip()}})
+                        matched_configurations.append(section_dict)
+
+        return matched_configurations
+
+    limits_configuration = configuration.api_conf['upload_configuration']['limits']
+    for disabled_limit in [conf for conf, allowed in limits_configuration.items() if not allowed['allow']]:
+        new_limits = xml_to_dict(new_conf, disabled_limit)
+        original_limits = xml_to_dict(original_conf, disabled_limit)
+
+        if len(new_limits) != len(original_limits) or any(x != y for x, y in zip(new_limits, original_limits)):
+            raise WazuhError(1127, extra_message=f"global > limits > {disabled_limit}")
 
 
 def load_wazuh_xml(xml_path, data=None):
     if not data:
         with open(xml_path) as f:
-            data = f.read()
+            try:
+                data = f.read()
+            except Exception as e:
+                raise WazuhError(1113, extra_message=str(e))
 
     # -- characters are not allowed in XML comments
     xml_comment = re.compile(r"(<!--(.*?)-->)", flags=re.MULTILINE | re.DOTALL)
@@ -831,7 +971,7 @@ def load_wazuh_xml(xml_path, data=None):
                '\n'.join([f'<!ENTITY {name} "{value}">' for name, value in custom_entities.items()]) + \
                '\n]>\n'
 
-    return fromstring(entities + '<root_tag>' + data + '</root_tag>', forbid_entities=False)
+    return fromstring(f"{entities}<root_tag>{data}</root_tag>", forbid_entities=False)
 
 
 class WazuhVersion:
@@ -905,11 +1045,23 @@ class WazuhVersion:
         return (not (self > new_version) or self == new_version)
 
 
-def get_timeframe_in_seconds(timeframe):
-    """Gets number of seconds from a timeframe.
+def get_timeframe_in_seconds(timeframe: str) -> int:
+    """Get number of seconds from a timeframe.
 
-    :param timeframe: Time in seconds | "[n_days]d" | "[n_hours]h" | "[n_minutes]m" | "[n_seconds]s".
-    :return: Time in seconds.
+    Parameters
+    ----------
+    timeframe : str
+        Time in seconds | "[n_days]d" | "[n_hours]h" | "[n_minutes]m" | "[n_seconds]s".
+
+    Raises
+    ------
+    WazuhError(1411)
+        The timeframe value is not valid.
+
+    Returns
+    -------
+    int
+        Time in seconds.
     """
     if not timeframe.isdigit():
         if 'h' not in timeframe and 'd' not in timeframe and 'm' not in timeframe and 's' not in timeframe:
@@ -927,15 +1079,22 @@ def get_timeframe_in_seconds(timeframe):
 
 
 def filter_array_by_query(q: str, input_array: typing.List) -> typing.List:
-    """
-    Filters a list of dictionaries by 'q' parameter, like as a SQL query
+    """Filter a list of dictionaries by 'q' parameter, like as a SQL query.
 
-    :param input_array: list to be filtered
-    :param q: query for filtering a list
+    Parameters
+    ----------
+    input_array : list
+        List to be filtered.
+    q : str
+        query for filtering a list.
 
-    :return: list with processed query
+    Returns
+    -------
+    list
+        List with processed query.
     """
-    def check_date_format(element):
+
+    def check_date_format(element: str) -> typing.Union[str, datetime]:
         """Check if a given field is a date. If so, transform the date to the standard API format (ISO 8601).
         If not, return the field.
 
@@ -946,28 +1105,36 @@ def filter_array_by_query(q: str, input_array: typing.List) -> typing.List:
 
         Returns
         -------
-        In case of a date, return the element after its conversion. Otherwise it return the element.
+        str or datetime
+            In case of a date, return the element after its conversion. Otherwise it return the element.
         """
         date_patterns = ['%Y-%m-%d', '%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S.%fZ']
 
         for pattern in date_patterns:
             try:
-                return datetime.strptime(element, pattern)
+                return get_utc_strptime(element, pattern)
             except ValueError:
                 pass
 
         return element
 
     def check_clause(value1: typing.Union[str, int], op: str, value2: str) -> bool:
-        """
-        Checks an operation between value1 and value2. 'value1' could be an
-        integer, it is necessary cast value2 to integer if this happens
+        """Check an operation between value1 and value2. 'value1' could be an integer, it is necessary cast value2 to
+        integer if this happens
 
-        :param value1: first value of the operation
-        :param op: operation to be done
-        :param value2: second value of the operation
+        Parameters
+        ----------
+        value1 : str or int
+            First value of the operation.
+        op : str
+            Operation to be done.
+        value2 : str
+            Second value of the operation.
 
-        :return: True if operation is satisfied, False otherwise
+        Returns
+        -------
+        bool
+            True if operation is satisfied, False otherwise.
         """
         operators = {'=': operator.eq,
                      '!=': operator.ne,
@@ -991,7 +1158,7 @@ def filter_array_by_query(q: str, input_array: typing.List) -> typing.List:
 
         return False
 
-    def get_match_candidates(iterable, key_list: list, candidates: list):
+    def get_match_candidates(iterable: typing.Union[dict, list], key_list: list, candidates: list) -> bool:
         """Get the match candidates following a list of keys.
 
         Parameters
@@ -1003,9 +1170,15 @@ def filter_array_by_query(q: str, input_array: typing.List) -> typing.List:
         candidates : list
             Empty list that will be filled
 
+        Raises
+        ------
+        WazuhError(1407)
+            Parameter q is not valid.
+
         Returns
         -------
-        True if there is one match at least. False otherwise.
+        bool
+            True if there is one match at least. False otherwise.
         """
         for index, key in enumerate(key_list):
             if isinstance(iterable, list):
@@ -1066,7 +1239,7 @@ def filter_array_by_query(q: str, input_array: typing.List) -> typing.List:
 
 class AbstractDatabaseBackend:
     """
-    This class describes an abstract database backend that executes database queries
+    This class describes an abstract database backend that executes database queries.
     """
 
     def __init__(self):
@@ -1079,43 +1252,24 @@ class AbstractDatabaseBackend:
         raise NotImplementedError
 
 
-class SQLiteBackend(AbstractDatabaseBackend):
-    """
-    This class describes a sqlite database backend that executes database queries
-    """
-
-    def __init__(self, db_path):
-        self.db_path = db_path
-        super().__init__()
-
-    def connect_to_db(self):
-        if not glob.glob(self.db_path):
-            raise WazuhInternalError(1600)
-        return Connection(self.db_path)
-
-    def _get_data(self):
-        return [{k: v for k, v in db_tuple.items() if v is not None} for db_tuple in self.conn]
-
-    def execute(self, query, request, count=False):
-        self.conn.execute(query, request)
-        return self._get_data() if not count else self.conn.fetch()
-
-
 class WazuhDBBackend(AbstractDatabaseBackend):
     """
-    This class describes a wazuh db backend that executes database queries
+    This class describes a wazuh db backend that executes database queries.
     """
 
-    def __init__(self, agent_id=None, query_format='agent', max_size=6144, request_slice=500):
+    def __init__(self, agent_id=None, query_format='agent', request_slice=500):
+        if query_format == 'agent' and not path.exists(path.join(common.WDB_PATH, f"{agent_id}.db")):
+            raise WazuhError(2007, extra_message=f"There is no database for agent {agent_id}. "
+                                                 "Please check if the agent has connected to the manager")
+
         self.agent_id = agent_id
         self.query_format = query_format
-        self.max_size = max_size
         self.request_slice = request_slice
 
         super().__init__()
 
     def connect_to_db(self):
-        return WazuhDBConnection(max_size=self.max_size, request_slice=self.request_slice)
+        return WazuhDBConnection(request_slice=self.request_slice)
 
     def close_connection(self):
         self.conn.close()
@@ -1163,36 +1317,54 @@ class WazuhDBBackend(AbstractDatabaseBackend):
 
 
 class WazuhDBQuery(object):
-    """This class describes a database query for wazuh
-    """
+    """This class describes a database query for wazuh."""
 
-    def __init__(self, offset, limit, table, sort, search, select, query, fields, default_sort_field, count,
-                 get_data, backend, default_sort_order='ASC', filters={}, min_select_fields=set(), date_fields=set(),
-                 extra_fields=set(), distinct=False, rbac_negate=True):
-        """
-        Wazuh DB Query constructor
+    def __init__(self, offset: int, limit: int, table: str, sort: dict, search: dict, select: list, query: str,
+                 fields: dict, default_sort_field: str, count: bool, get_data: bool, backend: str,
+                 default_sort_order: str = 'ASC', filters: dict = {}, min_select_fields: set = set(),
+                 date_fields: set = set(), extra_fields=set(), distinct: bool = False, rbac_negate: bool = True):
+        """Wazuh DB Query constructor.
 
-        :param offset: First item to return.
-        :param limit: Maximum number of items to return.
-        :param sort: Sorts the items. Format: {"fields":["field1","field2"],"order":"asc|desc"}.
-        :param select: Select fields to return. Format: ["field1","field2"].
-        :param filters: Defines field filters required by the user. Format: {"field1":"value1", "field2":["value2","value3"]}
-        :param query: query to filter in database. Format: field operator value.
-        :param search: Looks for items with the specified string. Format: {"fields": ["field1","field2"]}
-        :param table: table to do the query
-        :param fields: all available fields
-        :param default_sort_field: by default, return elements sorted by this field
-        :param db_path: database path
-        :param default_sort_order: by default, return elements sorted in this order
-        :param min_select_fields: fields that must be always be selected because they're necessary to compute other fields
-        :param count: whether to compute totalItems or not
-        :param date_fields: database fields that represent a date
-        :param get_data: whether to return data or not
-        :param backend: Database engine to use. Possible options are 'wdb' and 'sqlite3'.
-        :param distinct: Look for distinct values.
-        :param agent_id: Agent to fetch information about.
-        :param distinct: Look for distinct values
-        :param rbac_negate: Whether to use IN or NOT IN on RBAC resources
+        Parameters
+        ----------
+        offset : int
+            First item to return.
+        limit : int
+            Maximum number of items to return.
+        table : str
+            Table to do the query.
+        sort : dict
+            Sorts the items. Format: {"fields":["field1","field2"],"order":"asc|desc"}.
+        select : list
+            Select fields to return. Format: ["field1","field2"].
+        filters : dict
+            Defines field filters required by the user. Format: {"field1":"value1", "field2":["value2","value3"]}
+        query : str
+            Query to filter in database. Format: field operator value.
+        fields : dict
+            All available fields.
+        search : dict
+            Looks for items with the specified string. Format: {"fields": ["field1","field2"]}
+        default_sort_field : str
+            By default, return elements sorted by this field.
+        default_sort_order : str
+            By default, return elements sorted in this order
+        min_select_fields : set
+            Fields that must be always be selected because they're necessary to compute other fields.
+        date_fields : set
+            Database fields that represent a date.
+        extra_fields : set
+            Extra fields.
+        count : bool
+            Whether to compute totalItems or not.
+        get_data : bool
+            Whether to return data or not.
+        distinct : bool
+            Look for distinct values.
+        rbac_negate : bool
+            Whether to use IN or NOT IN on RBAC resources.
+        backend : str
+            Database engine to use. Possible options are 'wdb' and 'sqlite3'.
         """
         self.offset = offset
         self.limit = limit
@@ -1221,12 +1393,20 @@ class WazuhDBQuery(object):
         #    id   > 5      ),
         #    group=webserver
         self.query_regex = re.compile(
-            r'(\()?' +  # A ( character.
-            r'([\w.]+)' +  # Field name: name of the field to look on DB
-            '([' + ''.join(self.query_operators.keys()) + "]{1,2})" +  # Operator: looks for =, !=, <, > or ~.
-            r"([\[\]\w _\-\.:\\/']+)" +  # Value: A string.
-            r"(\))?" +  # A ) character
-            "([" + ''.join(self.query_separators.keys()) + "])?"  # Separator: looks for ;, , or nothing.
+            # A ( character.
+            r"(\()?" +
+            # Field name: name of the field to look on DB.
+            r"([\w.]+)" +
+            # Operator: looks for '=', '!=', '<', '>' or '~'.
+            rf"([{''.join(self.query_operators.keys())}]{{1,2}})" +
+            # Value: A string.
+            r"((?:(?:\((?:\[[\[\]\w _\-.,:?\\/'\"=@%<>{}]*]|[\[\]\w _\-.:?\\/'\"=@%<>{}]*)\))*"
+            r"(?:\[[\[\]\w _\-.,:?\\/'\"=@%<>{}]*]|[\[\]\w _\-.:?\\/'\"=@%<>{}]+)"
+            r"(?:\((?:\[[\[\]\w _\-.,:?\\/'\"=@%<>{}]*]|[\[\]\w _\-.:?\\/'\"=@%<>{}]*)\))*)+)" +
+            # A ) character.
+            r"(\))?" +
+            # Separator: looks for ';', ',' or nothing.
+            rf"([{''.join(self.query_separators.keys())}])?"
         )
         self.date_regex = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
         self.date_fields = date_fields
@@ -1244,6 +1424,12 @@ class WazuhDBQuery(object):
         isinstance(self.backend, WazuhDBBackend) and self.backend.close_connection()
 
     def _clean_filter(self, query_filter):
+        if isinstance(query_filter['value'], str):
+            try:
+                query_filter['value'] = json.dumps(json.loads(query_filter['value']), separators=(',', ':'))
+            except ValueError:
+                pass
+
         # Replace special characters with wildcards
         for sp_char in self.special_characters:
             if isinstance(query_filter['value'], str) and sp_char in query_filter['value']:
@@ -1256,7 +1442,7 @@ class WazuhDBQuery(object):
 
     def _add_limit_to_query(self):
         if self.limit:
-            if self.limit > common.maximum_database_limit:
+            if self.limit > common.MAXIMUM_DATABASE_LIMIT:
                 raise WazuhError(1405, extra_message=str(self.limit))
             self.query += ' LIMIT :limit OFFSET :offset'
             self.request['offset'] = self.offset
@@ -1312,15 +1498,13 @@ class WazuhDBQuery(object):
         self.select = self._parse_select_filter(self.select)
 
     def _parse_query(self):
-        """
-        A query has the following pattern: field operator value separator field operator value...
+        """A query has the following pattern: field operator value separator field operator value...
+
         An example of query: status=never_connected;name!=pepe
             * Field must be a database field (it must be contained in self.fields variable)
             * operator must be one of = != < >
             * value can be anything
             * Separator can be either ; for 'and' or , for 'or'.
-
-        :return: A list with processed query (self.fields)
         """
         if not self.query_regex.match(self.q):
             raise WazuhError(1407, self.q)
@@ -1347,7 +1531,7 @@ class WazuhDBQuery(object):
                                            'separator': self.query_separators[separator], 'level': level})
 
     def _parse_legacy_filters(self):
-        """Parses legacy filters."""
+        """Parse legacy filters."""
         # some legacy filters can contain multiple values to filter separated by commas. That must split in a list.
         self.legacy_filters.get('older_than', None) == '0s' and self.legacy_filters.pop('older_than')
         legacy_filters_as_list = {
@@ -1449,8 +1633,8 @@ class WazuhDBQuery(object):
             self.request[date_filter['field']] = get_timeframe_in_seconds(date_filter['value'])
             self.query += "{0} IS NOT NULL AND {0} {1}" \
                           " strftime('%s', 'now') - :{2} ".format(self.fields[filter_db_name],
-                                                                   query_operator,
-                                                                   date_filter['field'])
+                                                                  query_operator,
+                                                                  date_filter['field'])
         elif re.match(r'\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}:\d{2}(.\d{1,6})?Z?)?', date_filter['value']):
             self.query += "{0} IS NOT NULL AND {0} {1} strftime('%s', :{2})".format(
                 self.fields[filter_db_name], date_filter['operator'], date_filter['field'])
@@ -1458,8 +1642,14 @@ class WazuhDBQuery(object):
         else:
             raise WazuhError(1412, date_filter['value'])
 
-    def general_run(self):
-        """Builds the query and runs it on the database"""
+    def general_run(self) -> dict:
+        """Build the query and runs it on the database.
+
+        Returns
+        -------
+        dict
+            Dictionary with the formatted data.
+        """
         self._add_select_to_query()
         self._add_filters_to_query()
         self._add_search_to_query()
@@ -1473,9 +1663,20 @@ class WazuhDBQuery(object):
             self._execute_data_query()
             return self._format_data_into_dictionary()
 
-    def oversized_run(self):
+    def oversized_run(self) -> dict:
         """Method used when the size of the query exceeds the maximum available in the communication.
-        Builds the query and runs it on the database"""
+        Builds the query and runs it on the database.
+
+        Returns
+        -------
+        dict
+            Dictionary with the formatted data.
+
+        Raises
+        ------
+        WazuhInternalError(1123)
+            Error communicating with socket. Query too long.
+        """
         self._add_select_to_query()
         original_select = self.select
         rbac_ids = set(self.legacy_filters.pop('rbac_ids', set()))
@@ -1524,26 +1725,35 @@ class WazuhDBQuery(object):
 
         return result
 
-    def run(self):
-        """Generic function that will redirect the information
-        to the function that needs to be used for the specific case"""
+    def run(self) -> dict:
+        """Generic function that will redirect the information to the function that needs to be used for the specific
+        case.
+
+        Returns
+        -------
+        dict
+            Dictionary with the formatted data.
+        """
         if self.legacy_filters is None:
             return self.general_run()
 
         rbac_ids = set(self.legacy_filters.get('rbac_ids', set()))
-        return self.general_run() if len(str(rbac_ids)) < common.MAX_QUERY_FILTERS_RESERVED_SIZE else \
+        return self.general_run() if len(','.join(rbac_ids)) < common.MAX_QUERY_FILTERS_RESERVED_SIZE else \
             self.oversized_run()
 
     def reset(self):
-        """Resets query to its initial value. Useful when doing several requests to the same DB."""
+        """Reset query to its initial value. Useful when doing several requests to the same DB."""
         self.query = self._default_query()
         self.query_filters = []
         self.select -= self.extra_fields
 
     def _default_query(self):
-        """
+        """Get default query.
 
-        :return: The default query
+        Returns
+        -------
+        str
+            The default query.
         """
         return "SELECT {0} FROM " + self.table if not self.distinct else "SELECT DISTINCT {0} FROM " + self.table
 
@@ -1556,7 +1766,7 @@ class WazuhDBQuery(object):
 
 
 class WazuhDBQueryDistinct(WazuhDBQuery):
-    """Retrieves unique values for a given field."""
+    """Retrieve unique values for a given field."""
 
     def _default_query(self):
         return "SELECT DISTINCT {0} FROM " + self.table
@@ -1582,9 +1792,7 @@ class WazuhDBQueryDistinct(WazuhDBQuery):
 
 
 class WazuhDBQueryGroupBy(WazuhDBQuery):
-    """
-    Retrieves unique values for multiple fields using group by
-    """
+    """Retrieve unique values for multiple fields using group by."""
 
     def __init__(self, filter_fields, *args, **kwargs):
         WazuhDBQuery.__init__(self, *args, **kwargs)
@@ -1609,14 +1817,15 @@ class WazuhDBQueryGroupBy(WazuhDBQuery):
 
 
 @common.context_cached('system_rules')
-def expand_rules():
+def expand_rules() -> set:
     """Return all ruleset rule files in the system.
 
     Returns
     -------
     set
+        Rule files.
     """
-    folders = [common.ruleset_rules_path, common.user_rules_path]
+    folders = [common.RULES_PATH, common.USER_RULES_PATH]
     rules = set()
     for folder in folders:
         for _, _, files in walk(folder):
@@ -1627,14 +1836,15 @@ def expand_rules():
 
 
 @common.context_cached('system_decoders')
-def expand_decoders():
+def expand_decoders() -> set:
     """Return all ruleset decoder files in the system.
 
     Returns
     -------
     set
+        Decoder files.
     """
-    folders = [common.ruleset_decoders_path, common.user_decoders_path]
+    folders = [common.DECODERS_PATH, common.USER_DECODERS_PATH]
     decoders = set()
     for folder in folders:
         for _, _, files in walk(folder):
@@ -1645,14 +1855,15 @@ def expand_decoders():
 
 
 @common.context_cached('system_lists')
-def expand_lists():
+def expand_lists() -> set:
     """Return all cdb list files in the system.
 
     Returns
     -------
     set
+        CDB list files.
     """
-    folders = [common.ruleset_lists_path, common.user_lists_path]
+    folders = [common.LISTS_PATH, common.USER_LISTS_PATH]
     lists = set()
     for folder in folders:
         for _, _, files in walk(folder):
@@ -1664,7 +1875,7 @@ def expand_lists():
     return lists
 
 
-def add_dynamic_detail(detail, value, attribs, details):
+def add_dynamic_detail(detail: str, value: str, attribs: dict, details: dict):
     """Add a detail with attributes (i.e. regex with negate or type).
 
     Parameters
@@ -1698,8 +1909,12 @@ def validate_wazuh_xml(content: str, config_file: bool = False):
         File content.
     config_file : bool
         Validate remote commands if True.
-    """
 
+    Raises
+    ------
+    WazuhError(1113)
+        XML syntax error.
+    """
     # -- characters are not allowed in XML comments
     content = replace_in_comments(content, '--', '%wildcard%')
 
@@ -1719,7 +1934,11 @@ def validate_wazuh_xml(content: str, config_file: bool = False):
         final_xml = replace_in_comments(final_xml, '%wildcard%', '--')
 
         # Check if remote commands are allowed if it is a configuration file
-        config_file and check_remote_commands(final_xml)
+        if config_file:
+            check_remote_commands(final_xml)
+            with open(common.OSSEC_CONF, 'r') as f:
+                current_xml = f.read()
+            check_wazuh_limits_unchanged(final_xml, current_xml)
         # Check xml format
         load_wazuh_xml(xml_path='', data=final_xml)
     except ExpatError:
@@ -1730,18 +1949,35 @@ def validate_wazuh_xml(content: str, config_file: bool = False):
         raise WazuhError(1113, str(e))
 
 
-def upload_file(content, path, check_xml_formula_values=True):
-    """
-    Upload files (rules, lists, decoders and ossec.conf)
-    :param content: content of the XML file
-    :param path: Destination of the new XML file
-    :return: Confirmation message
+def upload_file(content: str, file_path: str, check_xml_formula_values: bool = True):
+    """Upload files (rules, lists, decoders and ossec.conf).
+
+    Parameters
+    ----------
+    content: str
+        Content of the XML file.
+    file_path: str
+        Destination of the new XML file.
+    check_xml_formula_values: bool
+        Check formula values in the resulting XML if true.
+
+    Raises
+    ------
+    WazuhInternalError(1005)
+        Error reading file.
+    WazuhInternalError(1016)
+        Error moving file.
+
+    Returns
+    -------
+    WazuhResult
+        Confirmation message.
     """
 
     def escape_formula_values(xml_string):
         """Prepend with a single quote possible formula injections."""
         formula_characters = ('=', '+', '-', '@')
-        et = ElementTree(fromstring(f'<root>{xml_string}</root>'))
+        et = fromstring(f'<root>{xml_string}</root>')
         full_preprend, beginning_preprend = list(), list()
         for node in et.iter():
             if node.tag and node.tag.startswith(formula_characters):
@@ -1759,7 +1995,7 @@ def upload_file(content, path, check_xml_formula_values=True):
         return xml_string
 
     # Path of temporary files for parsing xml input
-    handle, tmp_file_path = tempfile.mkstemp(prefix=f'{common.wazuh_path}/tmp/api_tmp_file_', suffix=".tmp")
+    handle, tmp_file_path = tempfile.mkstemp(prefix='api_tmp_file_', suffix='.tmp', dir=common.OSSEC_TMP_PATH)
     try:
         with open(handle, 'w') as tmp_file:
             final_file = escape_formula_values(content) if check_xml_formula_values else content
@@ -1770,8 +2006,8 @@ def upload_file(content, path, check_xml_formula_values=True):
 
     # Move temporary file to group folder
     try:
-        new_conf_path = join(common.wazuh_path, path)
-        safe_move(tmp_file_path, new_conf_path, permissions=0o660)
+        new_conf_path = path.join(common.WAZUH_PATH, file_path)
+        safe_move(tmp_file_path, new_conf_path, ownership=(common.wazuh_uid(), common.wazuh_gid()), permissions=0o660)
     except Error:
         raise WazuhInternalError(1016)
 
@@ -1796,10 +2032,10 @@ def delete_file_with_backup(backup_file: str, abs_path: str, delete_function: ca
         If there is any `IOError` while doing the backup.
     """
     try:
-        copyfile(abs_path, backup_file)
+        full_copy(abs_path, backup_file)
     except IOError:
         raise WazuhError(1019)
-    delete_function(filename=basename(abs_path))
+    delete_function(filename=path.basename(abs_path))
 
 
 def replace_in_comments(original_content, to_be_replaced, replacement):
@@ -1810,7 +2046,7 @@ def replace_in_comments(original_content, to_be_replaced, replacement):
     return original_content
 
 
-def to_relative_path(full_path: str, prefix: str = common.wazuh_path):
+def to_relative_path(full_path: str, prefix: str = common.WAZUH_PATH) -> str:
     """Return a relative path from the Wazuh base directory.
 
     Parameters
@@ -1818,14 +2054,14 @@ def to_relative_path(full_path: str, prefix: str = common.wazuh_path):
     full_path : str
         Absolute path.
     prefix : str, opt
-        Prefix to strip from the absolute path. Default `common.wazuh_path`
+        Prefix to strip from the absolute path. Default `common.WAZUH_PATH`
 
     Returns
     -------
     str
         Relative path to `full_path` from `prefix`.
     """
-    return relpath(full_path, prefix)
+    return path.relpath(full_path, prefix)
 
 
 def clear_temporary_caches():
@@ -1854,5 +2090,92 @@ def temporary_cache():
                 return f(*args, **kwargs)
 
             return func(*args, **kwargs)
+
         return wrapper
+
     return decorator
+
+
+def full_copy(src: str, dst: str, follow_symlinks: bool = True) -> None:
+    """Copy a file maintaining all metadata if possible.
+
+    Parameters
+    ----------
+    src: str
+        Source absolute path.
+    dst: str
+        Destination absolute path.
+    follow_symlinks: bool
+        Make `copy2` follow symbolic links. False otherwise.
+    """
+    file_stat = os.stat(src)
+    copy2(src, dst, follow_symlinks=follow_symlinks)
+    try:
+        # copy2 does not always copy the correct ownership
+        chown(dst, file_stat.st_uid, file_stat.st_gid)
+    except PermissionError:
+        # Tried to assign 'root' ownership without being root. Default API permissions will be applied
+        pass
+
+
+class Timeout:
+    """Raise TimeoutError after n seconds."""
+
+    def __init__(self, seconds, error_message=''):
+        self.seconds = seconds
+        self.error_message = error_message
+
+    def handle_timeout(self, signum, frame):
+        raise TimeoutError(self.error_message)
+
+    def __enter__(self):
+        signal(SIGALRM, self.handle_timeout)
+        alarm(self.seconds)
+
+    def __exit__(self, type, value, traceback):
+        alarm(0)
+
+
+def get_date_from_timestamp(timestamp: float) -> datetime:
+    """Function to return the date in datetime format and UTC timezone.
+
+    Parameters
+    ----------
+    timestamp: float
+        The timestamp.
+
+    Returns
+    -------
+    date: datetime
+        The default date.
+    """
+    return datetime.utcfromtimestamp(timestamp).replace(tzinfo=timezone.utc)
+
+
+def get_utc_now() -> datetime:
+    """Function to return the current date.
+
+    Returns
+    -------
+    date: datetime
+        The current date.
+    """
+    return datetime.utcnow().replace(tzinfo=timezone.utc)
+
+
+def get_utc_strptime(date: str, datetime_format: str) -> datetime:
+    """Function to transform str to date.
+
+    Parameters
+    ----------
+    date: str
+        String to be transformed.
+    datetime_format: str
+        Datetime pattern.
+
+    Returns
+    -------
+    date: datetime
+        The current date.
+    """
+    return datetime.strptime(date, datetime_format).replace(tzinfo=timezone.utc)

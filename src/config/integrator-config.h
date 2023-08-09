@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2014 Daniel B. Cid
  * All right reserved.
  *
@@ -31,6 +31,7 @@ typedef struct _IntegratorConfig
     char *path;
     char *alert_format;
     char *group;
+    char *options;
     OSMatch *location;
 }IntegratorConfig;
 

@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2014 Daniel B. Cid
  * All rights reserved.
  *
@@ -12,7 +12,7 @@
 #ifndef INTEGRATORD_H
 #define INTEGRATORD_H
 
-#include "config/integrator-config.h"
+#include "../config/integrator-config.h"
 
 /** Prototypes **/
 

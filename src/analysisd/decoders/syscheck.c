@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -100,6 +100,15 @@ static int fim_fetch_attributes_state(cJSON *attr, Eventinfo *lf, char new_state
 
 // Replace the coded fields with the decoded ones in the checksum
 static void fim_adjust_checksum(sk_sum_t *newsum, char **checksum);
+
+/**
+ * @brief Decode a cJSON with Windows permissions and convert to old format string
+ *
+ * @param perm_json cJSON with the permissions
+ *
+ * @returns A string with the old format Windows permissions
+*/
+static char *perm_json_to_old_format(cJSON *perm_json);
 
 // Mutexes
 static pthread_mutex_t control_msg_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -214,6 +223,7 @@ void sdb_init(_sdb *localsdb, OSDecoderInfo *fim_decoder) {
     fim_decoder->fields[FIM_REGISTRY_ARCH] = "arch";
     fim_decoder->fields[FIM_REGISTRY_VALUE_NAME] = "value_name";
     fim_decoder->fields[FIM_REGISTRY_VALUE_TYPE] = "value_type";
+    fim_decoder->fields[FIM_REGISTRY_HASH] = "hash_full_path";
     fim_decoder->fields[FIM_ENTRY_TYPE] = "entry_type";
     fim_decoder->fields[FIM_EVENT_TYPE] = "event_type";
 }
@@ -357,6 +367,10 @@ int fim_db_search(char *f_name, char *c_sum, char *w_sum, Eventinfo *lf, _sdb *s
         goto exit_fail;
     }
     *(check_sum++) = '\0';
+
+    if (strcmp(response, "ok") != 0) {
+        goto exit_fail;
+    }
 
     //extract changes and date_alert fields only available from wazuh_db
     sk_decode_extradata(&oldsum, check_sum);
@@ -1273,6 +1287,8 @@ static int fim_process_alert(_sdb * sdb, Eventinfo *lf, cJSON * event) {
                 os_strdup(object->valuestring, lf->fields[FIM_REGISTRY_ARCH].value);
             } else if (strcmp(object->string, "value_name") == 0) {
                 os_strdup(object->valuestring, lf->fields[FIM_REGISTRY_VALUE_NAME].value);
+            } else if (strcmp(object->string, "index") == 0) {
+                os_strdup(object->valuestring, lf->fields[FIM_REGISTRY_HASH].value);
             }
 
             break;
@@ -1303,6 +1319,19 @@ static int fim_process_alert(_sdb * sdb, Eventinfo *lf, cJSON * event) {
         }
     }
 
+    entry_type = cJSON_GetStringValue(cJSON_GetObjectItem(attributes, "type"));
+    if (entry_type == NULL) {
+        mdebug1("No member 'type' in Syscheck attributes JSON payload");
+        return -1;
+    }
+
+    if ((strcmp("registry_key", entry_type) == 0) || (strcmp("registry_value", entry_type) == 0)) {
+        if (lf->fields[FIM_REGISTRY_HASH].value == NULL) {
+            mdebug1("No member 'index' in Syscheck JSON payload");
+            return -1;
+        }
+    }
+
     if (lf->fields[FIM_EVENT_TYPE].value == NULL) {
         mdebug1("No member 'type' in Syscheck JSON payload");
         return -1;
@@ -1310,12 +1339,6 @@ static int fim_process_alert(_sdb * sdb, Eventinfo *lf, cJSON * event) {
 
     if (lf->fields[FIM_FILE].value == NULL) {
         mdebug1("No member 'path' in Syscheck JSON payload");
-        return -1;
-    }
-
-    entry_type = cJSON_GetStringValue(cJSON_GetObjectItem(attributes, "type"));
-    if (entry_type == NULL) {
-        mdebug1("No member 'type' in Syscheck attributes JSON payload");
         return -1;
     }
 
@@ -1355,7 +1378,11 @@ static int fim_process_alert(_sdb * sdb, Eventinfo *lf, cJSON * event) {
     if (event_type == FIM_ADDED || event_type == FIM_MODIFIED) {
         fim_send_db_save(sdb, lf->agent_id, event);
     } else if (event_type == FIM_DELETED) {
-        fim_send_db_delete(sdb, lf->agent_id, lf->fields[FIM_FILE].value);
+        if (strcmp("file", entry_type) == 0) {
+            fim_send_db_delete(sdb, lf->agent_id, lf->fields[FIM_FILE].value);
+        } else {
+            fim_send_db_delete(sdb, lf->agent_id, lf->fields[FIM_REGISTRY_HASH].value);
+        }
     }
 
     return 0;
@@ -1418,7 +1445,9 @@ void fim_send_db_query(int * sock, const char * query) {
     case WDBC_OK:
         break;
     case WDBC_ERROR:
-        merror("FIM decoder: Bad response from database: %s", arg);
+        if (strcmp(arg, "Agent not found") != 0) {
+            merror("FIM decoder: Bad response from database: %s", arg);
+        }
         // Fallthrough
     default:
         goto end;
@@ -1663,6 +1692,7 @@ int fim_fetch_attributes_state(cJSON *attr, Eventinfo *lf, char new_state) {
     char buf_ptr[26];
 
     assert(lf != NULL);
+    assert(lf->fields != NULL);
 
     cJSON_ArrayForEach(attr_it, attr) {
         if (!attr_it->string) {
@@ -1724,12 +1754,96 @@ int fim_fetch_attributes_state(cJSON *attr, Eventinfo *lf, char new_state) {
             if (dst_data) {
                 os_strdup(attr_it->valuestring, *dst_data);
             }
+        } else if (attr_it->type == cJSON_Object) {
+            if (strcmp(attr_it->string, "perm") == 0) {
+                if (new_state) {
+                    lf->fields[FIM_PERM].value = perm_json_to_old_format(attr_it);
+                } else {
+                    lf->fields[FIM_PERM_BEFORE].value = perm_json_to_old_format(attr_it);
+                }
+            }
         } else {
             mdebug1("Unknown FIM data type.");
         }
     }
 
     return 0;
+}
+
+char *decode_ace_json(const cJSON *const perm_array, const char *const account_name, const char *const ace_type) {
+    cJSON *it;
+    char *output = NULL;
+    char *perms = NULL;
+    int length;
+
+    if (perm_array == NULL) {
+        return NULL;
+    }
+
+    length = snprintf(NULL, 0, "%s (%s): ", account_name, ace_type);
+
+    if (length <= 0) {
+        return NULL; // LCOV_EXCL_LINE
+    }
+
+    os_malloc(length + 1, output);
+
+    snprintf(output, length + 1, "%s (%s): ", account_name, ace_type);
+
+    cJSON_ArrayForEach(it, perm_array) {
+        wm_strcat(&perms, cJSON_GetStringValue(it), '|');
+    }
+
+    if (perms) {
+        str_uppercase(perms);
+        wm_strcat(&output, perms, '\0');
+        free(perms);
+    }
+
+    wm_strcat(&output, ", ", '\0');
+
+    return output;
+}
+
+char *perm_json_to_old_format(cJSON *perm_json) {
+    char *account_name;
+    char *output = NULL;
+    int length;
+    cJSON *json_it;
+
+    assert(perm_json != NULL);
+
+    cJSON_ArrayForEach(json_it, perm_json) {
+        char *ace;
+        account_name = cJSON_GetStringValue(cJSON_GetObjectItem(json_it, "name"));
+        if (account_name == NULL) {
+            account_name = json_it->string;
+        }
+
+        ace = decode_ace_json(cJSON_GetObjectItem(json_it, "allowed"), account_name, "allowed");
+        if (ace) {
+            wm_strcat(&output, ace, '\0');
+            free(ace);
+        }
+
+        ace = decode_ace_json(cJSON_GetObjectItem(json_it, "denied"), account_name, "denied");
+        if (ace) {
+            wm_strcat(&output, ace, '\0');
+            free(ace);
+        }
+    }
+
+    if (output == NULL) {
+        return NULL;
+    }
+
+    length = strlen(output);
+
+    if (length > 2 && output[strlen(output) - 2] == ',') {
+        output[length - 2] = '\0';
+    }
+
+    return output;
 }
 
 void fim_adjust_checksum(sk_sum_t *newsum, char **checksum) {

@@ -1,9 +1,6 @@
 ---
 test_name: GET /rootcheck/001
 
-marks:
-  - base_tests
-
 stages:
 
   # GET /rootcheck/001
@@ -441,6 +438,19 @@ stages:
             key: "log"
             reverse: True
 
+  # GET /rootcheck/012
+  - name: Try to get 012 agent's rootcheck data (never connected)
+    request:
+      verify: False
+      url: "{protocol:s}://{host:s}:{port:d}/rootcheck/012"
+      method: GET
+      headers:
+        Authorization: "Bearer {test_login_token}"
+    response:
+      status_code: 400
+      json:
+        error: 2007
+
 ---
 test_name: GET /rootcheck/001/last_scan
 
@@ -471,8 +481,8 @@ test_name: PUT /rootcheck
 
 stages:
 
-  # PUT /rootcheck?agents_list=001
-  - name: Run rootcheck scan in agent 001
+  # PUT /rootcheck?agents_list=002
+  - name: Run rootcheck scan in agent 002
     request:
       verify: False
       method: PUT
@@ -480,14 +490,14 @@ stages:
       headers:
         Authorization: "Bearer {test_login_token}"
       params:
-        agents_list: "001"
+        agents_list: "002"
     response:
       status_code: 200
       json:
         error: 0
         data:
           affected_items:
-            - "001"
+            - "002"
           failed_items: []
           total_affected_items: 1
           total_failed_items: 0
@@ -503,7 +513,7 @@ stages:
     response:
       status_code: 200
       json:
-        error: 2
+        error: 0
         data:
           affected_items:
             - "000"
@@ -515,18 +525,60 @@ stages:
             - "006"
             - "007"
             - "008"
+          failed_items: []
+          total_affected_items: 9
+          total_failed_items: 0
+
+  # PUT /rootcheck
+  - name: Try to run a rootcheck scan for non active agents
+    request:
+      verify: False
+      method: PUT
+      url: "{protocol:s}://{host:s}:{port:d}/rootcheck"
+      headers:
+        Authorization: "Bearer {test_login_token}"
+      params:
+        agents_list: '010,012'
+    response:
+      status_code: 200
+      json:
+        error: 1
+        data:
+          affected_items: []
           failed_items:
             - error:
                 code: 1707
               id:
-                - "009"
                 - "010"
-                - "011"
                 - "012"
-          total_affected_items: 9
-          total_failed_items: 4
-    delay_after: !float "{global_db_delay}"
+          total_affected_items: 0
+          total_failed_items: 2
 
+  # PUT /rootcheck
+  - name: Try to run rootcheck scan for non existing agents
+    request:
+      verify: False
+      method: PUT
+      url: "{protocol:s}://{host:s}:{port:d}/rootcheck"
+      headers:
+        Authorization: "Bearer {test_login_token}"
+      params:
+        agents_list: '040,050'
+    response:
+      status_code: 200
+      json:
+        error: 1
+        data:
+          affected_items: []
+          failed_items:
+            - error:
+                code: 1701
+              id:
+                - "040"
+                - "050"
+          total_affected_items: 0
+          total_failed_items: 2
+    delay_after: !float "{global_db_delay}"
 
 ---
 test_name: DELETE /rootcheck/{agent_id}

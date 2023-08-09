@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * September, 2020.
  *
  * This program is free software; you can redistribute it
@@ -15,7 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "wazuh_db/wdb.h"
+#include "../wazuh_db/wdb.h"
 #include "../wrappers/wazuh/shared/debug_op_wrappers.h"
 #include "../wrappers/externals/sqlite/sqlite3_wrappers.h"
 #include "../wrappers/wazuh/wazuh_db/wdb_wrappers.h"
@@ -46,25 +46,29 @@ static int test_teardown(void **state){
     return 0;
 }
 
-void test_wdb_metadata_table_check_prepare_fail(void **state)
+void test_wdb_count_tables_with_name_prepare_fail(void **state)
 {
     int ret = OS_INVALID;
     test_struct_t *data  = (test_struct_t *)*state;
 
+    will_return(__wrap_sqlite3_prepare_v2, NULL);
     will_return(__wrap_sqlite3_prepare_v2, SQLITE_ERROR);
     will_return(__wrap_sqlite3_errmsg, "ERROR MESSAGE");
     expect_string(__wrap__merror, formatted_msg, "DB(000) sqlite3_prepare_v2(): ERROR MESSAGE");
 
-    ret = wdb_metadata_table_check(data->wdb, "metadata");
+    int count = 0;
+    ret = wdb_count_tables_with_name(data->wdb, "metadata", &count);
 
     assert_int_equal(ret, OS_INVALID);
+    assert_int_equal(count, 0);
 }
 
-void test_wdb_metadata_table_check_bind_fail(void **state)
+void test_wdb_count_tables_with_name_bind_fail(void **state)
 {
     int ret = OS_INVALID;
     test_struct_t *data  = (test_struct_t *)*state;
 
+    will_return(__wrap_sqlite3_prepare_v2, 1);
     will_return(__wrap_sqlite3_prepare_v2, SQLITE_OK);
     expect_value(__wrap_sqlite3_bind_text, pos, 1);
     expect_string(__wrap_sqlite3_bind_text, buffer, "metadata");
@@ -74,16 +78,19 @@ void test_wdb_metadata_table_check_bind_fail(void **state)
 
     expect_string(__wrap__merror, formatted_msg, "DB(000) sqlite3_bind_text(): ERROR MESSAGE");
 
-    ret = wdb_metadata_table_check(data->wdb, "metadata");
+    int count = 0;
+    ret = wdb_count_tables_with_name(data->wdb, "metadata", &count);
 
     assert_int_equal(ret, OS_INVALID);
+    assert_int_equal(count, 0);
 }
 
-void test_wdb_metadata_table_check_step_fail(void **state)
+void test_wdb_count_tables_with_name_step_fail(void **state)
 {
     int ret = OS_INVALID;
     test_struct_t *data  = (test_struct_t *)*state;
 
+    will_return(__wrap_sqlite3_prepare_v2, 1);
     will_return(__wrap_sqlite3_prepare_v2, SQLITE_OK);
     expect_value(__wrap_sqlite3_bind_text, pos, 1);
     expect_string(__wrap_sqlite3_bind_text, buffer, "metadata");
@@ -95,16 +102,19 @@ void test_wdb_metadata_table_check_step_fail(void **state)
 
     expect_string(__wrap__mdebug1, formatted_msg, "DB(000) sqlite3_step(): ERROR MESSAGE");
 
-    ret = wdb_metadata_table_check(data->wdb, "metadata");
+    int count = 0;
+    ret = wdb_count_tables_with_name(data->wdb, "metadata", &count);
 
     assert_int_equal(ret, OS_INVALID);
+    assert_int_equal(count, 0);
 }
 
-void test_wdb_metadata_table_check_success(void **state)
+void test_wdb_count_tables_with_name_success(void **state)
 {
     int ret = OS_INVALID;
     test_struct_t *data  = (test_struct_t *)*state;
 
+    will_return(__wrap_sqlite3_prepare_v2, 1);
     will_return(__wrap_sqlite3_prepare_v2, SQLITE_OK);
     expect_value(__wrap_sqlite3_bind_text, pos, 1);
     expect_string(__wrap_sqlite3_bind_text, buffer, "metadata");
@@ -115,18 +125,20 @@ void test_wdb_metadata_table_check_success(void **state)
     will_return(__wrap_sqlite3_column_int, 1);
     will_return(__wrap_sqlite3_finalize, SQLITE_OK);
 
-    ret = wdb_metadata_table_check(data->wdb, "metadata");
+    int count = 0;
+    ret = wdb_count_tables_with_name(data->wdb, "metadata", &count);
 
-    assert_int_equal(ret, 1);
+    assert_int_equal(ret, OS_SUCCESS);
+    assert_int_equal(count, 1);
 }
 
 int main()
 {
     const struct CMUnitTest tests[] = {
-        cmocka_unit_test_setup_teardown(test_wdb_metadata_table_check_prepare_fail, test_setup, test_teardown),
-        cmocka_unit_test_setup_teardown(test_wdb_metadata_table_check_bind_fail, test_setup, test_teardown),
-        cmocka_unit_test_setup_teardown(test_wdb_metadata_table_check_step_fail, test_setup, test_teardown),
-        cmocka_unit_test_setup_teardown(test_wdb_metadata_table_check_success, test_setup, test_teardown)
+        cmocka_unit_test_setup_teardown(test_wdb_count_tables_with_name_prepare_fail, test_setup, test_teardown),
+        cmocka_unit_test_setup_teardown(test_wdb_count_tables_with_name_bind_fail, test_setup, test_teardown),
+        cmocka_unit_test_setup_teardown(test_wdb_count_tables_with_name_step_fail, test_setup, test_teardown),
+        cmocka_unit_test_setup_teardown(test_wdb_count_tables_with_name_success, test_setup, test_teardown)
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

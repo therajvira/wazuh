@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for Agent Upgrading
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * August 10, 2020.
  *
  * This program is free software; you can redistribute it
@@ -89,17 +89,6 @@ int wm_agent_upgrade_validate_wpk(const wm_upgrade_task *task) __attribute__((no
  * @retval WM_UPGRADE_WPK_FILE_DOES_NOT_EXIST
  * */
 int wm_agent_upgrade_validate_wpk_custom(const wm_upgrade_custom_task *task) __attribute__((nonnull));
-
-/**
- * Compare two versions with format v4.0.0
- * @param version1 char * with the string version
- * @param version2 char * with the string version
- * @return return_code
- * @retval 0 equals
- * @retval 1 version1 > version2
- * @retval -1 version1 < version2
- * */
-int wm_agent_upgrade_compare_versions(const char *version1, const char *version2);
 
 /**
  * Validate a status response from the task manager module

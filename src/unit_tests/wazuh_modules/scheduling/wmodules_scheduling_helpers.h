@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -15,7 +15,7 @@
 #include <setjmp.h>
 #include <cmocka.h>
 #include "shared.h"
-#include "wazuh_modules/wmodules.h"
+#include "../../../wazuh_modules/wmodules.h"
 
 typedef struct test_structure {
     wmodule *module;

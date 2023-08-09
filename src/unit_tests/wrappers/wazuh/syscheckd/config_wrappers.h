@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -11,8 +11,8 @@
 #ifndef SYSCHECKD_CONFIG_WRAPPERS_H
 #define SYSCHECKD_CONFIG_WRAPPERS_H
 
-#include "syscheckd/syscheck.h"
-#include "external/cJSON/cJSON.h"
+#include "../syscheckd/include/syscheck.h"
+#include <cJSON.h>
 
 void __wrap_free_whodata_event(whodata_evt *w_evt);
 

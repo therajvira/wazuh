@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -11,7 +11,7 @@
 #ifndef WDB_WRAPPERS_H
 #define WDB_WRAPPERS_H
 
-#include "wazuh_db/wdb.h"
+#include "../wazuh_db/wdb.h"
 
 wdb_t* __wrap_wdb_open_global();
 
@@ -47,7 +47,7 @@ int __wrap_wdb_syscheck_save2(wdb_t *wdb, const char *payload);
 
 cJSON * __wrap_wdb_exec_stmt(sqlite3_stmt *stmt);
 
-cJSON * __wrap_wdb_exec_stmt_sized(sqlite3_stmt *stmt, size_t max_size, int* status);
+cJSON * __wrap_wdb_exec_stmt_sized(sqlite3_stmt *stmt, size_t max_size, int* status, bool column_mode);
 
 int __wrap_wdbc_parse_result(char *result, char **payload);
 
@@ -78,5 +78,25 @@ void __wrap_wdb_pool_append(wdb_t * wdb);
 sqlite3_stmt* __wrap_wdb_init_stmt_in_cache(wdb_t* wdb, wdb_stmt statement_index);
 
 int __wrap_wdb_exec_stmt_silent(sqlite3_stmt* stmt);
+
+sqlite3_stmt * __wrap_wdb_get_cache_stmt(wdb_t * wdb, char const *query);
+
+cJSON *__wrap_wdb_get_internal_config();
+
+cJSON *__wrap_wdb_get_config();
+
+int __wrap_wdb_get_global_group_hash(wdb_t * wdb, os_sha1 hexdigest);
+
+int __wrap_wdb_commit2(wdb_t * wdb);
+
+void __wrap_wdb_finalize_all_statements(__attribute__((unused))wdb_t * wdb);
+
+int __wrap_wdb_vacuum(__attribute__((unused))sqlite3 * db);
+
+int __wrap_wdb_get_db_state(__attribute__((unused))wdb_t * wdb);
+
+int __wrap_wdb_update_last_vacuum_data(__attribute__((unused))wdb_t* wdb, __attribute__((unused))const char *last_vacuum_time, const char *last_vacuum_value);
+
+int __wrap_wdb_get_db_free_pages_percentage(__attribute__((unused))wdb_t * wdb);
 
 #endif

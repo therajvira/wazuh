@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -16,8 +16,8 @@
 #include <cmocka.h>
 
 #include "../../headers/shared.h"
-#include "os_regex/os_regex.h"
-#include "os_xml/os_xml.h"
+#include "../os_regex/os_regex.h"
+#include "../os_xml/os_xml.h"
 #include "../../analysisd/analysisd.h"
 #include "../../analysisd/eventinfo.h"
 #include "../../analysisd/decoders/decoder.h"

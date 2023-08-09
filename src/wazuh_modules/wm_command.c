@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for custom command execution
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * October 26, 2017.
  *
  * This program is free software; you can redistribute it
@@ -11,24 +11,34 @@
 
 #include "wmodules.h"
 
+#ifdef WIN32
+static DWORD WINAPI wm_command_main(void *arg);             // Module main function. It won't return
+#else
 static void * wm_command_main(wm_command_t * command);    // Module main function. It won't return
+#endif
 static void wm_command_destroy(wm_command_t * command);   // Destroy data
 cJSON *wm_command_dump(const wm_command_t * command);
 
 // Command module context definition
 
 const wm_context WM_COMMAND_CONTEXT = {
-    "command",
-    (wm_routine)wm_command_main,
-    (wm_routine)(void *)wm_command_destroy,
-    (cJSON * (*)(const void *))wm_command_dump,
-    NULL,
-    NULL
+    .name = "command",
+    .start = (wm_routine)wm_command_main,
+    .destroy = (void(*)(void *))wm_command_destroy,
+    .dump = (cJSON * (*)(const void *))wm_command_dump,
+    .sync = NULL,
+    .stop = NULL,
+    .query = NULL,
 };
 
 // Module module main function. It won't return.
 
+#ifdef WIN32
+DWORD WINAPI wm_command_main(void *arg) {
+    wm_command_t * command = (wm_command_t *)arg;
+#else
 void * wm_command_main(wm_command_t * command) {
+#endif
     size_t extag_len;
     char * extag;
     int usec = 1000000 / wm_max_eps;
@@ -221,7 +231,11 @@ void * wm_command_main(wm_command_t * command) {
     } while (FOREVER());
 
     free(extag);
+#ifdef WIN32
+    return 0;
+#else
     return NULL;
+#endif
 }
 
 
@@ -251,7 +265,6 @@ cJSON *wm_command_dump(const wm_command_t * command) {
 
 
 // Destroy data
-
 void wm_command_destroy(wm_command_t * command) {
     free(command->tag);
     free(command->command);

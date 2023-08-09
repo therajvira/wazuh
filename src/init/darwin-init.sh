@@ -3,13 +3,13 @@
 # Darwin init script.
 # by Lorenzo Costanzia di Costigliole <mummie@tin.it>
 # Modified by Wazuh, Inc. <info@wazuh.com>.
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
 
 INSTALLATION_PATH=${1}
 SERVICE=/Library/LaunchDaemons/com.wazuh.agent.plist
 STARTUP=/Library/StartupItems/WAZUH/StartupParameters.plist
-LAUNCHER_SCRIPT=/Library/StartupItems/WAZUH/launcher.sh
+LAUNCHER_SCRIPT=/Library/StartupItems/WAZUH/Wazuh-launcher
 STARTUP_SCRIPT=/Library/StartupItems/WAZUH/WAZUH
 
 launchctl unload /Library/LaunchDaemons/com.wazuh.agent.plist 2> /dev/null

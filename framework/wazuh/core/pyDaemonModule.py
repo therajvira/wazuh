@@ -1,11 +1,15 @@
-
-
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
 
+import glob
+import logging
 import os
 import sys
+from os import path
+
+import psutil
+
 from wazuh.core import common
 from wazuh.core.exception import WazuhInternalError
 
@@ -53,21 +57,75 @@ def pyDaemon():
     os.chdir('/')
 
 
-def create_pid(name, pid):
-    filename = f"{common.wazuh_path}/{common.os_pidfile}/{name}-{pid}.pid"
+def create_pid(name: str, pid: int):
+    """Create pidfile.
+
+    Parameters
+    ----------
+    name : str
+        Process name.
+    pid : int
+        Process ID.
+
+    Raises
+    ------
+    WazuhInternalError(3002)
+        Error creating pidfile.
+    """
+    filename = path.join(common.WAZUH_PATH, common.OS_PIDFILE_PATH, f'{name}-{pid}.pid')
 
     with open(filename, 'a') as fp:
         try:
-            fp.write("{0}\n".format(pid))
+            fp.write(f'{pid}\n')
             os.chmod(filename, 0o640)
         except OSError as e:
             raise WazuhInternalError(3002, str(e))
 
 
-def delete_pid(name, pid):
-    filename = f"{common.wazuh_path}/{common.os_pidfile}/{name}-{pid}.pid"
+def delete_pid(name: str, pid: int):
+    """Unlink pidfile.
+
+    Parameters
+    ----------
+    name : str
+        Process name.
+    pid : int
+        Process ID.
+    """
+    filename = path.join(common.WAZUH_PATH, common.OS_PIDFILE_PATH, f'{name}-{pid}.pid')
+
     try:
-        if os.path.exists(filename):
+        if path.exists(filename):
             os.unlink(filename)
     except OSError:
         pass
+
+
+def delete_child_pids(name: str, ppid: int, logger: logging.Logger):
+    """Delete all childs from a process given its PID.
+
+    Parameters
+    ----------
+    name : str
+        Process name.
+    ppid : int
+        Parent process ID.
+    logger : logging.Logger
+        Logger object.
+    """
+    filenames = glob.glob(path.join(common.WAZUH_PATH, common.OS_PIDFILE_PATH, f'{name}*.pid'))
+
+    for process in psutil.Process(ppid).children(recursive=True):
+        try:
+            process.kill()
+        except psutil.Error:
+            logger.error(f'Error while trying to terminate the process with ID {process.pid}.')
+        except Exception as exc:
+            logger.error(f'Unhandled exception while trying to terminate the process with ID {process.pid}: {exc}')
+        for filename in filenames[:]:
+            if str(process.pid) in filename:
+                try:
+                    path.exists(filename) and os.unlink(filename)
+                except OSError:
+                    pass
+                filenames.remove(filename)

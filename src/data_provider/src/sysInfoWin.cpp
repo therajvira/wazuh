@@ -1,6 +1,6 @@
 /*
  * Wazuh SysInfo
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * October 7, 2020.
  *
  * This program is free software; you can redistribute it
@@ -28,7 +28,6 @@
 #include "stringHelper.h"
 #include "registryHelper.h"
 #include "defs.h"
-#include "debug_op.h"
 #include "osinfo/sysOsInfoWin.h"
 #include "windowsHelper.h"
 #include "encodingWindowsHelper.h"
@@ -37,12 +36,20 @@
 #include "ports/portWindowsWrapper.h"
 #include "ports/portImpl.h"
 #include "packages/packagesWindowsParserHelper.h"
+#include "packages/packagesWindows.h"
+#include "packages/appxWindowsWrapper.h"
 
-constexpr int BASEBOARD_INFORMATION_TYPE { 2 };
 constexpr auto CENTRAL_PROCESSOR_REGISTRY {"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0"};
 const std::string UNINSTALL_REGISTRY{"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall"};
 constexpr auto SYSTEM_IDLE_PROCESS_NAME {"System Idle Process"};
 constexpr auto SYSTEM_PROCESS_NAME {"System"};
+
+static const std::map<std::string, DWORD> gs_firmwareTableProviderSignature
+{
+    {"ACPI", 0x41435049},
+    {"FIRM", 0x4649524D},
+    {"RSMB", 0x52534D42}
+};
 
 class SysInfoProcess final
 {
@@ -50,8 +57,11 @@ class SysInfoProcess final
         SysInfoProcess(const DWORD pId, const HANDLE processHandle)
             : m_pId{ pId },
               m_hProcess{ processHandle },
+              m_creationTime{},
               m_kernelModeTime{},
-              m_userModeTime{}
+              m_userModeTime{},
+              m_pageFileUsage{},
+              m_virtualSize{}
         {
             setProcessTimes();
             setProcessMemInfo();
@@ -74,6 +84,12 @@ class SysInfoProcess final
 
             // else: Unable to retrieve executable path from current process.
             return ret;
+        }
+
+        ULONGLONG creationTime() const
+        {
+            //convert Win32 Epoch(1 January 1601 00:00:00) to Unix Epoch(1 January 1970 00:00:00)
+            return m_creationTime.QuadPart - WINDOWS_UNIX_EPOCH_DIFF_SECONDS;
         }
 
         ULONGLONG kernelModeTime() const
@@ -130,6 +146,12 @@ class SysInfoProcess final
                 m_userModeTime.LowPart = lpUserTime.dwLowDateTime;
                 m_userModeTime.HighPart = lpUserTime.dwHighDateTime;
                 m_userModeTime.QuadPart /= TO_SECONDS_VALUE;
+
+                // Copy the creation filetime high and low parts and convert it to seconds
+                m_creationTime.LowPart = lpCreationTime.dwLowDateTime;
+                m_creationTime.HighPart = lpCreationTime.dwHighDateTime;
+                m_creationTime.QuadPart /= TO_SECONDS_VALUE;
+
             }
 
             // else: Unable to retrieve kernel mode and user mode times from current process.
@@ -227,83 +249,13 @@ class SysInfoProcess final
 
         const DWORD     m_pId;
         HANDLE          m_hProcess;
+        ULARGE_INTEGER  m_creationTime;
         ULARGE_INTEGER  m_kernelModeTime;
         ULARGE_INTEGER  m_userModeTime;
         DWORD           m_pageFileUsage;
         DWORD           m_virtualSize;
 };
 
-typedef struct RawSMBIOSData
-{
-    BYTE    Used20CallingMethod;
-    BYTE    SMBIOSMajorVersion;
-    BYTE    SMBIOSMinorVersion;
-    BYTE    DmiRevision;
-    DWORD   Length;
-    BYTE    SMBIOSTableData[];
-} RawSMBIOSData, *PRawSMBIOSData;
-
-typedef struct SMBIOSStructureHeader
-{
-    BYTE Type;
-    BYTE FormattedAreaLength;
-    WORD Handle;
-} SMBIOSStructureHeader;
-
-typedef struct SMBIOSBasboardInfoStructure
-{
-    BYTE Type;
-    BYTE FormattedAreaLength;
-    WORD Handle;
-    BYTE Manufacturer;
-    BYTE Product;
-    BYTE Version;
-    BYTE SerialNumber;
-} SMBIOSBasboardInfoStructure;
-
-/* Reference: https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_2.6.0.pdf */
-static std::string parseRawSmbios(const BYTE* rawData, const DWORD rawDataSize)
-{
-    std::string serialNumber;
-    DWORD offset{0};
-
-    while (offset < rawDataSize && serialNumber.empty())
-    {
-        SMBIOSStructureHeader header{};
-        memcpy(&header, rawData + offset, sizeof(SMBIOSStructureHeader));
-
-        if (BASEBOARD_INFORMATION_TYPE == header.Type)
-        {
-            SMBIOSBasboardInfoStructure info{};
-            memcpy(&info, rawData + offset, sizeof(SMBIOSBasboardInfoStructure));
-            offset += info.FormattedAreaLength;
-
-            for (BYTE i = 1; i < info.SerialNumber; ++i)
-            {
-                const char* tmp{reinterpret_cast<const char*>(rawData + offset)};
-                const auto len{ strlen(tmp) };
-                offset += len + sizeof(char);
-            }
-
-            serialNumber = reinterpret_cast<const char*>(rawData + offset);
-        }
-        else
-        {
-            offset += header.FormattedAreaLength;
-            bool end{false};
-
-            while (!end)
-            {
-                const char* tmp{reinterpret_cast<const char*>(rawData + offset)};
-                const auto len{strlen(tmp)};
-                offset += len + sizeof(char);
-                end = !len;
-            }
-        }
-    }
-
-    return serialNumber;
-}
 
 static bool isSystemProcess(const DWORD pid)
 {
@@ -338,8 +290,8 @@ static nlohmann::json getProcessInfo(const PROCESSENTRY32& processEntry)
         SysInfoProcess process(pId, processHandle);
 
         // Current process information
-        jsProcessInfo["name"]       = processName(processEntry);
-        jsProcessInfo["cmd"]        = (isSystemProcess(pId)) ? "none" : process.cmd();
+        jsProcessInfo["name"]       = Utils::EncodingWindowsHelper::stringAnsiToStringUTF8(processName(processEntry));
+        jsProcessInfo["cmd"]        = Utils::EncodingWindowsHelper::stringAnsiToStringUTF8((isSystemProcess(pId)) ? "none" : process.cmd());
         jsProcessInfo["stime"]      = process.kernelModeTime();
         jsProcessInfo["size"]       = process.pageFileUsage();
         jsProcessInfo["ppid"]       = processEntry.th32ParentProcessID;
@@ -349,6 +301,7 @@ static nlohmann::json getProcessInfo(const PROCESSENTRY32& processEntry)
         jsProcessInfo["nlwp"]       = processEntry.cntThreads;
         jsProcessInfo["utime"]      = process.userModeTime();
         jsProcessInfo["vm_size"]    = process.virtualSize();
+        jsProcessInfo["start_time"] = process.creationTime();
         CloseHandle(processHandle);
     }
 
@@ -391,7 +344,18 @@ static void getPackagesFromReg(const HKEY key, const std::string& subKey, std::f
 
                 if (packageReg.string("InstallDate", value))
                 {
-                    install_time = value;
+                    try
+                    {
+                        install_time = Utils::normalizeTimestamp(value, packageReg.keyModificationDate());
+                    }
+                    catch (const std::exception& e)
+                    {
+                        install_time = packageReg.keyModificationDate();
+                    }
+                }
+                else
+                {
+                    install_time = packageReg.keyModificationDate();
                 }
 
                 if (packageReg.string("InstallLocation", value))
@@ -434,7 +398,42 @@ static void getPackagesFromReg(const HKEY key, const std::string& subKey, std::f
     }
 }
 
-std::string SysInfo::getSerialNumber() const
+static void getStorePackages(const HKEY key, const std::string& user, std::function<void(nlohmann::json&)> returnCallback)
+{
+    std::set<std::string> cacheReg;
+
+    try
+    {
+        for (const auto& registry : Utils::Registry{key, user + "\\" + CACHE_NAME_REGISTRY, KEY_READ | KEY_ENUMERATE_SUB_KEYS}.enumerate())
+        {
+            cacheReg.insert(registry);
+        }
+
+        const auto callback
+        {
+            [&](const std::string & nameApp)
+            {
+                nlohmann::json jsPackage;
+
+                FactoryWindowsPackage::create(key, user, nameApp, cacheReg)->buildPackageData(jsPackage);
+
+                if (!jsPackage.at("name").get_ref<const std::string&>().empty())
+                {
+                    // Only return valid content packages
+                    returnCallback(jsPackage);
+                }
+            }
+        };
+
+        Utils::Registry root(key, user + "\\" + APPLICATION_STORE_REGISTRY, KEY_READ | KEY_ENUMERATE_SUB_KEYS);
+        root.enumerate(callback);
+    }
+    catch (...)
+    {
+    }
+}
+
+static std::string getSerialNumber()
 {
     std::string ret;
 
@@ -444,7 +443,7 @@ std::string SysInfo::getSerialNumber() const
 
         if (pfnGetSystemFirmwareTable)
         {
-            const auto size {pfnGetSystemFirmwareTable('RSMB', 0, nullptr, 0)};
+            const auto size {pfnGetSystemFirmwareTable(gs_firmwareTableProviderSignature.at("RSMB"), 0, nullptr, 0)};
 
             if (size)
             {
@@ -453,11 +452,11 @@ std::string SysInfo::getSerialNumber() const
                 if (spBuff)
                 {
                     // Get raw SMBIOS firmware table
-                    if (pfnGetSystemFirmwareTable('RSMB', 0, spBuff.get(), size) == size)
+                    if (pfnGetSystemFirmwareTable(gs_firmwareTableProviderSignature.at("RSMB"), 0, spBuff.get(), size) == size)
                     {
                         PRawSMBIOSData smbios{reinterpret_cast<PRawSMBIOSData>(spBuff.get())};
                         // Parse SMBIOS structures
-                        ret = parseRawSmbios(smbios->SMBIOSTableData, size);
+                        ret = Utils::getSerialNumberFromSmbios(smbios->SMBIOSTableData, size);
                     }
                 }
             }
@@ -481,26 +480,26 @@ std::string SysInfo::getSerialNumber() const
     return ret;
 }
 
-std::string SysInfo::getCpuName() const
+static std::string getCpuName()
 {
     Utils::Registry reg(HKEY_LOCAL_MACHINE, CENTRAL_PROCESSOR_REGISTRY);
     return reg.string("ProcessorNameString");
 }
 
-int SysInfo::getCpuMHz() const
+static int getCpuMHz()
 {
     Utils::Registry reg(HKEY_LOCAL_MACHINE, CENTRAL_PROCESSOR_REGISTRY);
     return reg.dword("~MHz");
 }
 
-int SysInfo::getCpuCores() const
+static int getCpuCores()
 {
     SYSTEM_INFO siSysInfo{};
     GetSystemInfo(&siSysInfo);
     return siSysInfo.dwNumberOfProcessors;
 }
 
-void SysInfo::getMemory(nlohmann::json& info) const
+static void getMemory(nlohmann::json& info)
 {
     MEMORYSTATUSEX statex;
     statex.dwLength = sizeof(statex);
@@ -520,6 +519,17 @@ void SysInfo::getMemory(nlohmann::json& info) const
             "Error calling GlobalMemoryStatusEx"
         };
     }
+}
+
+nlohmann::json SysInfo::getHardware() const
+{
+    nlohmann::json hardware;
+    hardware["board_serial"] = getSerialNumber();
+    hardware["cpu_name"] = getCpuName();
+    hardware["cpu_cores"] = getCpuCores();
+    hardware["cpu_mhz"] = double(getCpuMHz());
+    getMemory(hardware);
+    return hardware;
 }
 
 static void fillProcessesData(std::function<void(PROCESSENTRY32)> func)
@@ -633,14 +643,14 @@ nlohmann::json SysInfo::getNetworks() const
                     if (AF_INET == unicastAddressFamily)
                     {
                         // IPv4 data
-                        FactoryNetworkFamilyCreator<OSType::WINDOWS>::create(std::make_shared<NetworkWindowsInterface>(Utils::NetworkWindowsHelper::IPV4, rawAdapterAddresses, unicastAddress,
-                                                                                                                       adapterInfo.get()))->buildNetworkData(netInterfaceInfo);
+                        FactoryNetworkFamilyCreator<OSPlatformType::WINDOWS>::create(std::make_shared<NetworkWindowsInterface>(Utils::NetworkWindowsHelper::IPV4, rawAdapterAddresses, unicastAddress,
+                                                                                                                               adapterInfo.get()))->buildNetworkData(netInterfaceInfo);
                     }
                     else if (AF_INET6 == unicastAddressFamily)
                     {
                         // IPv6 data
-                        FactoryNetworkFamilyCreator<OSType::WINDOWS>::create(std::make_shared<NetworkWindowsInterface>(Utils::NetworkWindowsHelper::IPV6, rawAdapterAddresses, unicastAddress,
-                                                                                                                       adapterInfo.get()))->buildNetworkData(netInterfaceInfo);
+                        FactoryNetworkFamilyCreator<OSPlatformType::WINDOWS>::create(std::make_shared<NetworkWindowsInterface>(Utils::NetworkWindowsHelper::IPV6, rawAdapterAddresses, unicastAddress,
+                                                                                                                               adapterInfo.get()))->buildNetworkData(netInterfaceInfo);
                     }
                 }
 
@@ -648,8 +658,8 @@ nlohmann::json SysInfo::getNetworks() const
             }
 
             // Common data
-            FactoryNetworkFamilyCreator<OSType::WINDOWS>::create(std::make_shared<NetworkWindowsInterface>(Utils::NetworkWindowsHelper::COMMON_DATA, rawAdapterAddresses, unicastAddress,
-                                                                                                           adapterInfo.get()))->buildNetworkData(netInterfaceInfo);
+            FactoryNetworkFamilyCreator<OSPlatformType::WINDOWS>::create(std::make_shared<NetworkWindowsInterface>(Utils::NetworkWindowsHelper::COMMON_DATA, rawAdapterAddresses, unicastAddress,
+                                                                                                                   adapterInfo.get()))->buildNetworkData(netInterfaceInfo);
 
             networks["iface"].push_back(netInterfaceInfo);
         }
@@ -763,21 +773,48 @@ void SysInfo::getProcessesInfo(std::function<void(nlohmann::json&)> callback) co
 
 void SysInfo::getPackages(std::function<void(nlohmann::json&)> callback) const
 {
-    getPackagesFromReg(HKEY_LOCAL_MACHINE, UNINSTALL_REGISTRY, callback, KEY_WOW64_64KEY);
-    getPackagesFromReg(HKEY_LOCAL_MACHINE, UNINSTALL_REGISTRY, callback, KEY_WOW64_32KEY);
+    std::set<std::string> set;
+
+    auto fillList
+    {
+        [&callback, &set](nlohmann::json & data)
+        {
+            const std::string key { data.at("name").get_ref<const std::string&>() + data.at("version").get_ref<const std::string&>() };
+            const auto result { set.insert(key) };
+
+            if (result.second)
+            {
+                callback(data);
+            }
+        }
+    };
+
+    getPackagesFromReg(HKEY_LOCAL_MACHINE, UNINSTALL_REGISTRY, fillList, KEY_WOW64_64KEY);
+    getPackagesFromReg(HKEY_LOCAL_MACHINE, UNINSTALL_REGISTRY, fillList, KEY_WOW64_32KEY);
 
     for (const auto& user : Utils::Registry{HKEY_USERS, "", KEY_READ | KEY_ENUMERATE_SUB_KEYS}.enumerate())
     {
-        getPackagesFromReg(HKEY_USERS, user + "\\" + UNINSTALL_REGISTRY, callback);
+        getPackagesFromReg(HKEY_USERS, user + "\\" + UNINSTALL_REGISTRY, fillList);
+        getStorePackages(HKEY_USERS, user, fillList);
     }
 }
 
 nlohmann::json SysInfo::getHotfixes() const
 {
+    std::set<std::string> hotfixes;
+    PackageWindowsHelper::getHotFixFromReg(HKEY_LOCAL_MACHINE, PackageWindowsHelper::WIN_REG_HOTFIX, hotfixes);
+    PackageWindowsHelper::getHotFixFromRegNT(HKEY_LOCAL_MACHINE, PackageWindowsHelper::VISTA_REG_HOTFIX, hotfixes);
+    PackageWindowsHelper::getHotFixFromRegWOW(HKEY_LOCAL_MACHINE, PackageWindowsHelper::WIN_REG_WOW_HOTFIX, hotfixes);
+    PackageWindowsHelper::getHotFixFromRegProduct(HKEY_LOCAL_MACHINE, PackageWindowsHelper::WIN_REG_PRODUCT_HOTFIX, hotfixes);
+
     nlohmann::json ret;
-    PackageWindowsHelper::getHotFixFromReg(HKEY_LOCAL_MACHINE, PackageWindowsHelper::WIN_REG_HOTFIX, ret);
-    PackageWindowsHelper::getHotFixFromRegNT(HKEY_LOCAL_MACHINE, PackageWindowsHelper::VISTA_REG_HOTFIX, ret);
-    PackageWindowsHelper::getHotFixFromRegWOW(HKEY_LOCAL_MACHINE, PackageWindowsHelper::WIN_REG_WOW_HOTFIX, ret);
-    PackageWindowsHelper::getHotFixFromRegProduct(HKEY_LOCAL_MACHINE, PackageWindowsHelper::WIN_REG_PRODUCT_HOTFIX, ret);
+
+    for (auto& hotfix : hotfixes)
+    {
+        nlohmann::json hotfixValue;
+        hotfixValue["hotfix"] = std::move(hotfix);
+        ret.push_back(std::move(hotfixValue));
+    }
+
     return ret;
 }

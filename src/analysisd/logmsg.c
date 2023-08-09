@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -10,11 +10,32 @@
 
 #include "logmsg.h"
 
-void _os_analysisd_add_logmsg(OSList * list, int level, int line, const char * func, 
+void _os_analysisd_add_logmsg(OSList * list, int level, int line, const char * func,
                                 const char * file, char * msg, ...) {
 
     va_list args;
     os_analysisd_log_msg_t * new_msg;
+
+    if (list == NULL) {
+        va_start(args, msg);
+        switch (level) {
+
+        case LOGLEVEL_ERROR:
+            _mverror(file, line, func, msg, args);
+            break;
+
+        case LOGLEVEL_WARNING:
+            _mvwarn(file, line, func, msg, args);
+            break;
+
+        default:
+            _mvinfo(file, line, func, msg, args);
+            break;
+        }
+        va_end(args);
+        return;
+    }
+
     os_malloc(sizeof(os_analysisd_log_msg_t), new_msg);
 
     /* Debug information */
@@ -53,14 +74,14 @@ char * os_analysisd_string_log_msg(os_analysisd_log_msg_t * log_msg) {
     return str;
 }
 
-void os_analysisd_free_log_msg(os_analysisd_log_msg_t ** log_msg) {
+void os_analysisd_free_log_msg(os_analysisd_log_msg_t * log_msg) {
 
-    if (!*log_msg) {
+    if (!log_msg) {
         return;
     }
 
-    os_free((*log_msg)->file);
-    os_free((*log_msg)->func);
-    os_free((*log_msg)->msg);
-    os_free(*log_msg);
+    os_free(log_msg->file);
+    os_free(log_msg->func);
+    os_free(log_msg->msg);
+    os_free(log_msg);
 }

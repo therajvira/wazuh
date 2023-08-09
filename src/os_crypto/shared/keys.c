@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -39,7 +39,7 @@ static void move_netdata(keystore *keys, const keystore *old_keys)
         if (keyid >= 0 && !strcmp(keys->keyentries[keyid]->ip->ip, old_keys->keyentries[i]->ip->ip)) {
             keys->keyentries[keyid]->rcvd = old_keys->keyentries[i]->rcvd;
             keys->keyentries[keyid]->sock = old_keys->keyentries[i]->sock;
-            memcpy(&keys->keyentries[keyid]->peer_info, &old_keys->keyentries[i]->peer_info, sizeof(struct sockaddr_in));
+            memcpy(&keys->keyentries[keyid]->peer_info, &old_keys->keyentries[i]->peer_info, sizeof(struct sockaddr_storage));
 
             snprintf(strsock, sizeof(strsock), "%d", keys->keyentries[keyid]->sock);
             rbtree_insert(keys->keytree_sock, strsock, keys->keyentries[keyid]);
@@ -87,6 +87,7 @@ int OS_AddKey(keystore *keys, const char *id, const char *name, const char *ip, 
     if ((tmp_str = strchr(keys->keyentries[keys->keysize]->ip->ip, '/')) != NULL) {
         *tmp_str = '\0';
     }
+
     rbtree_insert(keys->keytree_ip,
                keys->keyentries[keys->keysize]->ip->ip,
                keys->keyentries[keys->keysize]);
@@ -248,7 +249,14 @@ void OS_ReadKeys(keystore *keys, key_mode_t key_mode, int save_removed)
 
             *tmp_str = '\0';
             tmp_str++;
-            strncpy(id, valid_str, KEYSIZE - 1);
+            const int bytes_written = snprintf(id, sizeof(id), "%s", valid_str);
+
+            if (bytes_written < 0) {
+                merror(INVALID_KEY " Error %d (%s).", id, errno, strerror(errno));
+            }
+            else if ((size_t)bytes_written >= sizeof(id)) {
+                merror(INVALID_KEY, id);
+            }
 
             /* Update counter */
 
@@ -336,8 +344,7 @@ void OS_ReadKeys(keystore *keys, key_mode_t key_mode, int save_removed)
 
 void OS_FreeKey(keyentry *key) {
     if (key->ip) {
-        free(key->ip->ip);
-        free(key->ip);
+        w_free_os_ip(key->ip);
     }
 
     if (key->id) {
@@ -571,31 +578,47 @@ int OS_WriteKeys(const keystore *keys) {
 
     unsigned int i;
     File file;
-    char cidr[20];
+    char cidr[IPSIZE + 1];
 
     if (TempFile(&file, KEYS_FILE, 0) < 0)
         return -1;
 
    for (i = 0; i < keys->keysize; i++) {
         keyentry *entry = keys->keyentries[i];
-        fprintf(file.fp, "%s %s %s %s\n", entry->id, entry->name, OS_CIDRtoStr(entry->ip, cidr, 20) ? entry->ip->ip : cidr, entry->raw_key);
+
+        if (fprintf(file.fp, "%s %s %s %s\n", entry->id, entry->name, OS_CIDRtoStr(entry->ip, cidr, IPSIZE) ? entry->ip->ip : cidr, entry->raw_key) < 0) {
+            merror(FWRITE_ERROR, file.name, errno, strerror(errno));
+            fclose(file.fp);
+            goto error;
+        }
     }
 
     /* Write saved removed keys */
 
     for (i = 0; i < keys->removed_keys_size; i++) {
-        fprintf(file.fp, "%s\n", keys->removed_keys[i]);
+        if (fprintf(file.fp, "%s\n", keys->removed_keys[i]) < 0) {
+            merror(FWRITE_ERROR, file.name, errno, strerror(errno));
+            fclose(file.fp);
+            goto error;
+        }
     }
 
-    fclose(file.fp);
+    if (fclose(file.fp) != 0) {
+        merror(FCLOSE_ERROR, file.name, errno, strerror(errno));
+        goto error;
+    }
 
     if (OS_MoveFile(file.name, KEYS_FILE) < 0) {
-        free(file.name);
-        return -1;
+        goto error;
     }
 
     free(file.name);
     return 0;
+
+error:
+    unlink(file.name);
+    free(file.name);
+    return -1;
 }
 
 /* Duplicate keystore except key hashes and file pointer */
@@ -653,8 +676,17 @@ keyentry * OS_DupKeyEntry(const keyentry * key) {
     if (key->ip) {
         os_calloc(1, sizeof(os_ip), copy->ip);
         copy->ip->ip = strdup(key->ip->ip);
-        copy->ip->ip_address = key->ip->ip_address;
-        copy->ip->netmask = key->ip->netmask;
+        copy->ip->is_ipv6 = key->ip->is_ipv6;
+        if (key->ip->is_ipv6) {
+            os_calloc(1, sizeof(os_ipv6), copy->ip->ipv6);
+            memcpy(copy->ip->ipv6->ip_address, key->ip->ipv6->ip_address, sizeof(copy->ip->ipv6->ip_address));
+            memcpy(copy->ip->ipv6->netmask, key->ip->ipv6->netmask, sizeof(copy->ip->ipv6->netmask));
+
+        } else {
+            os_calloc(1, sizeof(os_ipv4), copy->ip->ipv4);
+            copy->ip->ipv4->ip_address = key->ip->ipv4->ip_address;
+            copy->ip->ipv4->netmask = key->ip->ipv4->netmask;
+        }
     }
 
     copy->sock = key->sock;
@@ -670,10 +702,11 @@ int OS_AddSocket(keystore * keys, unsigned int i, int sock) {
     char strsock[16] = "";
 
     snprintf(strsock, sizeof(strsock), "%d", sock);
-    keys->keyentries[i]->sock = sock;
 
     w_mutex_lock(&keys->keytree_sock_mutex);
-    int r = rbtree_insert(keys->keytree_sock, strsock, keys->keyentries[i]) ? 2 : rbtree_replace(keys->keytree_sock, strsock, keys->keyentries[i]) ? 1 : 0;
+    int r = rbtree_insert(keys->keytree_sock, strsock, keys->keyentries[i]) ? OS_ADDSOCKET_KEY_ADDED :
+            rbtree_replace(keys->keytree_sock, strsock, keys->keyentries[i]) ? OS_ADDSOCKET_KEY_UPDATED :
+            OS_ADDSOCKET_ERROR;
     w_mutex_unlock(&keys->keytree_sock_mutex);
 
     return r;
@@ -769,6 +802,7 @@ int OS_ReadTimestamps(keystore * keys) {
 
 int OS_WriteTimestamps(keystore * keys) {
     File file;
+    int r = 0;
 
     if (TempFile(&file, TIMESTAMP_FILE, 0) < 0) {
         merror("Couldn't open timestamp file for writing.");
@@ -783,15 +817,31 @@ int OS_WriteTimestamps(keystore * keys) {
         }
 
         char timestamp[40];
-        char cidr[20];
+        char cidr[IPSIZE + 1];
         struct tm tm_result = { .tm_sec = 0 };
 
         strftime(timestamp, 40, "%Y-%m-%d %H:%M:%S", localtime_r(&entry->time_added, &tm_result));
-        fprintf(file.fp, "%s %s %s %s\n", entry->id, entry->name, OS_CIDRtoStr(entry->ip, cidr, 20) ? entry->ip->ip : cidr, timestamp);
+
+        if (fprintf(file.fp, "%s %s %s %s\n", entry->id, entry->name, OS_CIDRtoStr(entry->ip, cidr, IPSIZE) ? entry->ip->ip : cidr, timestamp) < 0) {
+            merror(FWRITE_ERROR, file.name, errno, strerror(errno));
+            r = -1;
+            break;
+        }
     }
 
-    fclose(file.fp);
-    int r = OS_MoveFile(file.name, TIMESTAMP_FILE);
+    if (fclose(file.fp) != 0) {
+        merror(FCLOSE_ERROR, file.name, errno, strerror(errno));
+        r = -1;
+    }
+
+    if (r == 0) {
+        r = OS_MoveFile(file.name, TIMESTAMP_FILE);
+    }
+
+    if (r != 0) {
+        unlink(file.name);
+    }
+
     free(file.name);
 
     return r;

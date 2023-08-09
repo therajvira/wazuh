@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -451,7 +451,7 @@ int is_file(char *file_name)
     DIR     *dp = NULL;
 
     if (!file_name) {
-        mterror(ARGV0, "RK: Invalid file name: %s!", file_name);
+        mtdebug2(ARGV0, "RK: Invalid file name: NULL!");
         return ret;
     }
 

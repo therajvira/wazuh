@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -436,6 +436,52 @@ static char* build_json_keys_message(const char *ar_name, char **keys) {
     return msg;
 }
 
+void splitStrFromCharDelimiter(const char * output_buf, const char delimiter, char * strBefore, char * strAfter){
+    const char *pos = NULL;
+
+    if (output_buf != NULL) {
+        pos = strchr(output_buf, delimiter);
+
+        if (pos != NULL) {
+            if (strBefore != NULL) {
+                strncpy(strBefore, output_buf, pos - output_buf);
+            }
+            if (strAfter != NULL) {
+                strncpy(strAfter, pos + 1, strlen(pos));
+            }
+        }
+    }
+}
+
+int isEnabledFromPattern(const char * output_buf, const char * str_pattern_1, const char * str_pattern_2) {
+    int retVal = 0;
+    const char *pos = NULL;
+
+    if (str_pattern_1 != NULL) {
+        pos = strstr(output_buf, str_pattern_1);
+    }
+
+    if (pos != NULL) {
+        char state[OS_MAXSTR];
+        char buffer[OS_MAXSTR];
+
+        if (str_pattern_2 != NULL) {
+            snprintf(buffer, OS_MAXSTR -1, "%%*s %%%lds", strlen(str_pattern_2));
+            if (sscanf(pos, buffer /*"%*s %7s"*/, state) == 1) {
+                if (strcmp(state, str_pattern_2) == 0) {
+                    retVal = 1;
+                } else {
+                    retVal = 0;
+                }
+            }
+        } else {
+            retVal = 1;
+        }
+    }
+
+    return retVal;
+}
+
 #ifndef WIN32
 
 int lock(const char *lock_path, const char *lock_pid_path, const char *log_path, const char *proc_name) {
@@ -565,7 +611,7 @@ int get_ip_version(const char *ip) {
 
     memset(&hint, '\0', sizeof hint);
 
-    hint.ai_family = PF_UNSPEC;
+    hint.ai_family = AF_UNSPEC;
     hint.ai_flags = AI_NUMERICHOST;
 
     ret = getaddrinfo(ip, NULL, &hint, &res);

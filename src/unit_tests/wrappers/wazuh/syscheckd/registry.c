@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -12,7 +12,12 @@
 #include <stdarg.h>
 #include <setjmp.h>
 #include <cmocka.h>
+#include <cJSON.h>
 
 void __wrap_fim_registry_scan() {
     return;
+}
+
+cJSON* __wrap_fim_dbsync_registry_value_json_event(){
+    return mock_ptr_type(cJSON*);
 }

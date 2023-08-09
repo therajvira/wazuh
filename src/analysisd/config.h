@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -11,16 +11,15 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include "config/config.h"
-#include "config/global-config.h"
-#include "config/active-response.h"
+#include "../config/config.h"
+#include "../config/global-config.h"
+#include "../config/active-response.h"
 #include "eventinfo.h"
-#include "analysisd/decoders/plugin_decoders.h"
+#include "decoders/plugin_decoders.h"
 
 #ifdef LIBGEOIP_ENABLED
 #include "GeoIP.h"
 #endif
-
 
 extern long int __crt_ftell; /* Global ftell pointer */
 extern _Config Config;       /* Global Config structure */
@@ -42,6 +41,6 @@ cJSON *getRulesConfig(void);
 void _getRulesListJSON(RuleNode *list, cJSON *array);
 cJSON *getAnalysisInternalOptions(void);
 cJSON *getManagerLabelsConfig(void);
-void getActiveResponseInJSON(const Eventinfo *lf, const active_response *ar, char *extra_args, char *temp_msg);
+void getActiveResponseInJSON(const Eventinfo *lf, const active_response *ar, char *extra_args, char *temp_msg, bool escape);
 
 #endif /* CONFIG_H */

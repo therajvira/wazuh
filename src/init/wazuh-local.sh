@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # wazuh-control        This shell script takes care of starting
 #                      or stopping ossec-hids
 # Author: Daniel B. Cid <daniel.cid@gmail.com>
@@ -13,8 +13,8 @@ DIR=`dirname $PWD`;
 PLIST=${DIR}/bin/.process_list;
 
 # Installation info
-VERSION="v4.3.0"
-REVISION="40301"
+VERSION="v4.8.0"
+REVISION="40800"
 TYPE="local"
 
 ###  Do not modify below here ###
@@ -44,7 +44,7 @@ MAX_KILL_TRIES=600
 
 checkpid() {
     for i in ${DAEMONS}; do
-        for j in `cat ${DIR}/var/run/${i}*.pid 2>/dev/null`; do
+        for j in `cat ${DIR}/var/run/${i}-*.pid 2>/dev/null`; do
             ps -p $j > /dev/null 2>&1
             if [ ! $? = 0 ]; then
                 echo "Deleting PID file '${DIR}/var/run/${i}-${j}.pid' not used..."
@@ -176,8 +176,8 @@ disable()
     if [ "$daemon" != '' ]; then
         pstatus ${daemon};
         if [ $? = 1 ]; then
-            kill `cat $DIR/var/run/$daemon*`
-            rm $DIR/var/run/$daemon*
+            kill `cat $DIR/var/run/$daemon-*`
+            rm $DIR/var/run/$daemon-*
             echo "Killing ${daemon}...";
         fi
     fi
@@ -279,9 +279,9 @@ pstatus()
         return 0;
     fi
 
-    ls ${DIR}/var/run/${pfile}*.pid > /dev/null 2>&1
+    ls ${DIR}/var/run/${pfile}-*.pid > /dev/null 2>&1
     if [ $? = 0 ]; then
-        for pid in `cat ${DIR}/var/run/${pfile}*.pid 2>/dev/null`; do
+        for pid in `cat ${DIR}/var/run/${pfile}-*.pid 2>/dev/null`; do
             ps -p ${pid} > /dev/null 2>&1
             if [ ! $? = 0 ]; then
                 echo "${pfile}: Process ${pid} not used by Wazuh, removing..."
@@ -325,7 +325,7 @@ stop_service()
         pstatus ${i};
         if [ $? = 1 ]; then
             echo "Killing ${i}...";
-            pid=`cat ${DIR}/var/run/${i}*.pid`
+            pid=`cat ${DIR}/var/run/${i}-*.pid`
             kill $pid
 
             if ! wait_pid $pid
@@ -336,7 +336,7 @@ stop_service()
         else
             echo "${i} not running...";
         fi
-        rm -f ${DIR}/var/run/${i}*.pid
+        rm -f ${DIR}/var/run/${i}-*.pid
     done
 
 
@@ -365,6 +365,15 @@ info()
     fi
 }
 
+restart_service()
+{
+    testconfig
+    lock
+    stop_service
+    start_service
+    unlock
+}
+
 ### MAIN HERE ###
 
 arg=$2
@@ -382,18 +391,11 @@ stop)
     unlock
     ;;
 restart)
-    testconfig
-    lock
-    stop_service
-    start_service
-    unlock
+    restart_service
     ;;
 reload)
     DAEMONS=$(echo $DAEMONS | sed 's/wazuh-execd//')
-    lock
-    stop_service
-    start_service
-    unlock
+    restart_service
     ;;
 status)
     lock

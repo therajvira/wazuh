@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -25,7 +25,7 @@
  */
 
 /* Prototypes */
-static int _InternalMatch(const char *pattern, const char *str, size_t count) __attribute__((nonnull));
+static int _InternalMatch(const char *pattern, const char *str, size_t count);
 
 
 /* Search for pattern in the string */
@@ -64,6 +64,10 @@ static int _InternalMatch(const char *pattern, const char *str, size_t pattern_s
     const uchar *pt = (const uchar *)pattern;
     const uchar *st = (const uchar *)str;
     const uchar last_char = (const uchar) pattern[pattern_size];
+
+    if (str == NULL) {
+        return (FALSE);
+    }
 
     if (*pattern == '\0') {
         return (TRUE);

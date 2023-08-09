@@ -1,7 +1,7 @@
 /* Included and modified strings.c from the OpenBSD project */
 
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * Copyright (c) 1980, 1987, 1993
  * The Regents of the University of California.  All rights reserved.
  *
@@ -45,7 +45,7 @@
 
 #ifdef SOLARIS
 #include <sys/exechdr.h>
-#elif defined Darwin || defined HPUX
+#elif defined Darwin || defined HPUX || defined ALPINE
 
 /* For some reason darwin does not have that */
 struct exec {
@@ -68,7 +68,9 @@ struct exec {
 #define M_OLDSUN2      0
 
 #else
+
 #include <a.out.h>
+
 #endif
 
 #ifndef PAGSIZ

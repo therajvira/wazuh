@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for GitHub logs
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * May 3, 2021.
  *
  * This program is free software; you can redistribute it
@@ -16,16 +16,21 @@
 
 #define WM_GITHUB_DEFAULT_ENABLED 1
 #define WM_GITHUB_DEFAULT_ONLY_FUTURE_EVENTS 1
-#define WM_GITHUB_DEFAULT_INTERVAL 600
-#define WM_GITHUB_DEFAULT_DELAY 1
+#define WM_GITHUB_DEFAULT_INTERVAL 60
+#define WM_GITHUB_DEFAULT_DELAY 30
 #define WM_GITHUB_MSG_DELAY 1000000 / wm_max_eps
 #define WM_GITHUB_DEFAULT_CURL_MAX_SIZE 1048576L
+#define WM_GITHUB_DEFAULT_CURL_REQUEST_TIMEOUT 60L
 
 #define ITEM_PER_PAGE 100
 #define RETRIES_TO_SEND_ERROR 3
 #define GITHUB_NEXT_PAGE_REGEX "<(\\S+)>;\\s*rel=\"next\""
 
 #define GITHUB_API_URL "https://api.github.com/orgs/%s/audit-log?phrase=created:%s..%s&include=%s&order=asc&per_page=%d"
+
+#define EVENT_TYPE_ALL "all"
+#define EVENT_TYPE_GIT "git"
+#define EVENT_TYPE_WEB "web"
 
 typedef struct wm_github_auth {
     char *org_name;                         // Organization name
@@ -40,6 +45,7 @@ typedef struct wm_github_state {
 typedef struct wm_github_fail {
     int fails;
     char *org_name;
+    char *event_type;
     struct wm_github_fail *next;
 } wm_github_fail;
 

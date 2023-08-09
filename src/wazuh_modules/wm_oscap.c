@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for OpenSCAP
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * April 25, 2016.
  *
  * This program is free software; you can redistribute it
@@ -11,19 +11,24 @@
 
 #include "wmodules.h"
 
+#ifdef WIN32
+static DWORD WINAPI wm_oscap_main(wm_oscap *arg);       // Module main function. It won't return
+#else
 static void* wm_oscap_main(wm_oscap *oscap);        // Module main function. It won't return
+#endif
 static void wm_oscap_destroy(wm_oscap *oscap);      // Destroy data
 cJSON *wm_oscap_dump(const wm_oscap *oscap);
 
 // OpenSCAP module context definition
 
 const wm_context WM_OSCAP_CONTEXT = {
-    "open-scap",
-    (wm_routine)wm_oscap_main,
-    (wm_routine)(void *)wm_oscap_destroy,
-    (cJSON * (*)(const void *))wm_oscap_dump,
-    NULL,
-    NULL
+    .name = "open-scap",
+    .start = (wm_routine)wm_oscap_main,
+    .destroy = (void(*)(void *))wm_oscap_destroy,
+    .dump = (cJSON * (*)(const void *))wm_oscap_dump,
+    .sync = NULL,
+    .stop = NULL,
+    .query = NULL,
 };
 
 #ifndef WIN32
@@ -289,9 +294,9 @@ void wm_oscap_info() {
 
 #else
 
-void* wm_oscap_main(__attribute__((unused)) wm_oscap *oscap) {
+DWORD WINAPI wm_oscap_main(__attribute__((unused)) wm_oscap *arg) {
     mtinfo(WM_OSCAP_LOGTAG, "OPEN-SCAP module not compatible with Windows.");
-    return NULL;
+    return 0;
 }
 #endif
 
@@ -338,9 +343,7 @@ cJSON *wm_oscap_dump(const wm_oscap *oscap) {
     return root;
 }
 
-
 // Destroy data
-
 void wm_oscap_destroy(wm_oscap *oscap) {
     wm_oscap_eval *cur_eval;
     wm_oscap_eval *next_eval;

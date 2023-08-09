@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -34,8 +34,19 @@
 #define CCLUSTER      004000000
 #define CSOCKET       010000000
 #define CLOGTEST      020000000
+#define WAZUHDB       040000000
 
 #define MAX_NEEDED_TAGS 4
+
+#define BITMASK(modules)   (\
+                            (modules & CGLOBAL       ) | (modules & CRULES        ) | (modules & CSYSCHECK     ) |\
+                            (modules & CROOTCHECK    ) | (modules & CALERTS       ) | (modules & CLOCALFILE    ) |\
+                            (modules & CREMOTE       ) | (modules & CCLIENT       ) | (modules & CMAIL         ) |\
+                            (modules & CAR           ) | (modules & CDBD          ) | (modules & CSYSLOGD      ) |\
+                            (modules & CAGENT_CONFIG ) | (modules & CAGENTLESS    ) | (modules & CREPORTS      ) |\
+                            (modules & CINTEGRATORD  ) | (modules & CWMODULE      ) | (modules & CLABELS       ) |\
+                            (modules & CAUTHD        ) | (modules & CBUFFER       ) | (modules & CCLUSTER      ) |\
+                            (modules & CSOCKET       ) | (modules & CLOGTEST      ) | (modules & WAZUHDB       ) )
 
 typedef enum needed_tags {
     JSONOUT_OUTPUT = 0,
@@ -44,12 +55,16 @@ typedef enum needed_tags {
     LOGALL_JSON
 } NeededTags;
 
-#include "os_xml/os_xml.h"
+
+#include "../os_xml/os_xml.h"
+#include "../config/wazuh_db-config.h"
+#include "time.h"
 
 /* Main function to read the config */
 int ReadConfig(int modules, const char *cfgfile, void *d1, void *d2);
+void PrintErrorAcordingToModules(int modules, const char *cfgfile);
 
-int Read_Global(XML_NODE node, void *d1, void *d2);
+int Read_Global(const OS_XML *xml, XML_NODE node, void *d1, void *d2);
 int Read_GlobalSK(XML_NODE node, void *configp, void *mailp);
 int Read_Syscheck(const OS_XML *xml, XML_NODE node, void *d1, void *d2, int modules);
 int Read_Rootcheck(XML_NODE node, void *d1, void *d2);
@@ -68,11 +83,40 @@ int ReadActiveCommands(XML_NODE node, void *d1, void *d2);
 int Read_CReports(XML_NODE node, void *config1, void *config2);
 int Read_WModule(const OS_XML *xml, xml_node *node, void *d1, void *d2);
 int Read_SCA(const OS_XML *xml, xml_node *node, void *d1);
-int Read_GCP(const OS_XML *xml, xml_node *node, void *d1);
+
+/**
+ * @brief Read the configuration for client section with centralized configuration
+ * @param node XML node to analyze
+ * @param d1 Pub/Sub configuration structure
+ */
+int Read_Client_Shared(XML_NODE node, void *d1);
+
+/**
+ * @brief Read the configuration for Google Cloud Pub/Sub
+ * @param xml XML object
+ * @param node XML node to analyze
+ * @param d1 Pub/Sub configuration structure
+ */
+int Read_GCP_pubsub(const OS_XML *xml, xml_node *node, void *d1);
+
+/**
+ * @brief Read the configuration for a Google Cloud bucket
+ * @param xml XML object
+ * @param node XML node to analyze
+ * @param d1 Bucket configuration structure
+ */
+int Read_GCP_bucket(const OS_XML *xml, xml_node *node, void *d1);
+
 #ifndef WIN32
 int Read_Rules(XML_NODE node, void *d1, void *d2);
 int Read_Fluent_Forwarder(const OS_XML *xml, xml_node *node, void *d1);
-int Read_Authd(XML_NODE node, void *d1, void *d2);
+int Read_Authd(const OS_XML *xml, XML_NODE node, void *d1, void *d2);
+#ifndef CLIENT
+// Current key-request module
+int authd_read_key_request(xml_node **nodes, void *config);
+// Deprecated agent-key-polling module
+int wm_key_request_read(__attribute__((unused)) xml_node **nodes, __attribute__((unused)) void *module);
+#endif
 #endif
 int Read_Labels(XML_NODE node, void *d1, void *d2);
 int Read_Cluster(XML_NODE node, void *d1, void *d2);

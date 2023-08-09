@@ -11,7 +11,7 @@ info:
 
     Wazuh API endpoints require authentication in order to be used. Therefore, all calls must include a JSON Web Token.
     JWT is an open standard (RFC 7519) that defines a compact and self-contained way for securely transmitting
-    information between parties as a JSON object. Perform a call with `basicAuth` to `GET /security/user/authenticate`
+    information between parties as a JSON object. Perform a call with `basicAuth` to `POST /security/user/authenticate`
     and obtain a JWT token in order to run any endpoint.
 
     JWT tokens have a default duration of 900 seconds. To change this value, you must perform a call with a valid
@@ -20,7 +20,7 @@ info:
 
     Login with USER and PASSWORD:
 
-    `curl -u <USER>:<PASSWORD> -k -X GET "https://<HOST_IP>:55000/security/user/authenticate"`
+    `curl -u <USER>:<PASSWORD> -k -X POST "https://<HOST_IP>:55000/security/user/authenticate"`
     ```json
     {
         "data": {
@@ -40,12 +40,12 @@ info:
 
     <SecurityDefinitions />
 
-  version: '4.3.0'
-  x-revision: '40301'
+  version: '4.8.0'
+  x-revision: '40800'
   title: 'Wazuh API REST'
   license:
     name: 'GPL 2.0'
-    url: 'https://github.com/wazuh/wazuh/blob/4.3/LICENSE'
+    url: 'https://github.com/wazuh/wazuh/blob/v4.8.0/LICENSE'
 
 servers:
   - url: '{protocol}://{host}:{port}'
@@ -530,6 +530,22 @@ x-rbac-catalog:
         actions: [ 'vulnerability:read' ]
         resources: [ 'agent:id:011', 'agent:group:us-west' ]
         effect: "allow"
+    'vulnerability:run':
+      description: "Allow running a vulnerability detector scan"
+      resources:
+        - $ref: '#/x-rbac-catalog/resources/*:*'
+      example:
+        actions: [ 'vulnerability:run' ]
+        resources: [ '*:*:*' ]
+        effect: "allow"
+    'event:ingest':
+      description: "Ingest events"
+      resources:
+        - $ref: '#/x-rbac-catalog/resources/*:*'
+      example:
+        actions: ['event:ingest']
+        resources: ['*:*:*']
+        effect: "allow"
 
 components:
   responses:
@@ -556,7 +572,7 @@ components:
             detail: "Permission denied: Resource type: *:*"
             remediation: "Please, make sure you have permissions to execute the current request. For more information
             on how to set up permissions, please visit
-            https://documentation.wazuh.com/4.3/user-manual/api/rbac/configuration.html"
+            https://documentation.wazuh.com/4.8/user-manual/api/rbac/configuration.html"
             error: 4000
             dapi_errors:
               unknown-node:
@@ -623,7 +639,7 @@ components:
             title: "Wazuh Error"
             detail: "Maximum number of requests per minute reached"
             remediation: "This limit can be changed in api.yaml file. More information here:
-            https://documentation.wazuh.com/4.3/user-manual/api/security/configuration.html"
+            https://documentation.wazuh.com/4.8/user-manual/api/security/configuration.html"
             code: 6001
 
     ResourceNotFoundResponse:
@@ -636,7 +652,7 @@ components:
             title: "Resource Not Found"
             detail: "The group does not exist"
             remediation: "Please, use `GET /groups` to find all available groups:
-            https://documentation.wazuh.com/4.3/user-manual/api/rbac/configuration.html"
+            https://documentation.wazuh.com/4.8/user-manual/api/rbac/configuration.html"
             code: 1710
             dapi_errors:
               unknown-node:
@@ -791,6 +807,38 @@ components:
               items:
                 $ref: '#/components/schemas/AgentDistinct'
 
+    AllItemsResponseWazuhDaemonStats:
+      allOf:
+        - type: object
+          required:
+            - affected_items
+          properties:
+            affected_items:
+              type: array
+              description: "Items that successfully applied the API call action"
+              items:
+                oneOf:
+                  - $ref: '#/components/schemas/WazuhRemotedStatsItem'
+                  - $ref: '#/components/schemas/WazuhAnalysisdStatsItem'
+                  - $ref: '#/components/schemas/WazuhDBStatsItem'
+        - $ref: '#/components/schemas/AllItemsResponse'
+
+
+    AllItemsResponseWazuhDaemonStatsAgents:
+      allOf:
+        - type: object
+          required:
+            - affected_items
+          properties:
+            affected_items:
+              type: array
+              description: "Items that successfully applied the API call action"
+              items:
+                oneOf:
+                  - $ref: '#/components/schemas/WazuhRemotedStatsAgentsItem'
+                  - $ref: '#/components/schemas/WazuhAnalysisdStatsAgentsItem'
+        - $ref: '#/components/schemas/AllItemsResponse'
+
     AllItemsResponseGroups:
       allOf:
         - type: object
@@ -841,6 +889,19 @@ components:
               description: "Items that successfully applied the API call action"
               items:
                 $ref: '#/components/schemas/NodeHealthcheck'
+        - $ref: '#/components/schemas/AllItemsResponse'
+
+    AllItemsResponseNodeRulesetSynchronizationStatus:
+      allOf:
+        - type: object
+          required:
+            - affected_items
+          properties:
+            affected_items:
+              type: array
+              description: "Items that successfully applied the API call action"
+              items:
+                $ref: '#/components/schemas/NodeRulesetSyncStatus'
         - $ref: '#/components/schemas/AllItemsResponse'
 
     AllItemsResponseGroupIDs:
@@ -1157,7 +1218,7 @@ components:
               items:
                 $ref: '#/components/schemas/SyscheckDatabase'
 
-    AllItemsResponseSyscheckLastScan:
+    AllItemsResponseLastScan:
       allOf:
         - $ref: '#/components/schemas/AllItemsResponse'
         - type: object
@@ -1314,6 +1375,7 @@ components:
           description: "Command running in the agent. If this value starts by `!`, then it refers to a script name
           instead of a command name"
           type: string
+          format: active_response_command
         custom:
           description: "Whether the specified command is a custom command or not"
           type: boolean
@@ -1418,9 +1480,7 @@ components:
       properties:
         affected_items:
           type: array
-          description: "List of removed groups with the agents which belonged to it and might have been reassigned to group default"
-          items:
-            $ref: '#/components/schemas/GroupDelete'
+          description: "List of removed groups, agents belonging exclusively to the removed groups will be reassigned to group default"
 
     AgentIdKey:
       type: object
@@ -1458,21 +1518,36 @@ components:
     AgentsSummaryStatus:
       type: object
       properties:
-        total:
-          type: integer
-          format: int32
-        active:
-          type: integer
-          format: int32
-        disconnected:
-          type: integer
-          format: int32
-        never_connected:
-          type: integer
-          format: int32
-        pending:
-          type: integer
-          format: int32
+        connection:
+          type: object
+          properties:
+            total:
+              type: integer
+              format: int32
+            active:
+              type: integer
+              format: int32
+            disconnected:
+              type: integer
+              format: int32
+            never_connected:
+              type: integer
+              format: int32
+            pending:
+              type: integer
+              format: int32
+        configuration:
+          type: object
+          properties:
+            total:
+              type: integer
+              format: int32
+            synced:
+              type: integer
+              format: int32
+            not_synced:
+              type: integer
+              format: int32
 
     AgentDistinct:
       allOf:
@@ -1523,12 +1598,6 @@ components:
       description: "Group name|all"
       format: group_names_or_all
 
-    GroupDelete:
-      type: object
-      description: "Deleted group with a list of agents that were assigned to it"
-      additionalProperties:
-        type: array
-
     AgentConfiguration:
       type: object
       description: "Current agent's configuration. The output varies with requested component and the agent
@@ -1555,6 +1624,287 @@ components:
         config:
           type: object
           description: "Group configuration. The fields on this object depend on the actual group configuration"
+
+    AgentInsertForce:
+      type: object
+      description: "Remove the old agent with the same name, ID or IP if the configuration is matched"
+      properties:
+        enabled:
+          type: boolean
+          default: True
+          description: "Enable force option"
+        disconnected_time:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+              default: True
+              description: "Enable force disconnected_time option"
+            value:
+              type: string
+              default: "1h"
+              description: "Time the agent must has been disconnected to force the insertion. Time in seconds, ‘[n_days]d’, ‘[n_hours]h’, ‘[n_minutes]m’ or ‘[n_seconds]s’. For example, `7d`, `10s` and `10` are valid values. If no time unit is specified, seconds are used"
+              format: timeframe
+        after_registration_time:
+          type: string
+          default: "1h"
+          description: "Time the agent must has been registered to force the insertion. Time in seconds, ‘[n_days]d’, ‘[n_hours]h’, ‘[n_minutes]m’ or ‘[n_seconds]s’. For example, `7d`, `10s` and `10` are valid values. If no time unit is specified, seconds are used"
+          format: timeframe
+
+    WazuhRemotedStatsAgentsItem:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: "Daemon stats request time"
+        name:
+          type: string
+          description: "Daemon name"
+          enum:
+            - wazuh-remoted
+        agents:
+          type: array
+          items:
+            type: object
+            properties:
+              uptime:
+                type: string
+                format: date-time
+                description: "When the count of the metrics started"
+              id:
+                type: integer
+                format: int32
+                description: "Agent ID"
+              metrics:
+                type: object
+                properties:
+                  messages:
+                    type: object
+                    properties:
+                      received_breakdown:
+                        type: object
+                        properties:
+                          control:
+                            type: integer
+                            format: int32
+                            description: "Control messages received from agent"
+                          control_breakdown:
+                            type: object
+                            properties:
+                              keepalive:
+                                type: integer
+                                format: int32
+                                description: "Keepalive messages from agent"
+                              request:
+                                type: integer
+                                format: int32
+                                description: "Request messages (for example, WPK responses) from agent"
+                              shutdown:
+                                type: integer
+                                format: int32
+                                description: "Shutdown messages from agent"
+                              startup:
+                                type: integer
+                                format: int32
+                                description: "Startup messages from agent"
+                          event:
+                            type: integer
+                            format: int32
+                            description: "Event messages (syscheck, syscollector, logcollector, etc.) received from agent"
+                      sent_breakdown:
+                        type: object
+                        properties:
+                          ack:
+                            type: integer
+                            format: int32
+                            description: "ACK messages (response to keepalive, startup and shutdown) sent to agent"
+                          ar:
+                            type: integer
+                            format: int32
+                            description: "Active response messages sent to agent"
+                          discarded:
+                            type: integer
+                            format: int32
+                            description: "Messages discarded because the send queue was full (for this agent)"
+                          request:
+                            type: integer
+                            format: int32
+                            description: "Request messages (for example, WPK chunks) sent to agent"
+                          sca:
+                            type: integer
+                            format: int32
+                            description: "SCA messages sent to agent"
+                          shared:
+                            type: integer
+                            format: int32
+                            description: "Shared configuration messages (merged.mg) sent to agent"
+
+    WazuhAnalysisdStatsAgentsItem:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: "Daemon stats request time"
+        name:
+          type: string
+          description: "Daemon name"
+          enum:
+            - wazuh-analysisd
+        agents:
+          type: array
+          items:
+            type: object
+            properties:
+              uptime:
+                type: string
+                format: date-time
+                description: "When the count of the metrics started"
+              id:
+                type: integer
+                format: int32
+                description: "Agent ID"
+              metrics:
+                type: object
+                properties:
+                  events:
+                    type: object
+                    properties:
+                      processed:
+                        type: integer
+                        format: int32
+                        description: "Total processed events (analyzed by rules) from agent"
+                      received_breakdown:
+                        type: object
+                        properties:
+                          decoded_breakdown:
+                            type: object
+                            properties:
+                              agent:
+                                type: integer
+                                format: int32
+                                description: "Events coming from agentd (this agent)"
+                              dbsync:
+                                type: integer
+                                format: int32
+                                description: "Synchronization events (this agent)"
+                              integrations_breakdown:
+                                type: object
+                                properties:
+                                  virustotal:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from VirusTotal (this agent)"
+                              modules_breakdown:
+                                type: object
+                                properties:
+                                  aws:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from AWS module (this agent)"
+                                  azure:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from Azure module (this agent)"
+                                  ciscat:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from CIS-CAT module (this agent)"
+                                  command:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from command module (this agent)"
+                                  docker:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from Docker module (this agent)"
+                                  gcp:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from GCP module (this agent)"
+                                  github:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from GitHub module (this agent)"
+                                  logcollector_breakdown:
+                                    type: object
+                                    properties:
+                                      eventchannel:
+                                        type: integer
+                                        format: int32
+                                        description: "EventChannel events collected by logcollector (this agent)"
+                                      eventlog:
+                                        type: integer
+                                        format: int32
+                                        description: "EventLog events collected by logcollector (this agent)"
+                                      macos:
+                                        type: integer
+                                        format: int32
+                                        description: "MacOS events collected by logcollector (this agent)"
+                                      others:
+                                        type: integer
+                                        format: int32
+                                        description: "Other events collected by logcollector (this agent)"
+                                  office365:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from Office365 module (this agent)"
+                                  oscap:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from OSCAP module (this agent)"
+                                  osquery:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from OSQuery module (this agent)"
+                                  rootcheck:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from rootcheck (syscheckd) (this agent)"
+                                  sca:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from SCA module (this agent)"
+                                  syscheck:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from syscheckd (this agent)"
+                                  syscollector:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from syscollector module (this agent)"
+                                  upgrade:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from upgrade agent module (this agent)"
+                                  vulnerability:
+                                    type: integer
+                                    format: int32
+                                    description: "Events coming from vulnerability detector (this agent)"
+                              monitor:
+                                type: integer
+                                format: int32
+                                description: "Events coming from monitord (this agent)"
+                              remote:
+                                type: integer
+                                format: int32
+                                description: "Events coming from remoted (this agent)"
+                      written_breakdown:
+                        type: object
+                        properties:
+                          alerts:
+                            type: integer
+                            format: int32
+                            description: "Alerts written in alerts log file (this agent)"
+                          archives:
+                            type: integer
+                            format: int32
+                            description: "Alerts written in archives log file (this agent)"
+                          firewall:
+                            type: integer
+                            format: int32
+                            description: "Alerts written in firewall log file (this agent)"
 
     ## CisCat models
     CiscatResults:
@@ -1650,22 +2000,32 @@ components:
               properties:
                 last_keep_alive:
                   type: string
-                last_sync_agent_groups:
-                  type: object
-                  properties:
-                    date_start_master:
-                      type: string
-                    date_end_master:
-                      type: string
-                    total_agentgroups:
-                      type: integer
-                      format: int32
                 last_sync_agentinfo:
                   type: object
                   properties:
                     date_start_master:
                       type: string
                     date_end_master:
+                      type: string
+                    n_synced_chunks:
+                      type: integer
+                      format: int32
+                last_sync_agentgroup:
+                  type: object
+                  properties:
+                    date_start:
+                      type: string
+                    date_end:
+                      type: string
+                    n_synced_chunks:
+                      type: integer
+                      format: int32
+                last_sync_full_agentgroup:
+                  type: object
+                  properties:
+                    date_start:
+                      type: string
+                    date_end:
                       type: string
                     n_synced_chunks:
                       type: integer
@@ -1692,10 +2052,20 @@ components:
                         shared:
                           type: integer
                           format: int32
-                sync_agentinfo_free:
+                sync_agent_info_free:
                   type: boolean
                 sync_integrity_free:
                   type: boolean
+
+    NodeRulesetSyncStatus:
+      type: object
+      properties:
+        name:
+          type: string
+          description: "Node name"
+        synced:
+          type: boolean
+          description: "Whether the ruleset is synchronized or not"
 
     DaemonStatus:
       type: string
@@ -1945,6 +2315,1294 @@ components:
           description: "User's JWT token"
 
     # Cluster and manager models
+    WazuhRemotedStatsItem:
+      type: object
+      properties:
+        uptime:
+          type: string
+          format: date-time
+          description: "When the count of the metrics started"
+        timestamp:
+          type: string
+          format: date-time
+          description: "Daemon stats request time"
+        name:
+          type: string
+          description: "Daemon name"
+          enum:
+            - wazuh-remoted
+        metrics:
+          type: object
+          properties:
+            bytes:
+              type: object
+              properties:
+                received:
+                  type: integer
+                  format: int32
+                  description: "Bytes received from agents"
+                sent:
+                  type: integer
+                  format: int32
+                  description: "Bytes sent to agents"
+            keys_reload_count:
+              type: integer
+              format: int32
+              description: "Number of times keys were reloaded into memory"
+            messages:
+              type: object
+              properties:
+                received_breakdown:
+                  type: object
+                  properties:
+                    control:
+                      type: integer
+                      format: int32
+                      description: "Control messages received from agents"
+                    control_breakdown:
+                      type: object
+                      properties:
+                        keepalive:
+                          type: integer
+                          format: int32
+                          description: "Keepalive messages from agents"
+                        request:
+                          type: integer
+                          format: int32
+                          description: "Request messages (for example, WPK responses) from agents"
+                        shutdown:
+                          type: integer
+                          format: int32
+                          description: "Shutdown messages from agents"
+                        startup:
+                          type: integer
+                          format: int32
+                          description: "Startup messages from agents"
+                    dequeued_after:
+                      type: integer
+                      format: int32
+                      description: "Messages dequeued after newer messages (counter < current counter)"
+                    discarded:
+                      type: integer
+                      format: int32
+                      description: "Messages discarded because the received queue was full"
+                    event:
+                      type: integer
+                      format: int32
+                      description: "Event messages (syscheck, syscollector, logcollector, etc.) received from agents"
+                    ping:
+                      type: integer
+                      format: int32
+                      description: "Ping messages received"
+                    unknown:
+                      type: integer
+                      format: int32
+                      description: "Not recognized messages"
+                sent_breakdown:
+                  type: object
+                  properties:
+                    ack:
+                      type: integer
+                      format: int32
+                      description : "ACK messages (response to keepalive, startup and shutdown) sent to agents"
+                    ar:
+                      type: integer
+                      format: int32
+                      description: "Active response messages sent to agents"
+                    discarded:
+                      type: integer
+                      format: int32
+                      description: "Messages discarded because the send queue was full"
+                    request:
+                      type: integer
+                      format: int32
+                      description: "Request messages (for example, WPK chunks) sent to agents"
+                    sca:
+                      type: integer
+                      format: int32
+                      description: "SCA messages sent to agents"
+                    shared:
+                      type: integer
+                      format: int32
+                      description: "Shared configuration messages (merged.mg) sent to agents"
+            queues:
+              type: object
+              properties:
+                received:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of received messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the received queue (count)"
+            tcp_sessions:
+              type: integer
+              format: int32
+              description: "Current active TCP sessions (agents)"
+
+    WazuhAnalysisdStatsItem:
+      type: object
+      properties:
+        uptime:
+          type: string
+          format: date-time
+          description: "When the count of the metrics started"
+        timestamp:
+          type: string
+          format: date-time
+          description: "Daemon stats request time"
+        name:
+          type: string
+          description: "Daemon name"
+          enum:
+            - wazuh-analysisd
+        metrics:
+          type: object
+          properties:
+            bytes:
+              type: object
+              properties:
+                received:
+                  type: integer
+                  format: int32
+                  description: "Bytes received from agents and local modules"
+            eps:
+              type: object
+              properties:
+                available_credits:
+                  type: integer
+                  format: int32
+                  description: "Available credits to process events in the current timeframe"
+                events_dropped:
+                  type: integer
+                  format: int32
+                  description: "Events discarded because the EPS limit was reached and queues were full"
+                seconds_over_limit:
+                  type: integer
+                  format: int32
+                  description: "Time in seconds the EPS limit was exceeded"
+            events:
+              type: object
+              properties:
+                processed:
+                  type: integer
+                  format: int32
+                  description: "Total processed events (analyzed by rules)"
+                received:
+                  type: integer
+                  format: int32
+                  description: "Total received events from agents and local modules"
+                received_breakdown:
+                  type: object
+                  properties:
+                    decoded_breakdown:
+                      type: object
+                      properties:
+                        agent:
+                          type: integer
+                          format: int32
+                          description: "Events coming from agentd"
+                        agentless:
+                          type: integer
+                          format: int32
+                          description: "Events coming from agentlessd"
+                        dbsync:
+                          type: integer
+                          format: int32
+                          description: "Synchronization events"
+                        integrations_breakdown:
+                          type: object
+                          properties:
+                            virustotal:
+                              type: integer
+                              format: int32
+                              description: "Events coming from VirusTotal integration"
+                        modules_breakdown:
+                          type: object
+                          properties:
+                            aws:
+                              type: integer
+                              format: int32
+                              description: "Events coming from AWS module"
+                            azure:
+                              type: integer
+                              format: int32
+                              description: "Events coming from Azure module"
+                            ciscat:
+                              type: integer
+                              format: int32
+                              description: "Events coming from CIS-CAT module"
+                            command:
+                              type: integer
+                              format: int32
+                              description: "Events coming from command module"
+                            docker:
+                              type: integer
+                              format: int32
+                              description: "Events coming from Docker module"
+                            gcp:
+                              type: integer
+                              format: int32
+                              description: "Events coming from GCP module"
+                            github:
+                              type: integer
+                              format: int32
+                              description: "Events coming from GitHub module"
+                            logcollector_breakdown:
+                              type: object
+                              properties:
+                                eventchannel:
+                                  type: integer
+                                  format: int32
+                                  description: "EventChannel events collected by logcollector"
+                                eventlog:
+                                  type: integer
+                                  format: int32
+                                  description: "EventLog events collected by logcollector"
+                                macos:
+                                  type: integer
+                                  format: int32
+                                  description: "MacOS events collected by logcollector"
+                                others:
+                                  type: integer
+                                  format: int32
+                                  description: "Other events collected by logcollector"
+                            office365:
+                              type: integer
+                              format: int32
+                              description: "Events coming from Office365 module"
+                            oscap:
+                              type: integer
+                              format: int32
+                              description: "Events coming from OSCAP module"
+                            osquery:
+                              type: integer
+                              format: int32
+                              description: "Events coming from OSQuery module"
+                            rootcheck:
+                              type: integer
+                              format: int32
+                              description: "Events coming from rootcheck (syscheckd)"
+                            sca:
+                              type: integer
+                              format: int32
+                              description: "Events coming from SCA module"
+                            syscheck:
+                              type: integer
+                              format: int32
+                              description: "Events coming from syscheckd"
+                            syscollector:
+                              type: integer
+                              format: int32
+                              description: "Events coming from syscollector module"
+                            upgrade:
+                              type: integer
+                              format: int32
+                              description: "Events coming from upgrade agent module (upgrade responses)"
+                            vulnerability:
+                              type: integer
+                              format: int32
+                              description: "Events coming from vulnerability detector module"
+                        monitor:
+                          type: integer
+                          format: int32
+                          description: "Events coming from monitord"
+                        remote:
+                          type: integer
+                          format: int32
+                          description: "Events coming from remoted"
+                        syslog:
+                          type: integer
+                          format: int32
+                          description: "Events coming from syslog remoted"
+                    dropped_breakdown:
+                      type: object
+                      properties:
+                        agent:
+                          type: integer
+                          format: int32
+                          description: "Events discarded from agentd because the queue was full"
+                        agentless:
+                          type: integer
+                          format: int32
+                          description: "Events discarded from agentlessd because the queue was full"
+                        dbsync:
+                          type: integer
+                          format: int32
+                          description: "Synchronization events discarded because the queue was full"
+                        integrations_breakdown:
+                          type: object
+                          properties:
+                            virustotal:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from VirusTotal integration because the queue was full"
+                        modules_breakdown:
+                          type: object
+                          properties:
+                            aws:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from AWS module because the queue was full"
+                            azure:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from Azure module because the queue was full"
+                            ciscat:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from CIS-CAT module because the queue was full"
+                            command:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from command module because the queue was full"
+                            docker:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from Docker module because the queue was full"
+                            gcp:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from GCP module because the queue was full"
+                            github:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from GitHub module because the queue was full"
+                            logcollector_breakdown:
+                              type: object
+                              properties:
+                                eventchannel:
+                                  type: integer
+                                  format: int32
+                                  description: "EventChannel events collected by logcollector discarded because the queue was full"
+                                eventlog:
+                                  type: integer
+                                  format: int32
+                                  description: "EventLog events collected by logcollector discarded because the queue was full"
+                                macos:
+                                  type: integer
+                                  format: int32
+                                  description: "MacOS events collected by logcollector discarded because the queue was full"
+                                others:
+                                  type: integer
+                                  format: int32
+                                  description: "Other events collected by logcollector discarded because the queue was full"
+                            office365:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from Office365 module because the queue was full"
+                            oscap:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from OSCAP module because the queue was full"
+                            osquery:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from OSQuery module because the queue was full"
+                            rootcheck:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from rootcheck (syscheckd) because the queue was full"
+                            sca:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from SCA module because the queue was full"
+                            syscheck:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from syscheckd because the queue was full"
+                            syscollector:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from syscollector module because the queue was full"
+                            upgrade:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from upgrade agent module because the queue was full"
+                            vulnerability:
+                              type: integer
+                              format: int32
+                              description: "Events discarded from vulnerability detector module because the queue was full"
+                        monitor:
+                          type: integer
+                          format: int32
+                          description: "Events discarded from monitord because the queue was full"
+                        remote:
+                          type: integer
+                          format: int32
+                          description: "Events discarded from remoted because the queue was full"
+                        syslog:
+                          type: integer
+                          format: int32
+                          description: "Events discarded from syslog remoted because the queue was full"
+                written_breakdown:
+                  type: object
+                  properties:
+                    alerts:
+                      type: integer
+                      format: int32
+                      description: "Alerts written in alerts log file"
+                    archives:
+                      type: integer
+                      format: int32
+                      description: "Alerts written in archives log file"
+                    firewall:
+                      type: integer
+                      format: int32
+                      description: "Alerts written in firewall log file"
+                    fts:
+                      type: integer
+                      format: int32
+                      description: "Alerts written in FTS queue file"
+                    stats:
+                      type: integer
+                      format: int32
+                      description: "Alerts written in stats files"
+            queues:
+              type: object
+              properties:
+                alerts:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of alerts messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the alerts queue (percentage)"
+                archives:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of archives messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the archives queue (percentage)"
+                dbsync:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of dbsync messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the dbsync queue (percentage)"
+                eventchannel:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of eventchannel messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the eventchannel queue (percentage)"
+                firewall:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of firewall messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the firewall queue (percentage)"
+                fts:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of FTS messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the FTS queue (percentage)"
+                hostinfo:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of hostinfo messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the hostinfo queue (percentage)"
+                others:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of other events messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the other events queue (percentage)"
+                processed:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of processed messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the processed queue (percentage)"
+                rootcheck:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of rootcheck messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the rootcheck queue (percentage)"
+                sca:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of SCA messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the SCA queue (percentage)"
+                stats:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of stats messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the stats queue (percentage)"
+                syscheck:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of syscheck messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the syscheck queue (percentage)"
+                syscollector:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of syscollector messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the syscollector queue (percentage)"
+                upgrade:
+                  type: object
+                  properties:
+                    size:
+                      type: integer
+                      format: int32
+                      description: "Size of upgrade messages queue"
+                    usage:
+                      type: integer
+                      format: int32
+                      description: "Current usage of the upgrade queue (percentage)"
+
+    WazuhDBStatsItem:
+      type: object
+      properties:
+        uptime:
+          type: string
+          format: date-time
+          description: "When the count of the metrics started"
+        timestamp:
+          type: string
+          format: date-time
+          description: "Daemon stats request time"
+        name:
+          type: string
+          description: "Daemon name"
+          enum:
+            - wazuh-db
+        metrics:
+          type: object
+          properties:
+            queries:
+              type: object
+              properties:
+                received:
+                  type: integer
+                  format: int32
+                  description: "Total of queries through WazuhDB socket"
+                received_breakdown:
+                  type: object
+                  properties:
+                    agent:
+                      type: integer
+                      format: int32
+                      description: "Number of agent queries through WazuhDB socket"
+                    agent_breakdown:
+                      type: object
+                      properties:
+                        db:
+                          type: object
+                          description: "Number of queries per operation"
+                          properties:
+                            begin:
+                              type: integer
+                              format: int32
+                            close:
+                              type: integer
+                              format: int32
+                            commit:
+                              type: integer
+                              format: int32
+                            remove:
+                              type: integer
+                              format: int32
+                            sql:
+                              type: integer
+                              format: int32
+                        tables:
+                          type: object
+                          description: "Number of queries per table"
+                          properties:
+                            ciscat:
+                              type: object
+                              properties:
+                                ciscat:
+                                  type: integer
+                                  format: int32
+                            rootcheck:
+                              type: object
+                              properties:
+                                rootcheck:
+                                  type: integer
+                                  format: int32
+                            sca:
+                              type: object
+                              properties:
+                                sca:
+                                  type: integer
+                                  format: int32
+                            sync:
+                              type: object
+                              properties:
+                                dbsync:
+                                  type: integer
+                                  format: int32
+                            syscheck:
+                              type: object
+                              properties:
+                                fim_file:
+                                  type: integer
+                                  format: int32
+                                fim_registry:
+                                  type: integer
+                                  format: int32
+                                syscheck:
+                                  type: integer
+                                  format: int32
+                            syscollector:
+                              type: object
+                              properties:
+                                syscollector_hotfixes:
+                                  type: integer
+                                  format: int32
+                                syscollector_hwinfo:
+                                  type: integer
+                                  format: int32
+                                syscollector_network_address:
+                                  type: integer
+                                  format: int32
+                                syscollector_network_iface:
+                                  type: integer
+                                  format: int32
+                                syscollector_network_protocol:
+                                  type: integer
+                                  format: int32
+                                syscollector_osinfo:
+                                  type: integer
+                                  format: int32
+                                syscollector_packages:
+                                  type: integer
+                                  format: int32
+                                syscollector_ports:
+                                  type: integer
+                                  format: int32
+                                syscollector_processes:
+                                  type: integer
+                                  format: int32
+                                deprecated:
+                                  type: object
+                                  properties:
+                                    hardware:
+                                      type: integer
+                                      format: int32
+                                    hotfix:
+                                      type: integer
+                                      format: int32
+                                    netaddr:
+                                      type: integer
+                                      format: int32
+                                    netinfo:
+                                      type: integer
+                                      format: int32
+                                    netproto:
+                                      type: integer
+                                      format: int32
+                                    osinfo:
+                                      type: integer
+                                      format: int32
+                                    package:
+                                      type: integer
+                                      format: int32
+                                    port:
+                                      type: integer
+                                      format: int32
+                                    process:
+                                      type: integer
+                                      format: int32
+                            vulnerability:
+                              type: object
+                              properties:
+                                vuln_cves:
+                                  type: integer
+                                  format: int32
+                    global:
+                      type: integer
+                      format: int32
+                      description: "Number of global queries through WazuhDB socket"
+                    global_breakdown:
+                      type: object
+                      properties:
+                        db:
+                          type: object
+                          description: "Number of queries per operation"
+                          properties:
+                            backup:
+                              type: integer
+                              format: int32
+                            sql:
+                              type: integer
+                              format: int32
+                        tables:
+                          type: object
+                          description: "Number of queries per operation in tables"
+                          properties:
+                            agent:
+                              type: object
+                              properties:
+                                delete-agent:
+                                  type: integer
+                                  format: int32
+                                disconnect-agents:
+                                  type: integer
+                                  format: int32
+                                find-agent:
+                                  type: integer
+                                  format: int32
+                                get-agent-info:
+                                  type: integer
+                                  format: int32
+                                get-agents-by-connection-status:
+                                  type: integer
+                                  format: int32
+                                get-all-agents:
+                                  type: integer
+                                  format: int32
+                                get-groups-integrity:
+                                  type: integer
+                                  format: int32
+                                insert-agent:
+                                  type: integer
+                                  format: int32
+                                reset-agents-connection:
+                                  type: integer
+                                  format: int32
+                                select-agent-group:
+                                  type: integer
+                                  format: int32
+                                select-agent-name:
+                                  type: integer
+                                  format: int32
+                                set-agent-groups:
+                                  type: integer
+                                  format: int32
+                                sync-agent-groups-get:
+                                  type: integer
+                                  format: int32
+                                sync-agent-info-get:
+                                  type: integer
+                                  format: int32
+                                sync-agent-info-set":
+                                  type: integer
+                                  format: int32
+                                update-agent-data:
+                                  type: integer
+                                  format: int32
+                                update-agent-name:
+                                  type: integer
+                                  format: int32
+                                update-connection-status:
+                                  type: integer
+                                  format: int32
+                                update-keepalive:
+                                  type: integer
+                                  format: int32
+                            belongs:
+                              type: object
+                              properties:
+                                get-group-agents:
+                                  type: integer
+                                  format: int32
+                                select-group-belong:
+                                  type: integer
+                                  format: int32
+                            group:
+                              type: object
+                              properties:
+                                delete-group:
+                                  type: integer
+                                  format: int32
+                                find-group:
+                                  type: integer
+                                  format: int32
+                                insert-agent-group:
+                                  type: integer
+                                  format: int32
+                                select-groups:
+                                  type: integer
+                                  format: int32
+                            labels:
+                              type: object
+                              properties:
+                                get-labels:
+                                  type: integer
+                                  format: int32
+                    mitre:
+                      type: integer
+                      format: int32
+                      description: "Number of mitre queries through WazuhDB socket"
+                    mitre_breakdown:
+                      type: object
+                      properties:
+                        db:
+                          type: object
+                          description: "Number of queries per operation"
+                          properties:
+                            sql:
+                              type: integer
+                              format: int32
+                    task:
+                      type: integer
+                      format: int32
+                      description: "Number of task queries through WazuhDB socket"
+                    task_breakdown:
+                      type: object
+                      properties:
+                        db:
+                          type: object
+                          description: "Number of queries per operation"
+                          properties:
+                            sql:
+                              type: integer
+                              format: int32
+                        tables:
+                          type: object
+                          description: "Number of queries per operation in tables"
+                          properties:
+                            tasks:
+                              type: object
+                              properties:
+                                delete_old:
+                                  type: integer
+                                  format: int32
+                                set_timeout:
+                                  type: integer
+                                  format: int32
+                                upgrade:
+                                  type: integer
+                                  format: int32
+                                upgrade_cancel_tasks:
+                                  type: integer
+                                  format: int32
+                                upgrade_custom:
+                                  type: integer
+                                  format: int32
+                                upgrade_get_status:
+                                  type: integer
+                                  format: int32
+                                upgrade_result:
+                                  type: integer
+                                  format: int32
+                                upgrade_update_status:
+                                  type: integer
+                                  format: int32
+                    wazuhdb:
+                      type: integer
+                      format: int32
+                      description: "Number of wazuhdb queries through WazuhDB socket"
+                    wazuhdb_breakdown:
+                      type: object
+                      properties:
+                        db:
+                          type: object
+                          description: "Number of queries per operation"
+                          properties:
+                            remove:
+                              type: integer
+                              format: int32
+            time:
+              type: object
+              properties:
+                execution:
+                  type: integer
+                  format: int32
+                  description: "Total time taken by all the queries (milliseconds)"
+                execution_breakdown:
+                  type: object
+                  properties:
+                    agent:
+                      type: integer
+                      format: int32
+                      description: "Time taken by all agent queries (milliseconds)"
+                    agent_breakdown:
+                      type: object
+                      properties:
+                        db:
+                          type: object
+                          description: "Time taken by all queries per operation (milliseconds)"
+                          properties:
+                            begin:
+                              type: integer
+                              format: int32
+                            close:
+                              type: integer
+                              format: int32
+                            commit:
+                              type: integer
+                              format: int32
+                            remove:
+                              type: integer
+                              format: int32
+                            sql:
+                              type: integer
+                              format: int32
+                        tables:
+                          type: object
+                          description: "Time taken by all queries per table (milliseconds)"
+                          properties:
+                            ciscat:
+                              type: object
+                              properties:
+                                ciscat:
+                                  type: integer
+                                  format: int32
+                            rootcheck:
+                              type: object
+                              properties:
+                                rootcheck:
+                                  type: integer
+                                  format: int32
+                            sca:
+                              type: object
+                              properties:
+                                sca:
+                                  type: integer
+                                  format: int32
+                            sync:
+                              type: object
+                              properties:
+                                dbsync:
+                                  type: integer
+                                  format: int32
+                            syscheck:
+                              type: object
+                              properties:
+                                fim_file:
+                                  type: integer
+                                  format: int32
+                                fim_registry:
+                                  type: integer
+                                  format: int32
+                                syscheck:
+                                  type: integer
+                                  format: int32
+                            syscollector:
+                              type: object
+                              properties:
+                                syscollector_hotfixes:
+                                  type: integer
+                                  format: int32
+                                syscollector_hwinfo:
+                                  type: integer
+                                  format: int32
+                                syscollector_network_address:
+                                  type: integer
+                                  format: int32
+                                syscollector_network_iface:
+                                  type: integer
+                                  format: int32
+                                syscollector_network_protocol:
+                                  type: integer
+                                  format: int32
+                                syscollector_osinfo:
+                                  type: integer
+                                  format: int32
+                                syscollector_packages:
+                                  type: integer
+                                  format: int32
+                                syscollector_ports:
+                                  type: integer
+                                  format: int32
+                                syscollector_processes:
+                                  type: integer
+                                  format: int32
+                                deprecated:
+                                  type: object
+                                  properties:
+                                    hardware:
+                                      type: integer
+                                      format: int32
+                                    hotfix:
+                                      type: integer
+                                      format: int32
+                                    netaddr:
+                                      type: integer
+                                      format: int32
+                                    netinfo:
+                                      type: integer
+                                      format: int32
+                                    netproto:
+                                      type: integer
+                                      format: int32
+                                    osinfo:
+                                      type: integer
+                                      format: int32
+                                    package:
+                                      type: integer
+                                      format: int32
+                                    port:
+                                      type: integer
+                                      format: int32
+                                    process:
+                                      type: integer
+                                      format: int32
+                            vulnerability:
+                              type: object
+                              properties:
+                                vuln_cves:
+                                  type: integer
+                                  format: int32
+                    global:
+                      type: integer
+                      format: int32
+                      description: "Time taken by all global queries (milliseconds)"
+                    global_breakdown:
+                      type: object
+                      properties:
+                        db:
+                          type: object
+                          description: "Time taken by all queries per operation (milliseconds)"
+                          properties:
+                            backup:
+                              type: integer
+                              format: int32
+                            sql:
+                              type: integer
+                              format: int32
+                        tables:
+                          type: object
+                          description: "Time taken by all queries per operation in tables (milliseconds)"
+                          properties:
+                            agent:
+                              type: object
+                              properties:
+                                delete-agent:
+                                  type: integer
+                                  format: int32
+                                disconnect-agents:
+                                  type: integer
+                                  format: int32
+                                find-agent:
+                                  type: integer
+                                  format: int32
+                                get-agent-info:
+                                  type: integer
+                                  format: int32
+                                get-agents-by-connection-status:
+                                  type: integer
+                                  format: int32
+                                get-all-agents:
+                                  type: integer
+                                  format: int32
+                                get-groups-integrity:
+                                  type: integer
+                                  format: int32
+                                insert-agent:
+                                  type: integer
+                                  format: int32
+                                reset-agents-connection:
+                                  type: integer
+                                  format: int32
+                                select-agent-group:
+                                  type: integer
+                                  format: int32
+                                select-agent-name:
+                                  type: integer
+                                  format: int32
+                                set-agent-groups:
+                                  type: integer
+                                  format: int32
+                                sync-agent-groups-get:
+                                  type: integer
+                                  format: int32
+                                sync-agent-info-get:
+                                  type: integer
+                                  format: int32
+                                sync-agent-info-set":
+                                  type: integer
+                                  format: int32
+                                update-agent-data:
+                                  type: integer
+                                  format: int32
+                                update-agent-name:
+                                  type: integer
+                                  format: int32
+                                update-connection-status:
+                                  type: integer
+                                  format: int32
+                                update-keepalive:
+                                  type: integer
+                                  format: int32
+                            belongs:
+                              type: object
+                              properties:
+                                get-group-agents:
+                                  type: integer
+                                  format: int32
+                                select-group-belong:
+                                  type: integer
+                                  format: int32
+                            group:
+                              type: object
+                              properties:
+                                delete-group:
+                                  type: integer
+                                  format: int32
+                                find-group:
+                                  type: integer
+                                  format: int32
+                                insert-agent-group:
+                                  type: integer
+                                  format: int32
+                                select-groups:
+                                  type: integer
+                                  format: int32
+                            labels:
+                              type: object
+                              properties:
+                                get-labels:
+                                  type: integer
+                                  format: int32
+                    mitre:
+                      type: integer
+                      format: int32
+                      description: "Time taken by all mitre queries (milliseconds)"
+                    mitre_breakdown:
+                      type: object
+                      properties:
+                        db:
+                          type: object
+                          description: "Time taken by all queries per operation (milliseconds)"
+                          properties:
+                            sql:
+                              type: integer
+                              format: int32
+                    task:
+                      type: integer
+                      format: int32
+                      description: "Time taken by all task queries (milliseconds)"
+                    task_breakdown:
+                      type: object
+                      properties:
+                        db:
+                          type: object
+                          description: "Time taken by all queries per operation (milliseconds)"
+                          properties:
+                            sql:
+                              type: integer
+                              format: int32
+                        tables:
+                          type: object
+                          description: "Time taken by all queries per operation in tables (milliseconds)"
+                          properties:
+                            tasks:
+                              type: object
+                              properties:
+                                delete_old:
+                                  type: integer
+                                  format: int32
+                                set_timeout:
+                                  type: integer
+                                  format: int32
+                                upgrade:
+                                  type: integer
+                                  format: int32
+                                upgrade_cancel_tasks:
+                                  type: integer
+                                  format: int32
+                                upgrade_custom:
+                                  type: integer
+                                  format: int32
+                                upgrade_get_status:
+                                  type: integer
+                                  format: int32
+                                upgrade_result:
+                                  type: integer
+                                  format: int32
+                                upgrade_update_status:
+                                  type: integer
+                                  format: int32
+                    wazuhdb:
+                      type: integer
+                      format: int32
+                      description: "Time taken by all wazuhdb queries (milliseconds)"
+                    wazuhdb_breakdown:
+                      type: object
+                      properties:
+                        db:
+                          type: object
+                          description: "Time taken by all queries per operation (milliseconds)"
+                          properties:
+                            remove:
+                              type: integer
+                              format: int32
+
     WazuhDaemonsStatus:
       type: object
       properties:
@@ -2077,8 +3735,6 @@ components:
             type: object
 
         #Wodle sections inside WazuhConfiguration(ossec.conf)
-        agent-key-polling:
-          type: object
         aws-s3:
           type: object
         azure-logs:
@@ -2208,10 +3864,6 @@ components:
           type: number
           format: float
           description: "Discarded events because they didn't match any rule in the ruleset"
-        events_edps:
-          type: number
-          format: float
-          description: "Same as `events_processed` but per second"
         events_processed:
           type: number
           format: float
@@ -2236,16 +3888,8 @@ components:
           type: number
           format: float
           description: "Same as `alerts_written` but focusing in [FTS alerts]
-          (https://documentation.wazuh.com/4.3/user-manual/ruleset/ruleset-xml-syntax/decoders.html?highlight=fts
+          (https://documentation.wazuh.com/4.8/user-manual/ruleset/ruleset-xml-syntax/decoders.html?highlight=fts
           #fts)"
-        hostinfo_edps:
-          type: number
-          format: float
-          description: "Hostinfo events decoded per second"
-        hostinfo_events_decoded:
-          type: number
-          format: float
-          description: "Same as `total_events_decoded` but for hostinfo events"
         hostinfo_queue_size:
           type: number
           format: float
@@ -2258,14 +3902,6 @@ components:
           type: number
           format: float
           description: "Same as `total_events_decoded` but for non catalogued events"
-        other_events_edps:
-          type: number
-          format: float
-          description: "Non catalogued events decoded per second"
-        rootcheck_edps:
-          type: number
-          format: float
-          description: "Rootcheck events decoded per second"
         rootcheck_events_decoded:
           type: number
           format: float
@@ -2287,10 +3923,6 @@ components:
           format: float
           description: "After decoding, events are pushed to a _pending to process_ queue which will match the events
           against the Wazuh ruleset to raise alerts. This variable shows usage of that queue"
-        sca_edps:
-          type: number
-          format: float
-          description: "Policy monitoring events decoded per second"
         sca_events_decoded:
           type: number
           format: float
@@ -2311,10 +3943,6 @@ components:
           type: number
           format: float
           description: "Stats log queue usage"
-        syscheck_edps:
-          type: number
-          format: float
-          description: "FIM events decoded per second (EDPS = Events Decoded Per Second)"
         syscheck_events_decoded:
           type: number
           format: float
@@ -2328,10 +3956,6 @@ components:
           format: float
           description: "Percentage of use in the syscheck events queue pending to be decoded. Events are discarded when
           the queue is full"
-        syscollector_edps:
-          type: number
-          format: float
-          description: "System inventory events decoded per second"
         syscollector_events_decoded:
           type: number
           format: float
@@ -2349,10 +3973,6 @@ components:
           format: float
           description: "Total events decoded in the last 5 seconds. This number is not accumulative, the number in the
           following 5 seconds can be lower than the previous one"
-        winevt_edps:
-          type: number
-          format: float
-          description: "Windows events decoded per second"
         winevt_events_decoded:
           type: number
           format: float
@@ -2381,10 +4001,6 @@ components:
           type: number
           format: float
           description: "Number of events sent to analysisd during the last five seconds"
-        queued_msgs:
-          type: number
-          format: float
-          description: "Number of messages queued to be sent to agents during the last five seconds"
         sent_bytes:
           type: number
           format: float
@@ -2424,42 +4040,8 @@ components:
             - warning
         tag:
           type: string
+          format: alphanumeric
           description: "Wazuh component that logged the event"
-          enum:
-            - agent_control
-            - wazuh-agentlessd
-            - wazuh-analysisd
-            - wazuh-authd
-            - wazuh-csyslogd
-            - wazuh-dbd
-            - wazuh-execd
-            - wazuh-integratord
-            - wazuh-maild
-            - wazuh-monitord
-            - wazuh-logcollector
-            - wazuh-remoted
-            - wazuh-reportd
-            - wazuh-rootcheck
-            - wazuh-syscheckd
-            - sca
-            - verify-agent-conf
-            - wazuh-db
-            - wazuh-modulesd
-            - wazuh-modulesd:agent-key-polling
-            - wazuh-modulesd:aws-s3
-            - wazuh-modulesd:azure-logs
-            - wazuh-modulesd:agent-upgrade
-            - wazuh-modulesd:task-manager
-            - wazuh-modulesd:ciscat
-            - wazuh-modulesd:control
-            - wazuh-modulesd:command
-            - wazuh-modulesd:database
-            - wazuh-modulesd:docker-listener
-            - wazuh-modulesd:download
-            - wazuh-modulesd:oscap
-            - wazuh-modulesd:osquery
-            - wazuh-modulesd:syscollector
-            - wazuh-modulesd:vulnerability-detector
         timestamp:
           type: string
           format: date-time
@@ -2539,13 +4121,15 @@ components:
             $ref: '#/components/schemas/LogSummary'
           wazuh-modulesd:
             $ref: '#/components/schemas/LogSummary'
-          wazuh-modulesd:agent-key-polling:
+          wazuh-modulesd:agent-upgrade:
             $ref: '#/components/schemas/LogSummary'
           wazuh-modulesd:aws-s3:
             $ref: '#/components/schemas/LogSummary'
           wazuh-modulesd:azure-logs:
             $ref: '#/components/schemas/LogSummary'
           wazuh-modulesd:ciscat:
+            $ref: '#/components/schemas/LogSummary'
+          wazuh-modulesd:control:
             $ref: '#/components/schemas/LogSummary'
           wazuh-modulesd:command:
             $ref: '#/components/schemas/LogSummary'
@@ -2562,6 +4146,8 @@ components:
           wazuh-modulesd:syscollector:
             $ref: '#/components/schemas/LogSummary'
           wazuh-modulesd:vulnerability-detector:
+            $ref: '#/components/schemas/LogSummary'
+          wazuh-modulesd:task-manager:
             $ref: '#/components/schemas/LogSummary'
 
     ConfirmationMessage:
@@ -2656,10 +4242,6 @@ components:
               description: "Browsers will only expose the response to frontend JavaScript code if this is enabled"
               type: boolean
               default: false
-        use_only_authd:
-          description: "Force the use of authd when adding and removing agents"
-          type: boolean
-          default: false
         experimental_features:
           description: "Enable features under development"
           type: boolean
@@ -2801,7 +4383,7 @@ components:
           enum:
             - passed
             - failed
-            - ""
+            - "not applicable"
         title:
           type: string
           description: "A brief description of what is being checked"
@@ -3591,6 +5173,7 @@ components:
         - monitor
         - request
         - syscheck
+        - wazuh-db
         - wmodules
     configuration:
       in: path
@@ -3666,6 +5249,11 @@ components:
         <td>analysis</td>
         <td>internal</td>
         <td><code>&lt;analysisd&gt;</code></td>
+        </tr>
+        <tr>
+        <td>analysis</td>
+        <td>rule_test</td>
+        <td><code>&lt;rule_test&gt;</code></td>
         </tr>
         <tr>
         <td>auth</td>
@@ -3744,7 +5332,7 @@ components:
         </tr>
         <tr>
         <td>monitor</td>
-        <td>internal</td>
+        <td>reports</td>
         <td><code>&lt;reports&gt;</code></td>
         </tr>
         <tr>
@@ -3776,6 +5364,16 @@ components:
         <td>syscheck</td>
         <td>internal</td>
         <td><code>&lt;syscheck&gt;</code>, <code>&lt;rootcheck&gt;</code></td>
+        </tr>
+        <tr>
+        <td>wazuh-db</td>
+        <td>internal</td>
+        <td><code>&lt;wazuh_db&gt;</code></td>
+        </tr>
+        <tr>
+        <td>wazuh-db</td>
+        <td>wdb</td>
+        <td><code>&lt;wdb&gt;</code></td>
         </tr>
         <tr>
         <td>wmodules</td>
@@ -3811,7 +5409,9 @@ components:
         - remote
         - syscheck
         - rootcheck
+        - wdb
         - wmodules
+        - rule_test
     cve:
       in: query
       name: cve
@@ -3819,6 +5419,29 @@ components:
       schema:
         type: string
         format: alphanumeric
+    daemons_list:
+      in: query
+      name: daemons_list
+      description: "List of daemon names (separated by comma), all daemons selected by default if not specified"
+      schema:
+        type: array
+        items:
+          type: string
+          enum:
+            - wazuh-analysisd
+            - wazuh-remoted
+            - wazuh-db
+    daemons_list_agents:
+      in: query
+      name: daemons_list
+      description: "List of daemon names (separated by comma), all daemons selected by default if not specified"
+      schema:
+        type: array
+        items:
+          type: string
+          enum:
+            - wazuh-analysisd
+            - wazuh-remoted
     decoder_name:
       in: query
       name: decoder_names
@@ -3986,16 +5609,6 @@ components:
         type: array
         items:
           $ref: '#/components/schemas/AgentID'
-    agents_list_upgrade:
-      in: query
-      name: agents_list
-      description: "List of agent IDs (separated by comma), select a list of agents with size less or equal than 100"
-      required: true
-      schema:
-        type: array
-        items:
-          $ref: '#/components/schemas/AgentID'
-        maxItems: 100
     agents_list_all:
       in: query
       name: agents_list
@@ -4570,7 +6183,7 @@ components:
     version:
       in: query
       name: version
-      description: "Filter by agents version"
+      description: "Filter by agents version using one of the following formats: 'X.Y.Z', 'vX.Y.Z', 'wazuh X.Y.Z' or 'wazuh vX.Y.Z'. For example: '4.4.0'"
       schema:
         type: string
         format: alphanumeric
@@ -4581,6 +6194,32 @@ components:
       schema:
         type: string
         format: alphanumeric_symbols
+    cve_status:
+      in: query
+      name: status
+      description: "Filter by CVE status"
+      schema:
+        type: string
+        enum:
+          - valid
+          - pending
+          - obsolete
+    cve_type:
+      in: query
+      name: type
+      description: "Filter by CVE type"
+      schema:
+        type: string
+        enum:
+          - os
+          - package
+    cve_severity:
+      in: query
+      name: severity
+      description: "Filter by CVE severity"
+      schema:
+        type: string
+        format: names
     wait_for_complete:
       in: query
       name: wait_for_complete
@@ -4643,7 +6282,6 @@ components:
         - syscheck
         - syslog_output
         # Wodle sections
-        - agent-key-polling
         - aws-s3
         - azure-logs
         - cis-cat
@@ -4672,37 +6310,7 @@ components:
       description: "Wazuh component that logged the event"
       schema:
         type: string
-        enum:
-        - wazuh-agentlessd
-        - wazuh-analysisd
-        - wazuh-authd
-        - wazuh-csyslogd
-        - wazuh-dbd
-        - wazuh-execd
-        - wazuh-integratord
-        - wazuh-maild
-        - wazuh-monitord
-        - wazuh-logcollector
-        - wazuh-remoted
-        - wazuh-reportd
-        - wazuh-rootcheck
-        - wazuh-syscheckd
-        - sca
-        - wazuh-db
-        - wazuh-modulesd
-        - wazuh-modulesd:agent-key-polling
-        - wazuh-modulesd:aws-s3
-        - wazuh-modulesd:azure-logs
-        - wazuh-modulesd:ciscat
-        - wazuh-modulesd:control
-        - wazuh-modulesd:command
-        - wazuh-modulesd:database
-        - wazuh-modulesd:docker-listener
-        - wazuh-modulesd:download
-        - wazuh-modulesd:oscap
-        - wazuh-modulesd:osquery
-        - wazuh-modulesd:syscollector
-        - wazuh-modulesd:vulnerability-detector
+        format: alphanumeric
     log_level:
       in: query
       name: level
@@ -5252,6 +6860,15 @@ components:
       schema:
         type: string
         format: alphanumeric
+    group_config_status:
+      in: query
+      name: group_config_status
+      description: "Agent groups configuration sync status"
+      schema:
+        type: string
+        enum:
+          - "synced"
+          - "not synced"
     force_single_group:
       in: query
       name: force_single_group
@@ -5274,10 +6891,11 @@ components:
         default: false
     upgrade_version:
       in: query
-      name: version
+      name: upgrade_version
       description: "Wazuh version to upgrade to"
       schema:
         type: string
+        format: wazuh_version
     force:
       in: query
       name: force
@@ -5293,7 +6911,7 @@ components:
       required: True
       schema:
         type: string
-        format: wazuh_path
+        format: wpk_path
     installer:
       in: query
       name: installer
@@ -5334,6 +6952,29 @@ components:
       schema:
         type: string
         format: alphanumeric
+    vulnerability_field:
+      in: path
+      name: field
+      description: "Vulnerability inventory field"
+      required: true
+      schema:
+        type: string
+        enum:
+        - cve
+        - name
+        - version
+        - architecture
+        - detection_time
+        - severity
+        - cvss2_score
+        - cvss3_score
+        - external_references
+        - type
+        - status
+        - condition
+        - title
+        - published
+        - updated
     xml_filename:
       in: query
       name: filename
@@ -5351,7 +6992,6 @@ components:
       schema:
         type: string
         format: xml_filename_path
-
 
 tags:
   - name: API Info
@@ -5396,6 +7036,8 @@ tags:
     description: "Tasks information"
   - name: Vulnerability
     description: "Vulnerabilities information"
+  - name: Events
+    description: "Ingestion endpoints"
 
 security:
   - jwt: []
@@ -5422,10 +7064,10 @@ paths:
                     $ref: '#/components/schemas/BasicInfo'
               example:
                 title: "Wazuh API"
-                api_version: "v4.3.0"
+                api_version: "v4.5.0"
                 revision: '40100'
                 license_name: "GPL 2.0"
-                license_url: "https://github.com/wazuh/wazuh/blob/4.3/LICENSE"
+                license_url: "https://github.com/wazuh/wazuh/blob/v4.8.0/LICENSE"
                 hostname: "wazuh"
                 timestamp: "2019-04-02T08:08:11Z"
 
@@ -5570,6 +7212,7 @@ paths:
         - $ref: '#/components/parameters/name'
         - $ref: '#/components/parameters/ip'
         - $ref: '#/components/parameters/registerIP'
+        - $ref: '#/components/parameters/group_config_status'
       responses:
         '200':
           description: "List of agents or error description"
@@ -5608,6 +7251,7 @@ paths:
                       mergedSum: 9a016508cea1e997ab8569f5cfab30f5
                       version: Wazuh v4.3.0
                       node_name: worker2
+                      group_config_status: "synced"
                     - os:
                         arch: x86_64
                         codename: Focal Fossa
@@ -5631,6 +7275,7 @@ paths:
                       mergedSum: 9a016508cea1e997ab8569f5cfab30f5
                       version: Wazuh v4.3.0
                       node_name: worker2
+                      group_config_status: "synced"
                     - os:
                         arch: x86_64
                         codename: Focal Fossa
@@ -5654,6 +7299,7 @@ paths:
                       mergedSum: 9a016508cea1e997ab8569f5cfab30f5
                       version: Wazuh v4.3.0
                       node_name: worker1
+                      group_config_status: "not synced"
                   total_affected_items: 3
                   total_failed_items: 0
                   failed_items: []
@@ -5695,12 +7341,6 @@ paths:
                     IP, IP/NET, ANY"
                     type: string
                     format: alphanumeric
-                  force_time:
-                    description: "Remove the old agent with the same name or IP if disconnected for <force_time>
-                    seconds"
-                    type: integer
-                    format: int32
-                    minimum: 0
                 required:
                 - name
               example:
@@ -5856,6 +7496,7 @@ paths:
     get:
       tags:
         - Agents
+      deprecated: true
       summary: "Get configuration sync status"
       description: "Return whether the agent configuration has been synchronized with the agent or not. This can be
       useful to check after updating a group configuration"
@@ -6073,6 +7714,115 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequestsResponse'
 
+  /agents/{agent_id}/daemons/stats:
+    get:
+      tags:
+        - Agents
+      summary: "Get Wazuh daemon stats from an agent"
+      description: "Return Wazuh statistical information from specified daemons in a specified agent"
+      operationId: api.controllers.agent_controller.get_daemon_stats
+      x-rbac-actions:
+        - $ref: '#/x-rbac-catalog/actions/agent:read'
+      parameters:
+        - $ref: '#/components/parameters/pretty'
+        - $ref: '#/components/parameters/wait_for_complete'
+        - $ref: '#/components/parameters/agent_id'
+        - $ref: '#/components/parameters/daemons_list_agents'
+      responses:
+        '200':
+          description: "Wazuh daemon stats"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AllItemsResponseWazuhDaemonStatsAgents'
+              example:
+                data:
+                  affected_items:
+                    - timestamp: 2022-07-27T14:09:20+00:00
+                      name: wazuh-remoted
+                      agents:
+                        - uptime: 2022-07-27T14:09:20+00:00
+                          id: 1
+                          metrics:
+                            messages:
+                              received_breakdown:
+                                control: 2
+                                control_breakdown:
+                                  keepalive: 1
+                                  request: 0
+                                  shutdown: 0
+                                  startup: 1
+                                event: 195
+                              sent_breakdown:
+                                ack: 2
+                                ar: 0
+                                cfga: 2
+                                discarded: 0
+                                request: 0
+                                shared: 0
+                    - timestamp: 2022-07-27T14:09:20+00:00
+                      name: wazuh-analysisd
+                      agents:
+                        - uptime: 2022-07-27T14:09:20+00:00
+                          id: 1
+                          metrics:
+                            events:
+                              processed: 195
+                              received_breakdown:
+                                decoded_breakdown:
+                                  agent: 0
+                                  dbsync: 0
+                                  integrations_breakdown:
+                                    virustotal: 0
+                                  modules_breakdown:
+                                    aws: 0
+                                    azure: 0
+                                    ciscat: 0
+                                    command: 0
+                                    docker: 0
+                                    gcp: 0
+                                    github: 0
+                                    logcollector_breakdown:
+                                      eventchannel: 0
+                                      eventlog: 0
+                                      macos: 0
+                                      others: 0
+                                    office365: 0
+                                    oscap: 0
+                                    osquery: 0
+                                    rootcheck: 1
+                                    sca: 194
+                                    syscheck: 0
+                                    syscollector: 0
+                                    upgrade: 0
+                                    vulnerability: 0
+                                  monitor: 0
+                                  remote: 0
+                              written_breakdown:
+                                alerts: 191
+                                archives: 0
+                                firewall: 0
+                  total_affected_items: 2
+                  total_failed_items: 0
+                  failed_items: []
+                message: Statistical information for each daemon was successfully read
+                error: 0
+        '400':
+          $ref: '#/components/responses/ResponseError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedResponse'
+        '403':
+          $ref: '#/components/responses/PermissionDeniedResponse'
+        '405':
+          $ref: '#/components/responses/InvalidHTTPMethodResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsResponse'
+
   /agents/{agent_id}/stats/{component}:
     get:
       tags:
@@ -6174,18 +7924,29 @@ paths:
       tags:
         - Agents
       summary: "Upgrade agents"
-      description: "Upgrade agents using a WPK file from online repository"
+      description: "Upgrade agents using a WPK file from online repository. When upgrading more than 3000 agents at the same time, it's highly recommended to use the parameter `wait_for_complete` set to `true` to avoid a possible API timeout"
       operationId: api.controllers.agent_controller.put_upgrade_agents
       x-rbac-actions:
         - $ref: '#/x-rbac-catalog/actions/agent:upgrade'
       parameters:
         - $ref: '#/components/parameters/pretty'
         - $ref: '#/components/parameters/wait_for_complete'
-        - $ref: '#/components/parameters/agents_list_upgrade'
+        - $ref: '#/components/parameters/agents_list_all'
         - $ref: '#/components/parameters/wpk_repo'
         - $ref: '#/components/parameters/upgrade_version'
         - $ref: '#/components/parameters/use_http'
         - $ref: '#/components/parameters/force'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/os.platform'
+        - $ref: '#/components/parameters/os.version'
+        - $ref: '#/components/parameters/os.name'
+        - $ref: '#/components/parameters/manager_host'
+        - $ref: '#/components/parameters/version'
+        - $ref: '#/components/parameters/agent_group'
+        - $ref: '#/components/parameters/node_name'
+        - $ref: '#/components/parameters/name'
+        - $ref: '#/components/parameters/ip'
+        - $ref: '#/components/parameters/registerIP'
       responses:
         '200':
           description: "Agents upgraded"
@@ -6203,7 +7964,7 @@ paths:
                   total_affected_items: 2
                   total_failed_items: 0
                   failed_items: []
-                message: "All upgrade tasks have been created"
+                message: "All upgrade tasks were created"
                 error: 0
         '400':
           $ref: '#/components/responses/ResponseError'
@@ -6221,16 +7982,27 @@ paths:
       tags:
         - Agents
       summary: "Upgrade agents custom"
-      description: "Upgrade the agents using a local WPK file"
+      description: "Upgrade the agents using a local WPK file. When upgrading more than 3000 agents at the same time, it's highly recommended to use the parameter `wait_for_complete` set to `true` to avoid a possible API timeout"
       operationId: api.controllers.agent_controller.put_upgrade_custom_agents
       x-rbac-actions:
         - $ref: '#/x-rbac-catalog/actions/agent:upgrade'
       parameters:
         - $ref: '#/components/parameters/pretty'
         - $ref: '#/components/parameters/wait_for_complete'
-        - $ref: '#/components/parameters/agents_list_upgrade'
+        - $ref: '#/components/parameters/agents_list_all'
         - $ref: '#/components/parameters/file_path'
         - $ref: '#/components/parameters/installer'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/os.platform'
+        - $ref: '#/components/parameters/os.version'
+        - $ref: '#/components/parameters/os.name'
+        - $ref: '#/components/parameters/manager_host'
+        - $ref: '#/components/parameters/version'
+        - $ref: '#/components/parameters/agent_group'
+        - $ref: '#/components/parameters/node_name'
+        - $ref: '#/components/parameters/name'
+        - $ref: '#/components/parameters/ip'
+        - $ref: '#/components/parameters/registerIP'
       responses:
         '200':
           description: "Agents upgraded"
@@ -6248,7 +8020,7 @@ paths:
                   total_affected_items: 2
                   total_failed_items: 0
                   failed_items: []
-                message: "All upgrade tasks have been created"
+                message: "All upgrade tasks were created"
                 error: 0
         '400':
           $ref: '#/components/responses/ResponseError'
@@ -6274,6 +8046,17 @@ paths:
         - $ref: '#/components/parameters/pretty'
         - $ref: '#/components/parameters/wait_for_complete'
         - $ref: '#/components/parameters/agents_list'
+        - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/os.platform'
+        - $ref: '#/components/parameters/os.version'
+        - $ref: '#/components/parameters/os.name'
+        - $ref: '#/components/parameters/manager_host'
+        - $ref: '#/components/parameters/version'
+        - $ref: '#/components/parameters/agent_group'
+        - $ref: '#/components/parameters/node_name'
+        - $ref: '#/components/parameters/name'
+        - $ref: '#/components/parameters/ip'
+        - $ref: '#/components/parameters/registerIP'
       responses:
         '200':
           description: "Get agent upgrade results"
@@ -6296,7 +8079,7 @@ paths:
                   total_affected_items: 1
                   total_failed_items: 0
                   failed_items: []
-                message: "All agents have been updated"
+                message: "All upgrade tasks were returned"
                 error: 0
         '400':
           $ref: '#/components/responses/ResponseError'
@@ -6401,14 +8184,8 @@ paths:
                         remediation: Please, use `GET /agents?select=id,name` to find all available agents
                       id:
                         - '999'
-                    - error:
-                        code: 1753
-                        message: Could not assign group. Agent status is never_connected
-                        remediation: Please select another agent or connect your agent before assigning groups
-                      id:
-                        - '011'
                   total_affected_items: 2
-                  total_failed_items: 2
+                  total_failed_items: 1
                   message: Some agents were not assigned to group2 and removed from the other groups
                   error: 2
         '400':
@@ -6481,9 +8258,7 @@ paths:
       description: "Delete all groups or a list of them"
       operationId: api.controllers.agent_controller.delete_groups
       x-rbac-actions:
-        - $ref: '#/x-rbac-catalog/actions/agent:modify_group'
         - $ref: '#/x-rbac-catalog/actions/group:delete'
-        - $ref: '#/x-rbac-catalog/actions/group:modify_assignments'
       parameters:
         - $ref: '#/components/parameters/pretty'
         - $ref: '#/components/parameters/wait_for_complete'
@@ -6504,11 +8279,8 @@ paths:
               example:
                 data:
                   affected_items:
-                    - webserver:
-                        - '002'
-                        - '003'
-                    - dataserver:
-                        - '005'
+                    - webserver
+                    - dataserver
                   total_affected_items: 2
                   total_failed_items: 0
                   failed_items: []
@@ -6603,13 +8375,14 @@ paths:
               type: object
               properties:
                 group_id:
-                  description: "Group name"
+                  description: "Group name. It can contain any of the characters between a-z, A-Z, 0-9, '_', '-' and '.'. Names '.' and '..' are restricted."
                   type: string
                   format: group_names
+                  maxLength: 128
               required:
                 - group_id
             example:
-              name: NewGroup_1
+              group_id: NewGroup_1
       responses:
         '200':
           description: "Add new agent"
@@ -7060,7 +8833,7 @@ paths:
         - Agents
       summary: "Add agent full"
       description: "Add an agent specifying its name, ID and IP. If an agent with the same name, the same ID or the
-      same IP already exists, replace it using `force_time` parameter"
+      same IP already exists, replace it using the `force` parameter"
       operationId: api.controllers.agent_controller.insert_agent
       x-rbac-actions:
         - $ref: '#/x-rbac-catalog/actions/agent:create'
@@ -7091,12 +8864,8 @@ paths:
                     IP, IP/NET, ANY"
                     type: string
                     format: alphanumeric
-                  force_time:
-                    description: "Remove the old agent with the same name, ID or IP if disconnected for <force_time>
-                    seconds"
-                    type: integer
-                    format: int32
-                    minimum: 0
+                  force:
+                    $ref: '#/components/schemas/AgentInsertForce'
                 required:
                   - name
               example:
@@ -7104,6 +8873,13 @@ paths:
                 ip: 10.0.10.11
                 id: "123"
                 key: 1abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghi64
+                force:
+                  enabled: True
+                  disconnected_time:
+                    enabled: True
+                    value: "30m"
+                  after_registration_time: "2h"
+
       responses:
         '200':
           description: "Insert new agent"
@@ -7441,8 +9217,8 @@ paths:
                           code: 1707
                           message: "Cannot send request, agent is not active"
                           remediation: "Please, check non-active agents connection and try again.
-                           Visit https://documentation.wazuh.com/current/user-manual/registering/index.html
-                           and https://documentation.wazuh.com/current/user-manual/agents/agent-connection.html
+                           Visit https://documentation.wazuh.com/4.8/user-manual/registering/index.html
+                           and https://documentation.wazuh.com/4.8/user-manual/agents/agent-connection.html
                            to obtain more information on registering and connecting agents"
                         id:
                           - '009'
@@ -7564,7 +9340,7 @@ paths:
       tags:
         - Agents
       summary: "Summarize agents status"
-      description: "Return a summary of the status of available agents"
+      description: "Return a summary of the connection and groups configuration synchronization statuses of available agents"
       operationId: api.controllers.agent_controller.get_agent_summary_status
       x-rbac-actions:
         - $ref: '#/x-rbac-catalog/actions/agent:read'
@@ -7573,7 +9349,7 @@ paths:
         - $ref: '#/components/parameters/wait_for_complete'
       responses:
         '200':
-          description: "Get summary of agents"
+          description: "Get summary of agents connection and group configuration statuses"
           content:
             application/json:
               schema:
@@ -7585,11 +9361,16 @@ paths:
                       $ref: '#/components/schemas/AgentsSummaryStatus'
               example:
                 data:
-                  active: 8
-                  disconnected: 0
-                  never_connected: 3
-                  pending: 0
-                  total: 11
+                  connection:
+                    active: 8
+                    disconnected: 0
+                    never_connected: 3
+                    pending: 0
+                    total: 11
+                  configuration:
+                    synced: 8
+                    not_synced: 3
+                    total: 11
                 error: 0
         '400':
           $ref: '#/components/responses/ResponseError'
@@ -7763,15 +9544,15 @@ paths:
                   affected_items:
                     - name: master-node
                       type: master
-                      version: 4.3.0
+                      version: 4.4.0
                       ip: wazuh-master
                     - name: worker1
                       type: worker
-                      version: 4.3.0
+                      version: 4.4.0
                       ip: 172.26.0.7
                     - name: worker2
                       type: worker
-                      version: 4.3.0
+                      version: 4.4.0
                       ip: 172.26.0.6
                   total_affected_items: 3
                   total_failed_items: 0
@@ -7821,13 +9602,13 @@ paths:
                     - info:
                         name: master-node
                         type: master
-                        version: 4.3.0
+                        version: 4.4.0
                         ip: wazuh-master
                         n_active_agents: 5
                     - info:
                         name: worker1
                         type: worker
-                        version: 4.3.0
+                        version: 4.4.0
                         ip: 172.21.0.7
                         n_active_agents: 3
                       status:
@@ -7845,6 +9626,15 @@ paths:
                             extra: 0
                             extra_valid: 0
                             shared: 0
+                        sync_agent_info_free: true
+                        last_sync_agentgroup:
+                            date_start: 2021-05-27T10:48:54.086973Z
+                            date_end: 2021-05-27T10:49:52.075794Z
+                            n_synced_chunks: 1
+                        last_sync_full_agentgroup:
+                            date_start: 2021-05-27T10:52:48.038573Z
+                            date_end: 2021-05-27T10:53:23.057795Z
+                            n_synced_chunks: 2
                         last_sync_agentinfo:
                           date_start_master: 2021-05-27T10:50:49.174463Z
                           date_end_master: 2021-05-27T10:50:49.175921Z
@@ -7853,7 +9643,7 @@ paths:
                     - info:
                         name: worker2
                         type: worker
-                        version: 4.3.0
+                        version: 4.4.0
                         ip: 172.21.0.6
                         n_active_agents: 1
                       status:
@@ -7871,6 +9661,15 @@ paths:
                             extra: 0
                             extra_valid: 0
                             shared: 0
+                        sync_agent_info_free: true
+                        last_sync_agentgroup:
+                          date_start: 2021-05-27T10:48:54.086973Z
+                          date_end: 2021-05-27T10:49:52.075794Z
+                          n_synced_chunks: 1
+                        last_sync_full_agentgroup:
+                          date_start: 2021-05-27T10:52:48.038573Z
+                          date_end: 2021-05-27T10:53:23.057795Z
+                          n_synced_chunks: 2
                         last_sync_agentinfo:
                           date_start_master: 2021-05-27T10:50:48.832800Z
                           date_end_master: 2021-05-27T10:50:48.833854Z
@@ -7880,6 +9679,57 @@ paths:
                   total_failed_items: 0
                   failed_items: []
                 message: "All selected nodes healthcheck information was returned"
+                error: 0
+        '400':
+          $ref: '#/components/responses/ResponseError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedResponse'
+        '403':
+          $ref: '#/components/responses/PermissionDeniedResponse'
+        '405':
+          $ref: '#/components/responses/InvalidHTTPMethodResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsResponse'
+
+  /cluster/ruleset/synchronization:
+    get:
+      tags:
+      - Cluster
+      summary: "Get cluster nodes ruleset synchronization status"
+      description: "Return ruleset synchronization status for all nodes or a list of them. This synchronization only
+      covers the user custom ruleset"
+      operationId: api.controllers.cluster_controller.get_nodes_ruleset_sync_status
+      x-rbac-actions:
+        - $ref: '#/x-rbac-catalog/actions/cluster:read'
+      parameters:
+        - $ref: '#/components/parameters/pretty'
+        - $ref: '#/components/parameters/wait_for_complete'
+        - $ref: '#/components/parameters/nodes_list'
+      responses:
+        '200':
+          description: "Ruleset synchronization status for cluster nodes"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AllItemsResponseNodeRulesetSynchronizationStatus'
+              example:
+                data:
+                  affected_items:
+                    - name: "master-node"
+                      synced: true
+                    - name: "worker1"
+                      synced: true
+                    - name: "worker2"
+                      synced: true
+                  total_affected_items: 3
+                  total_failed_items: 0
+                  failed_items: []
+                message: "Nodes ruleset synchronization status was successfully read"
                 error: 0
         '400':
           $ref: '#/components/responses/ResponseError'
@@ -8058,7 +9908,6 @@ paths:
                       node_api_config:
                         host: 0.0.0.0
                         port: 55000
-                        use_only_authd: false
                         drop_privileges: true
                         experimental_features: false
                         max_upload_size: 10485760
@@ -8097,7 +9946,6 @@ paths:
                       node_api_config:
                         host: 0.0.0.0
                         port: 55000
-                        use_only_authd: false
                         drop_privileges: true
                         experimental_features: false
                         max_upload_size: 10485760
@@ -8135,7 +9983,6 @@ paths:
                       node_api_config:
                         host: 0.0.0.0
                         port: 55000
-                        use_only_authd: false
                         drop_privileges: true
                         experimental_features: false
                         max_upload_size: 10485760
@@ -8455,7 +10302,6 @@ paths:
                         synchronization:
                           enabled: yes
                           interval: "5m"
-                          max_interval: "1h"
                           max_eps: 10
                       command:
                         - name: disable-account
@@ -8513,8 +10359,13 @@ paths:
                         disabled: no
                         port: "1515"
                         use_source_ip: "no"
-                        force_insert: "yes"
-                        force_time: "0"
+                        force:
+                          enabled: "yes"
+                          key_mismatch: "yes"
+                          disconnected_time:
+                            enabled: "yes"
+                            value: "1h"
+                          after_registration_time: "1h"
                         purge: "yes"
                         use_password: "no"
                         ciphers: "HIGH:!ADH:!EXP:!MD5:!RC4:!3DES:!CAMELLIA:@STRENGTH"
@@ -8594,6 +10445,81 @@ paths:
           $ref: '#/components/responses/RequestTooLargeResponse'
         '429':
           $ref: '#/components/responses/TooManyRequestsResponse'
+
+  /cluster/{node_id}/daemons/stats:
+    get:
+      tags:
+        - Cluster
+      summary: "Get Wazuh daemon stats from a cluster node"
+      description: "Return Wazuh statistical information from specified daemons in a specified cluster node"
+      operationId: api.controllers.cluster_controller.get_daemon_stats_node
+      x-rbac-actions:
+        - $ref: '#/x-rbac-catalog/actions/cluster:read'
+      parameters:
+        - $ref: '#/components/parameters/pretty'
+        - $ref: '#/components/parameters/wait_for_complete'
+        - $ref: '#/components/parameters/node_id'
+        - $ref: '#/components/parameters/daemons_list'
+      responses:
+        '200':
+          description: "Wazuh daemon stats"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AllItemsResponseWazuhDaemonStats'
+              example:
+                data:
+                  affected_items:
+                    - uptime: 2022-07-21T10:09:20+00:00
+                      timestamp: 2022-07-21T10:48:32+00:00
+                      name: wazuh-remoted
+                      metrics:
+                        tcp_sessions: 0
+                        received_bytes: 0
+                        messages_received_breakdown:
+                          event_messages: 0
+                          control_messages: 0
+                          control_breakdown:
+                            request_messages: 0
+                            startup_messages: 0
+                            shutdown_messages: 0
+                            keepalive_messages: 0
+                          ping_messages: 0
+                          unknown_messages: 0
+                          dequeued_after_close_messages: 0
+                          discarded_messages: 0
+                        sent_bytes: 0
+                        messages_sent_breakdown:
+                          ack_messages: 0
+                          shared_file_messages: 0
+                          ar_messages: 0
+                          cfga_messages: 0
+                          request_messages: 0
+                          discarded_messages: 0
+                        queue_status:
+                          receive_queue_usage: 0
+                          receive_queue_size: 131072
+                        keys_reload_count: 0
+                        update_shared_files_count: 42
+                  total_affected_items: 1
+                  failed_items: []
+                  total_failed_items: 0
+        '400':
+          $ref: '#/components/responses/ResponseError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedResponse'
+        '403':
+          $ref: '#/components/responses/PermissionDeniedResponse'
+        '405':
+          $ref: '#/components/responses/InvalidHTTPMethodResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsResponse'
+
 
   /cluster/{node_id}/stats:
     get:
@@ -8988,6 +10914,7 @@ paths:
     get:
       tags:
       - Cluster
+      deprecated: true
       summary: "Get node stats analysisd"
       description: "Return Wazuh analysisd statistical information in node {node_id}"
       operationId: api.controllers.cluster_controller.get_stats_analysisd_node
@@ -9014,21 +10941,12 @@ paths:
                   affected_items:
                     - total_events_decoded: 5
                       syscheck_events_decoded: 0
-                      syscheck_edps: 0
                       syscollector_events_decoded: 0
-                      syscollector_edps: 0
                       rootcheck_events_decoded: 0
-                      rootcheck_edps: 0
                       sca_events_decoded: 0
-                      sca_edps: 0
-                      hostinfo_events_decoded: 0
-                      hostinfo_edps: 0
                       winevt_events_decoded: 0
-                      winevt_edps: 0
                       other_events_decoded: 5
-                      other_events_edps: 1
                       events_processed: 5
-                      events_edps: 1
                       events_received: 5
                       events_dropped: 0
                       alerts_written: 0
@@ -9078,6 +10996,7 @@ paths:
     get:
       tags:
       - Cluster
+      deprecated: true
       summary: "Get node stats remoted"
       description: "Return Wazuh remoted statistical information in node {node_id}"
       operationId: api.controllers.cluster_controller.get_stats_remoted_node
@@ -9108,7 +11027,6 @@ paths:
                       evt_count: 9089.0
                       ctrl_msg_count: 2099.0
                       discarded_count: 0
-                      queued_msgs: 4210.0
                       sent_bytes: 784598.0
                       recv_bytes: 4541779.0
                       dequeued_after_close: 0.0
@@ -9730,7 +11648,7 @@ paths:
                       name: "wazuh"
                       node: "master-node"
                     full_log: "ERROR"
-                    decoder:
+                    decoder: None
                     location: "/var/log/syslog"
                   alert: false
                   codemsg: 1
@@ -10022,6 +11940,250 @@ paths:
           $ref: '#/components/responses/WrongContentTypeResponse'
         '413':
           $ref: '#/components/responses/RequestTooLargeResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsResponse'
+
+  /manager/daemons/stats:
+    get:
+      tags:
+      - Manager
+      summary: "Get Wazuh daemon stats"
+      description: "Return Wazuh statistical information from specified daemons"
+      operationId: api.controllers.manager_controller.get_daemon_stats
+      x-rbac-actions:
+        - $ref: '#/x-rbac-catalog/actions/manager:read'
+      parameters:
+        - $ref: '#/components/parameters/pretty'
+        - $ref: '#/components/parameters/wait_for_complete'
+        - $ref: '#/components/parameters/daemons_list'
+      responses:
+        '200':
+          description: "Wazuh daemon stats"
+          content:
+            application/json:
+              schema:
+                allOf:
+                - $ref: '#/components/schemas/ApiResponse'
+                - type: object
+                  properties:
+                    data:
+                      $ref: '#/components/schemas/AllItemsResponseWazuhDaemonStats'
+              example:
+                data:
+                  affected_items:
+                    - uptime: 2022-07-21T10:09:20+00:00
+                      timestamp: 2022-07-21T10:47:59+00:00
+                      name: wazuh-db
+                      metrics:
+                        queries_total: 1514
+                        queries_breakdown:
+                          wazuhdb_queries: 0
+                          wazuhdb_queries_breakdown:
+                            remove_queries: 0
+                            unknown_queries: 0
+                          agent_queries: 73
+                          agent_queries_breakdown:
+                            sql_queries: 0
+                            remove_queries: 0
+                            begin_queries: 0
+                            commit_queries: 0
+                            close_queries: 0
+                            syscheck_queries:
+                              syscheck_queries: 2
+                              fim_file_queries: 2
+                              fim_registry_queries: 0
+                            rootcheck_queries:
+                              rootcheck_queries: 2
+                            sca_queries:
+                              sca_queries: 6
+                            ciscat_queries:
+                              ciscat_queries: 0
+                            syscollector_queries:
+                              syscollector_processes_queries: 36
+                              syscollector_packages_queries: 1
+                              syscollector_hotfixes_queries: 0
+                              syscollector_ports_queries: 16
+                              syscollector_network_protocol_queries: 1
+                              syscollector_network_address_queries: 1
+                              syscollector_network_iface_queries: 2
+                              syscollector_hwinfo_queries: 2
+                              syscollector_osinfo_queries: 2
+                              process_queries: 0
+                              package_queries: 0
+                              hotfix_queries: 0
+                              port_queries: 0
+                              netproto_queries: 0
+                              netaddr_queries: 0
+                              netinfo_queries: 0
+                              hardware_queries: 0
+                              osinfo_queries: 0
+                            vulnerability_detector_queries:
+                              vuln_cves_queries: 0
+                            dbsync_queries: 0
+                            unknown_queries: 0
+                          global_queries: 161
+                          global_queries_breakdown:
+                            sql_queries: 0
+                            backup_queries: 0
+                            agent_queries:
+                              insert-agent_queries: 1
+                              update-agent-data_queries: 1
+                              update-agent-name_queries: 1
+                              update-keepalive_queries: 0
+                              update-connection-status_queries: 0
+                              reset-agents-connection_queries: 1
+                              delete-agent_queries: 0
+                              select-agent-name_queries: 2
+                              select-agent-group_queries: 1
+                              select-keepalive_queries: 0
+                              find-agent_queries: 0
+                              get-agent-info_queries: 39
+                              get-all-agents_queries: 40
+                              get-agents-by-connection-status_queries: 0
+                              disconnect-agents_queries: 0
+                              sync-agent-info-get_queries: 0
+                              sync-agent-info-set_queries: 37
+                              sync-agent-groups-get_queries: 36
+                              set-agent-groups_queries: 0
+                              get-groups-integrity_queries: 0
+                            group_queries:
+                              insert-agent-group_queries: 0
+                              delete-group_queries: 0
+                              select-groups_queries: 1
+                              find-group_queries: 1
+                            belongs_queries:
+                              delete-agent-belong_queries: 0
+                              select-group-belong_queries: 0
+                              get-group-agents_queries: 0
+                            labels_queries:
+                              set-labels_queries: 0
+                              get-labels_queries: 0
+                            unknown_queries: 0
+                          task_queries: 3
+                          task_queries_breakdown:
+                            sql_queries: 0
+                            upgrade_queries:
+                              upgrade_queries: 0
+                              upgrade_custom_queries: 0
+                              upgrade_get_status_queries: 0
+                              upgrade_update_status_queries: 0
+                              upgrade_result_queries: 0
+                              upgrade_cancel_tasks_queries: 1
+                            set_timeout_queries: 1
+                            delete_old_queries: 1
+                            unknown_queries: 0
+                          mitre_queries: 1277
+                          mitre_queries_breakdown:
+                            sql_queries: 1277
+                            unknown_queries: 0
+                          unknown_queries: 0
+                        queries_time_total: 493
+                        queries_time_breakdown:
+                          wazuhdb_time: 0
+                          wazuhdb_time_breakdown:
+                            remove_time: 0
+                          agent_time: 351
+                          agent_time_breakdown:
+                            sql_time: 0
+                            remove_time: 0
+                            begin_time: 0
+                            commit_time: 0
+                            close_time: 0
+                            syscheck_time:
+                              syscheck_time: 49
+                              fim_file_time: 30
+                              fim_registry_time: 0
+                            rootcheck_time:
+                              rootcheck_time: 47
+                            sca_time:
+                              sca_time: 0
+                            ciscat_time:
+                              ciscat_time: 0
+                            syscollector_time:
+                              syscollector_processes_time: 17
+                              syscollector_packages_time: 33
+                              syscollector_hotfixes_time: 0
+                              syscollector_ports_time: 47
+                              syscollector_network_protocol_time: 27
+                              syscollector_network_address_time: 26
+                              syscollector_network_iface_time: 21
+                              syscollector_hwinfo_time: 20
+                              syscollector_osinfo_time: 27
+                              process_time: 0
+                              package_time: 0
+                              hotfix_time: 0
+                              port_time: 0
+                              netproto_time: 0
+                              netaddr_time: 0
+                              netinfo_time: 0
+                              hardware_time: 0
+                              osinfo_time: 0
+                            vulnerability_detector_time:
+                              vuln_cves_time: 0
+                            dbsync_time: 0
+                          global_time: 14
+                          global_time_breakdown:
+                            sql_time: 0
+                            backup_time: 0
+                            agent_time:
+                              insert-agent_time: 0
+                              update-agent-data_time: 0
+                              update-agent-name_time: 0
+                              update-keepalive_time: 0
+                              update-connection-status_time: 0
+                              reset-agents-connection_time: 0
+                              delete-agent_time: 0
+                              select-agent-name_time: 0
+                              select-agent-group_time: 0
+                              select-keepalive_time: 0
+                              find-agent_time: 0
+                              get-agent-info_time: 2
+                              get-all-agents_time: 1
+                              get-agents-by-connection-status_time: 0
+                              disconnect-agents_time: 0
+                              sync-agent-info-get_time: 0
+                              sync-agent-info-set_time: 6
+                              sync-agent-groups-get_time: 2
+                              set-agent-groups_time: 0
+                              get-groups-integrity_time: 0
+                            group_time:
+                              insert-agent-group_time: 0
+                              delete-group_time: 0
+                              select-groups_time: 0
+                              find-group_time: 0
+                            belongs_time:
+                              delete-agent-belong_time: 0
+                              select-group-belong_time: 0
+                              get-group-agents_time: 0
+                            labels_time:
+                              set-labels_time: 0
+                              get-labels_time: 0
+                          task_time: 0
+                          task_time_breakdown:
+                            sql_time: 0
+                            upgrade_time:
+                              upgrade_time: 0
+                              upgrade_custom_time: 0
+                              upgrade_get_status_time: 0
+                              upgrade_update_status_time: 0
+                              upgrade_result_time: 0
+                              upgrade_cancel_tasks_time: 0
+                            set_timeout_time: 0
+                            delete_old_time: 0
+                          mitre_time: 128
+                          mitre_time_breakdown:
+                            sql_time: 128
+                  total_affected_items: 1
+                  failed_items: []
+                  total_failed_items: 0
+        '400':
+          $ref: '#/components/responses/ResponseError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedResponse'
+        '403':
+          $ref: '#/components/responses/PermissionDeniedResponse'
+        '405':
+          $ref: '#/components/responses/InvalidHTTPMethodResponse'
         '429':
           $ref: '#/components/responses/TooManyRequestsResponse'
 
@@ -10396,6 +12558,7 @@ paths:
     get:
       tags:
       - Manager
+      deprecated: true
       summary: "Get stats analysisd"
       description: "Return Wazuh analysisd statistical information"
       operationId: api.controllers.manager_controller.get_stats_analysisd
@@ -10421,21 +12584,12 @@ paths:
                   affected_items:
                     - total_events_decoded: 5
                       syscheck_events_decoded: 0
-                      syscheck_edps: 0
                       syscollector_events_decoded: 0
-                      syscollector_edps: 0
                       rootcheck_events_decoded: 0
-                      rootcheck_edps: 0
                       sca_events_decoded: 0
-                      sca_edps: 0
-                      hostinfo_events_decoded: 0
-                      hostinfo_edps: 0
                       winevt_events_decoded: 0
-                      winevt_edps: 0
                       other_events_decoded: 5
-                      other_events_edps: 1
                       events_processed: 5
-                      events_edps: 1
                       events_received: 5
                       events_dropped: 0
                       alerts_written: 0
@@ -10483,6 +12637,7 @@ paths:
     get:
       tags:
       - Manager
+      deprecated: true
       summary: "Get stats remoted"
       description: "Return Wazuh remoted statistical information"
       operationId: api.controllers.manager_controller.get_stats_remoted
@@ -10512,7 +12667,6 @@ paths:
                       evt_count: 0
                       ctrl_msg_count: 0
                       discarded_count: 0
-                      queued_msgs: 0
                       sent_bytes: 0
                       recv_bytes: 0
                   total_affected_items: 0
@@ -10574,7 +12728,7 @@ paths:
                     - timestamp: '2020-04-15T13:50:24Z'
                       tag: wazuh-maild
                       level: error
-                      description: " (1223): Error Sending email to 69.172.200.109 (smtp server)"
+                      description: " (1263): Error Sending email to 69.172.200.109 (smtp server)"
                   total_affected_items: 3
                   failed_items: []
                   total_failed_items: 0
@@ -10704,7 +12858,6 @@ paths:
                         cache:
                           enabled: true
                           time: 0.75
-                        use_only_authd: false
                         drop_privileges: true
                         experimental_features: false
                         max_upload_size: 10485760
@@ -10899,7 +13052,7 @@ paths:
               example:
                 data:
                   affected_items:
-                    - mitre_version: '1.2'
+                    - mitre_version: "1.2"
                       deprecated: 0
                       description: |-
                         [APT38](https://attack.mitre.org/groups/G0082) is a financially-motivated threat group that is backed by the North Korean regime. The group mainly targets banks and financial institutions and has targeted more than 16 organizations in at least 13 countries since at least 2014.(Citation: FireEye APT38 Oct 2018)
@@ -11161,7 +13314,7 @@ paths:
               example:
                 data:
                   affected_items:
-                    - mitre_version: '1.0'
+                    - mitre_version: "1.0"
                       deprecated: 0
                       description: "[HDoor](https://attack.mitre.org/software/S0061) is malware that
                         has been customized and used by the [Naikon](https://attack.mitre.org/groups/G0019)
@@ -11316,7 +13469,7 @@ paths:
               example:
                 data:
                   affected_items:
-                    - mitre_version: '1.0'
+                    - mitre_version: "1.0"
                       network_requirements: 0
                       remote_support: 0
                       mitre_detection: |-
@@ -11842,6 +13995,7 @@ paths:
         - $ref: '#/components/parameters/wait_for_complete'
         - $ref: '#/components/parameters/xml_filename_path'
         - $ref: '#/components/parameters/raw'
+        - $ref: '#/components/parameters/get_dirnames_path'
       responses:
         '200':
           description: "Rule content"
@@ -11920,7 +14074,7 @@ paths:
                   -  Rules config
                   -  Author: Daniel Cid.
                   -  Updated by Wazuh, Inc.
-                  -  Copyright (C) 2015-2021, Wazuh Inc.
+                  -  Copyright (C) 2015, Wazuh Inc.
                   -  Copyright (C) 2009 Trend Micro Inc.
                   -  This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2.
                 -->
@@ -12098,7 +14252,9 @@ paths:
         - $ref: '#/components/parameters/limit'
         - $ref: '#/components/parameters/sort'
         - $ref: '#/components/parameters/search'
+        - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "SCA database elements"
@@ -12114,19 +14270,19 @@ paths:
               example:
                 data:
                   affected_items:
-                    - total_checks: 192
-                      name: "CIS Benchmark for Debian/Linux 10"
-                      score: 39
-                      pass: 61
-                      description: "This document provides prescriptive guidance for establishing a secure configuration
-                       posture for Debian Linux 10."
-                      start_scan: "2021-05-28T11:16:14Z"
-                      policy_id: "cis_debian10"
-                      invalid: 37
-                      fail: 94
+                    - description: "This document provides prescriptive guidance for establishing a secure configuration
+                      posture for Ubuntu Linux 20.04 LTS."
+                      fail: 87
+                      start_scan: "2022-09-27T08:07:02+00:00"
                       references: "https://www.cisecurity.org/cis-benchmarks/"
-                      hash_file: "f9bc11bb3e2cfa4017da658e833a38840f180cc339c07c01a6239c4d947d1bbe"
-                      end_scan: "2021-05-28T11:16:14Z"
+                      name: "CIS benchmark for Ubuntu Linux 20.04 LTS"
+                      pass: 56
+                      score: 39
+                      end_scan: "2022-09-27T08:07:02+00:00"
+                      policy_id: "cis_ubuntu20-04"
+                      total_checks: 191
+                      hash_file: "fb41fe9660f4320aaed0c3c292c8602953df7f8c42b37b724855f9005c43fafc"
+                      invalid: 48
                   total_affected_items: 1
                   total_failed_items: 0
                   failed_items: []
@@ -12162,7 +14318,6 @@ paths:
         - $ref: '#/components/parameters/rationale'
         - $ref: '#/components/parameters/remediation'
         - $ref: '#/components/parameters/command'
-        - $ref: '#/components/parameters/status'
         - $ref: '#/components/parameters/reason'
         - $ref: '#/components/parameters/full_path_filter'
         - $ref: '#/components/parameters/process'
@@ -12175,7 +14330,9 @@ paths:
         - $ref: '#/components/parameters/limit'
         - $ref: '#/components/parameters/sort'
         - $ref: '#/components/parameters/search'
+        - $ref: '#/components/parameters/select'
         - $ref: '#/components/parameters/query'
+        - $ref: '#/components/parameters/distinct'
       responses:
         '200':
           description: "List of SCA Checks for a given policy ID"
@@ -12191,44 +14348,35 @@ paths:
               example:
                 data:
                   affected_items:
-                  - remediation: "For new installations, during installation create a custom partition setup and specify
-                   a separate partition for /var. For systems that were previously installed, create a new partition and
-                    configure /etc/fstab as appropriate"
-                    rationale: "Since the /var directory may contain world-writable files and directories, there is a
-                    risk of resource exhaustion if it is not bound to a separate partition"
-                    title: "Ensure separate partition exists for /var"
-                    policy_id: cis_debian
-                    file: /etc/fstab
-                    description: "The /var directory is used by daemons and other system services to temporarily store
-                    dynamic data. Some directories created by these processes may be world-writable"
-                    id: 5003
-                    result: failed
-                    condition: all
-                    references: "https://tldp.org/HOWTO/LVM-HOWTO/"
-                    compliance:
-                    - key: cis
-                      value: "1.1.6"
-                    - key: cis_csc
-                      value: "5"
-                  - remediation: "Run the following commands to remove exim: # apt-get remove exim4; # apt-get purge
-                  exim4"
-                    rationale: "Unless POP3 and/or IMAP servers are to be provided by this system, it is recommended
-                    that the package be removed to reduce the potential attack surface"
-                    title: "Ensure IMAP and POP3 server is not enabled (POP3)"
-                    policy_id: cis_debian
-                    file: /etc/inetd.conf
-                    description: "Exim is an open source IMAP and POP3 server for Linux based systems"
-                    id: 5022
-                    result: passed
-                    condition: all
-                    compliance:
-                    - key: cis
-                      value: "2.2.11"
-                    - key: cis_csc
-                      value: "9"
-                    - key: pci_dss
-                      value: "2.2.2"
-                  total_affected_items: 2
+                    - description: "The cramfs filesystem type is a compressed read-only Linux filesystem embedded in
+                      small footprint systems. A cramfs image can be used without having to first decompress the image."
+                      id: 19000
+                      reason: "Invalid path or wrong permissions to run command 'modprobe -n -v cramfs'"
+                      command: "modprobe -n -v cramfs,lsmod"
+                      rationale: "Removing support for unneeded filesystem types reduces the local attack surface of the
+                      server. If this filesystem type is not needed, disable it."
+                      condition: "all"
+                      title: "Ensure mounting of cramfs filesystems is disabled."
+                      result: "not applicable"
+                      policy_id: "cis_ubuntu20-04"
+                      remediation: "1) Edit or create a file in the /etc/modprobe.d/ directory ending in .conf and add
+                      the following line: install cramfs /bin/true. 2) Run the following command to unload the cramfs
+                      module: # rmmod cramfs"
+                      compliance:
+                        - value: "1.1.1.1"
+                          key: "cis"
+                        - value: "5.1"
+                          key: "cis_csc"
+                        - value: "2.2.5"
+                          key: "pci_dss"
+                        - value: "CC6.3"
+                          key: "tsc"
+                      rules:
+                        - type: "command"
+                          rule: "c:modprobe -n -v cramfs -> r:^install /bin/true"
+                        - type: "numeric"
+                          rule: "not c:lsmod -> r:cramfs"
+                  total_affected_items: 191
                   total_failed_items: 0
                   failed_items: []
                 message: "All selected sca/policy information was returned"
@@ -12452,7 +14600,7 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/AllItemsResponseSyscheckLastScan'
+                        $ref: '#/components/schemas/AllItemsResponseLastScan'
               example:
                 data:
                   affected_items:
@@ -12624,6 +14772,7 @@ paths:
         - $ref: '#/components/parameters/wait_for_complete'
         - $ref: '#/components/parameters/xml_filename_path'
         - $ref: '#/components/parameters/raw'
+        - $ref: '#/components/parameters/get_dirnames_path'
       responses:
         '200':
           description: "Decoder content"
@@ -12701,7 +14850,7 @@ paths:
                 <!--
                   -  Wazuh decoders
                   -  Created by Wazuh, Inc.
-                  -  Copyright (C) 2015-2021, Wazuh Inc.
+                  -  Copyright (C) 2015, Wazuh Inc.
                   -  This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2.
                 -->
                 <decoder name="wazuh">
@@ -14624,7 +16773,7 @@ paths:
                       tgid: 1
                       share: 729
                       rgroup: "root"
-                      argvs: "/scripts/entrypoint.sh nginx-lb 4.3"
+                      argvs: "/scripts/entrypoint.sh nginx-lb 4.4"
                       start_time: 1217866
                       stime: 0
                       vm_size: 3984
@@ -14660,13 +16809,54 @@ paths:
           $ref: '#/components/responses/TooManyRequestsResponse'
 
   /security/user/authenticate:
-    get:
+    post:
       tags:
         - Security
       summary: "Login"
       description: "This method should be called to get an API token. This token will expire after
       auth_token_exp_timeout seconds (default: 900). This value can be changed using PUT /security/config"
       operationId: api.controllers.security_controller.login_user
+      parameters:
+        - $ref: '#/components/parameters/raw'
+      security:
+        - basicAuth: []
+      responses:
+        '200':
+          description: "Login successful"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Token'
+              example:
+                data:
+                  token: "<generated_token>"
+                  error: 0
+            text/plain:
+              schema:
+                type: string
+              example: "<generated_token>"
+        '400':
+          $ref: '#/components/responses/ResponseError'
+        '401':
+          $ref: '#/components/responses/InvalidCredentialsResponse'
+        '405':
+          $ref: '#/components/responses/InvalidHTTPMethodResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsResponse'
+
+    get:
+      tags:
+        - Security
+      summary: "Login"
+      deprecated: true
+      description: "This method should be called to get an API token. This token will expire after
+      auth_token_exp_timeout seconds (default: 900). This value can be changed using PUT /security/config"
+      operationId: api.controllers.security_controller.deprecated_login_user
       parameters:
         - $ref: '#/components/parameters/raw'
       security:
@@ -16666,6 +18856,47 @@ paths:
                 message: "All specified task's status were returned"
                 error: 0
 
+  /vulnerability:
+    put:
+      tags:
+        - Vulnerability
+      summary: "Run vulnerability detector scan"
+      description: "Run a vulnerability detector scan in all nodes"
+      operationId: api.controllers.vulnerability_controller.run_vulnerability_scan
+      x-rbac-actions:
+        - $ref: '#/x-rbac-catalog/actions/vulnerability:run'
+      parameters:
+        - $ref: '#/components/parameters/pretty'
+        - $ref: '#/components/parameters/wait_for_complete'
+      responses:
+        '200':
+          description: "Run vulnerability detector scan"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+              example:
+                data:
+                  affected_items:
+                    - master-node
+                    - worker1
+                    - worker2
+                  total_affected_items: 3
+                  total_failed_items: 0
+                  failed_items: []
+                message: "A vulnerability detector scan was requested in all nodes"
+                error: 0
+        '400':
+          $ref: '#/components/responses/ResponseError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedResponse'
+        '403':
+          $ref: '#/components/responses/PermissionDeniedResponse'
+        '405':
+          $ref: '#/components/responses/InvalidHTTPMethodResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsResponse'
+
   /vulnerability/{agent_id}:
     get:
       tags:
@@ -16690,6 +18921,9 @@ paths:
         - $ref: '#/components/parameters/cve'
         - $ref: '#/components/parameters/name'
         - $ref: '#/components/parameters/cve_version'
+        - $ref: '#/components/parameters/cve_type'
+        - $ref: '#/components/parameters/cve_status'
+        - $ref: '#/components/parameters/cve_severity'
       responses:
         '200':
           description: "Get agent vulnerabilities"
@@ -16700,14 +18934,36 @@ paths:
               example:
                 data:
                   affected_items:
-                    - cve: CVE-2020-27350
-                      architecture: amd64
-                      version: 1.2.32ubuntu0.1
-                      name: apt
-                    - cve: CVE-2019-18276
-                      architecture: amd64
-                      version: 4.3-14ubuntu1.4
-                      name: bash
+                    - severity: "High"
+                      updated: "2022-01-10"
+                      version: "2.34-6ubuntu1.3"
+                      type: "PACKAGE"
+                      name: "binutils"
+                      external_references: ["https://sourceware.org/bugzilla/show_bug.cgi?id=28694","https://sourceware.org/git/gitweb.cgi?p=binutils-gdb.git;h=161e87d12167b1e36193385485c1f6ce92f74f02","https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/UQBH244M5PV6S6UMHUTCVCWFZDX7Y4M6/","https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/UUHLDDT3HH7YEY6TX7IJRGPJUTNNVEL3/","https://security.netapp.com/advisory/ntap-20220107-0002/","https://nvd.nist.gov/vuln/detail/CVE-2021-45078","http://people.canonical.com/~ubuntu-security/cve/2021/CVE-2021-45078.html","https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-45078"]
+                      condition: "Package unfixed"
+                      detection_time: "2022-03-14T11:04:04Z"
+                      cvss3_score: 7.8
+                      published: "2021-12-15"
+                      architecture: "amd64"
+                      cve: "CVE-2021-45078"
+                      status: "VALID"
+                      title: "CVE-2021-45078 affects binutils"
+                      cvss2_score: 6.8
+                    - severity: "High"
+                      updated: "2022-01-10"
+                      version: "2.34-6ubuntu1.3"
+                      type: "PACKAGE"
+                      name: "binutils-common"
+                      external_references: ["https://sourceware.org/bugzilla/show_bug.cgi?id=28694","https://sourceware.org/git/gitweb.cgi?p=binutils-gdb.git;h=161e87d12167b1e36193385485c1f6ce92f74f02","https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/UQBH244M5PV6S6UMHUTCVCWFZDX7Y4M6/","https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/UUHLDDT3HH7YEY6TX7IJRGPJUTNNVEL3/","https://security.netapp.com/advisory/ntap-20220107-0002/","https://nvd.nist.gov/vuln/detail/CVE-2021-45078","http://people.canonical.com/~ubuntu-security/cve/2021/CVE-2021-45078.html","https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-45078"]
+                      condition: "Package unfixed"
+                      detection_time: "2022-03-14T11:04:04Z"
+                      cvss3_score: 7.8
+                      published: "2021-12-15"
+                      architecture: "amd64"
+                      cve: "CVE-2021-45078"
+                      status: "VALID"
+                      title: "CVE-2021-45078 affects binutils-common"
+                      cvss2_score: 6.8
                   total_affected_items: 2
                   total_failed_items: 0
                   failed_items: []
@@ -16724,6 +18980,157 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequestsResponse'
 
+  /vulnerability/{agent_id}/last_scan:
+    get:
+      tags:
+      - Vulnerability
+      summary: "Get last scan datetime"
+      description: "Return when the last full and partial vulnerability scan of a specified agent ended."
+      operationId: api.controllers.vulnerability_controller.get_last_scan_agent
+      x-rbac-actions:
+        - $ref: '#/x-rbac-catalog/actions/vulnerability:read'
+      parameters:
+        - $ref: '#/components/parameters/pretty'
+        - $ref: '#/components/parameters/wait_for_complete'
+        - $ref: '#/components/parameters/agent_id'
+      responses:
+        '200':
+          description: "Scan dates"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AllItemsResponseLastScan'
+              example:
+                data:
+                  affected_items:
+                    - last_full_scan: '2021-06-14T07:45:51Z'
+                      last_partial_scan: '2021-06-14T10:15:56Z'
+                  total_affected_items: 1
+                  total_failed_items: 0
+                  failed_items: [ ]
+                message: Last vulnerability scans of the agent were returned
+                error: 0
+        '400':
+          $ref: '#/components/responses/ResponseError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedResponse'
+        '403':
+          $ref: '#/components/responses/PermissionDeniedResponse'
+        '405':
+          $ref: '#/components/responses/InvalidHTTPMethodResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsResponse'
+
+  /vulnerability/{agent_id}/summary/{field}:
+    get:
+      tags:
+        - Vulnerability
+      summary: "Get agent vulnerabilities' field summary"
+      description: "Return a summary of the vulnerabilities' field of an agent"
+      operationId: api.controllers.vulnerability_controller.get_vulnerabilities_field_summary
+      x-rbac-actions:
+        - $ref: '#/x-rbac-catalog/actions/vulnerability:read'
+      parameters:
+        - $ref: '#/components/parameters/pretty'
+        - $ref: '#/components/parameters/wait_for_complete'
+        - $ref: '#/components/parameters/agent_id'
+        - $ref: '#/components/parameters/vulnerability_field'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200':
+          description: "Get agent vulnerabilities' field summary"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+              example:
+                data:
+                  severity:
+                    critical: 8
+                    medium: 3
+                    high: 1
+                    low: 0
+                error: 0
+        '400':
+          $ref: '#/components/responses/ResponseError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedResponse'
+        '403':
+          $ref: '#/components/responses/PermissionDeniedResponse'
+        '405':
+          $ref: '#/components/responses/InvalidHTTPMethodResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsResponse'
+
+  /events:
+    post:
+      tags:
+      - Events
+      summary: "Ingest events"
+      description: |-
+        Send security events to analysisd.
+
+        The endpoint is limited to receiving a max of 30 requests per minute and a max bulk size of 100 events per request.
+      operationId: api.controllers.event_controller.forward_event
+      x-rbac-actions:
+        - $ref: '#/x-rbac-catalog/actions/event:ingest'
+      parameters:
+        - $ref: '#/components/parameters/pretty'
+        - $ref: '#/components/parameters/wait_for_complete'
+      requestBody:
+        content:
+          application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    description: "Bulk of events"
+                    type: array
+                    items:
+                      type: string
+                required:
+                - events
+              example:
+                events:
+                  - "Event value 1"
+                  - "{\"someKey\": \"Event value 2\"}"
+      responses:
+        '200':
+          description: "Events accepted"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+              example:
+                data:
+                  affected_items:
+                    - "Event value 1"
+                    - "{\"someKey\": \"Event value 2\"}"
+                  total_affected_items: 2
+                  total_failed_items: 0
+                  failed_items: []
+                message: "All events were forwarded to analisysd"
+                error: 0
+        '400':
+          $ref: '#/components/responses/ResponseError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedResponse'
+        '403':
+          $ref: '#/components/responses/PermissionDeniedResponse'
+        '405':
+          $ref: '#/components/responses/InvalidHTTPMethodResponse'
+        '406':
+          $ref: '#/components/responses/WrongContentTypeResponse'
+        '413':
+          $ref: '#/components/responses/RequestTooLargeResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsResponse'
+
 externalDocs:
   description: "Find more about Wazuh API usage"
-  url: 'https://documentation.wazuh.com/4.3/user-manual/api/index.html'
+  url: 'https://documentation.wazuh.com/4.8/user-manual/api/index.html'

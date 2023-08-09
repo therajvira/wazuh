@@ -1,6 +1,6 @@
 /*
  * Wazuh Module Manager
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * April 22, 2016.
  *
  * This program is free software; you can redistribute it
@@ -14,7 +14,7 @@
 
 #include "shared.h"
 #include <pthread.h>
-#include "config/config.h"
+#include "../config/config.h"
 #include "wmodules_def.h"
 
 #define WM_STATE_DIR    "var/wodles"               // Default directory for states.
@@ -23,7 +23,7 @@
 #define WM_BUFFER_MAX   1024                        // Max. static buffer size.
 #define WM_BUFFER_MIN   1024                        // Starting JSON buffer length.
 #define WM_MAX_ATTEMPTS 3                           // Max. number of attempts.
-#define WM_MAX_WAIT     1                           // Max. wait between attempts.
+#define WM_MAX_WAIT     500                           // Max. wait between attempts in milliseconds.
 #define WM_IO_WRITE     0
 #define WM_IO_READ      1
 #define WM_ERROR_TIMEOUT 1                          // Error code for timeout.
@@ -31,9 +31,10 @@
 #define WM_HEADER_SIZE  OS_SIZE_2048
 #define VU_WM_NAME "vulnerability-detector"
 #define AZ_WM_NAME "azure-logs"
-#define KEY_WM_NAME "agent-key-polling"
+#define KEY_WM_NAME "agent-key-polling"             // Deprecated key-polling module
 #define SCA_WM_NAME "sca"
-#define GCP_WM_NAME "gcp-pubsub"
+#define GCP_PUBSUB_WM_NAME "gcp-pubsub"
+#define GCP_BUCKET_WM_NAME "gcp-bucket"
 #define FLUENT_WM_NAME "fluent-forward"
 #define AGENT_UPGRADE_WM_NAME "agent-upgrade"
 #define TASK_MANAGER_WM_NAME "task-manager"
@@ -71,7 +72,6 @@ typedef enum crypto_type {
 #include "wm_download.h"
 #include "wm_azure.h"
 #include "wm_docker.h"
-#include "wm_keyrequest.h"
 #include "wm_sca.h"
 #include "wm_fluent.h"
 #include "wm_control.h"
@@ -88,7 +88,6 @@ extern int wm_max_eps;          // Maximum events per second sent by OpenScap Wa
 extern int wm_kill_timeout;     // Time for a process to quit before killing it
 extern int wm_debug_level;
 
-
 // Read XML configuration and internal options
 int wm_config();
 cJSON *getModulesConfig(void);
@@ -97,6 +96,20 @@ int modulesSync(char* args);
 
 // Add module to the global list
 void wm_add(wmodule *module);
+
+/*
+ * @brief Get ID group of Wazuh user.
+ *
+ * @return ID group.
+ */
+gid_t wm_getGroupID(void);
+
+/*
+ * @brief Set ID group of wazuh modules
+ *
+ * @param[in] gid ID group.
+ */
+void wm_setGroupID(const gid_t gid);
 
 // Check general configuration
 int wm_check();
@@ -156,6 +169,9 @@ void wm_free(wmodule * c);
 // Send message to a queue with a specific delay
 int wm_sendmsg(int usec, int queue, const char *message, const char *locmsg, char loc) __attribute__((nonnull));
 
+// Send message to a queue with a specific delay, and the option to stop the wait process.
+int wm_sendmsg_ex(int usec, int queue, const char *message, const char *locmsg, char loc, bool (*fn_prd)()) __attribute__((nonnull));
+
 // Check if a path is relative or absolute.
 // Returns 0 if absolute, 1 if relative or -1 on error.
 int wm_relative_path(const char * path);
@@ -185,5 +201,27 @@ void wmcom_send(char * message);
 size_t wmcom_dispatch(char * command, char ** output);
 size_t wmcom_getconfig(const char * section, char ** output);
 int wmcom_sync(char * buffer);
+
+/**
+ * @brief Find a module
+ *
+ * @param name Name of the module.
+ * @return Pointer to a module structure.
+ * @return NULL if the module was not found.
+ */
+wmodule * wm_find_module(const char * name);
+
+/**
+ * @brief Run a query in a module
+ *
+ * Run a command into a module structure, not in the same thread.
+ * Query format: <module name> <command>
+ * Example: "vulnerability-detector run_now"
+ *
+ * @param query Command query
+ * @param output Output payload
+ * @return Size of the output
+ */
+size_t wm_module_query(char * query, char ** output);
 
 #endif // W_MODULES

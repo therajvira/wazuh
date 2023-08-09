@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All right reserved.
  *
  * This program is a free software; you can redistribute it
@@ -8,6 +8,11 @@
  */
 
 #include "mitre.h"
+
+#ifdef WAZUH_UNIT_TESTING
+// Remove static qualifier when unit testing
+#define static
+#endif
 
 #define SQL_GET_ALL_TECHNIQUES "mitre sql SELECT technique.id, technique.name, reference.external_id FROM technique LEFT JOIN reference ON technique.id = reference.id WHERE technique.revoked_by IS NULL AND NOT technique.deprecated AND reference.source = 'mitre-attack' LIMIT %i OFFSET %i;"
 #define SQL_GET_ALL_TECHNIQUE_PHASES "mitre sql SELECT tactic_id FROM phase WHERE tech_id = '%s';"

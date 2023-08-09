@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -12,8 +12,8 @@
 #define ROOTCHECK_H
 
 #include "list_op.h"
-#include "config/rootcheck-config.h"
-#include "external/cJSON/cJSON.h"
+#include "../config/rootcheck-config.h"
+#include <cJSON.h>
 
 #ifdef WIN32
 #define PATH_SEP '\\'

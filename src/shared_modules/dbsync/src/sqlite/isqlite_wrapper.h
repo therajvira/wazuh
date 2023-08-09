@@ -1,6 +1,6 @@
 /*
  * Wazuh DBSYNC
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * June 11, 2020.
  *
  * This program is free software; you can redistribute it
@@ -39,6 +39,7 @@ namespace SQLite
             // LCOV_EXCL_STOP
             virtual void close() = 0;
             virtual void execute(const std::string& query) = 0;
+            virtual int64_t changes() const = 0;
             virtual const std::shared_ptr<sqlite3>& db() const = 0;
     };
 

@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -383,6 +383,10 @@
 #define PRODUCT_STORAGE_WORKGROUP_SERVER_CORE_C "Storage Server Workgroup (core installation) "
 #endif
 
+#ifndef FIRST_BUILD_WINDOWS_11
+#define FIRST_BUILD_WINDOWS_11 22000
+#endif
+
 #define mkstemp(x) 0
 #define mkdir(x, y) mkdir(x)
 #endif /* WIN32 */
@@ -450,23 +454,22 @@ int check_path_type(const char *dir)
 }
 
 
-int IsFile(const char *file)
-{
+int IsFile(const char *file) {
     struct stat buf;
-	return (!stat(file, &buf) && S_ISREG(buf.st_mode)) ? 0 : -1;
+    return (!stat(file, &buf) && S_ISREG(buf.st_mode)) ? 0 : -1;
 }
 
 #ifndef WIN32
 
 int IsSocket(const char * file) {
     struct stat buf;
-	return (!stat(file, &buf) && S_ISSOCK(buf.st_mode)) ? 0 : -1;
+    return (!stat(file, &buf) && S_ISSOCK(buf.st_mode)) ? 0 : -1;
 }
 
 
 int IsLink(const char * file) {
     struct stat buf;
-	return (!lstat(file, &buf) && S_ISLNK(buf.st_mode)) ? 0 : -1;
+    return (!lstat(file, &buf) && S_ISLNK(buf.st_mode)) ? 0 : -1;
 }
 
 #endif // WIN32
@@ -620,15 +623,17 @@ void DeleteState() {
 }
 
 
-int UnmergeFiles(const char *finalpath, const char *optdir, int mode)
+int UnmergeFiles(const char *finalpath, const char *optdir, int mode, const char ***unmerged_files)
 {
     int ret = 1;
     int state_ok;
+    int file_count = 0;
     size_t i = 0, n = 0, files_size = 0;
     char *files;
     char * copy;
     char final_name[2048 + 1];
     char buf[2048 + 1];
+    char *file_name;
     FILE *fp;
     FILE *finalfp;
 
@@ -636,6 +641,11 @@ int UnmergeFiles(const char *finalpath, const char *optdir, int mode)
     if (!finalfp) {
         merror("Unable to read merged file: '%s' due to [(%d)-(%s)].", finalpath, errno, strerror(errno));
         return (0);
+    }
+
+    /* Finds index of the last element on the list */
+    if (unmerged_files != NULL) {
+        for(file_count = 0; *(*unmerged_files + file_count); file_count++);
     }
 
     while (1) {
@@ -690,12 +700,21 @@ int UnmergeFiles(const char *finalpath, const char *optdir, int mode)
 
         free(copy);
 
+        /* Create temporary file */
+        char tmp_file[strlen(final_name) + 7];
+        snprintf(tmp_file, sizeof(tmp_file), "%sXXXXXX", final_name);
+
+        if (mkstemp_ex(tmp_file) == -1) {
+            merror("Unmerging '%s': could not create temporary file for '%s'", finalpath, files);
+            state_ok = 0;
+        }
+
         /* Open filename */
 
         if (state_ok) {
-            if (fp = fopen(final_name, mode == OS_BINARY ? "wb" : "w"), !fp) {
+            if (fp = fopen(tmp_file, mode == OS_BINARY ? "wb" : "w"), !fp) {
                 ret = 0;
-                merror("Unable to unmerge file '%s' due to [(%d)-(%s)].", final_name, errno, strerror(errno));
+                merror("Unable to unmerge file '%s' due to [(%d)-(%s)].", tmp_file, errno, strerror(errno));
             }
         } else {
             fp = NULL;
@@ -733,6 +752,29 @@ int UnmergeFiles(const char *finalpath, const char *optdir, int mode)
         if (fp) {
             fclose(fp);
         }
+
+        /* Mv to original name */
+        rename_ex(tmp_file, final_name);
+
+        if (unmerged_files != NULL) {
+            /* Removes path from file name */
+            file_name = strrchr(final_name, '/');
+            if (file_name) {
+                file_name++;
+            }
+            else {
+                file_name = final_name;
+            }
+
+            /* Appends file name to unmerged files list */
+            os_realloc(*unmerged_files, (file_count + 2) * sizeof(char *), *unmerged_files);
+            os_strdup(file_name, *(*unmerged_files + file_count));
+            file_count++;
+        }
+    }
+
+    if (unmerged_files != NULL) {
+        *(*unmerged_files + file_count) = NULL;
     }
 
     fclose(finalfp);
@@ -832,39 +874,13 @@ end:
 }
 
 
-int MergeAppendFile(const char *finalpath, const char *files, const char *tag, int path_offset)
+int MergeAppendFile(FILE *finalfp, const char *files, int path_offset)
 {
     size_t n = 0;
     long files_size = 0;
+    long files_final_size = 0;
     char buf[2048 + 1];
-    FILE *fp;
-    FILE *finalfp;
-    char newpath[PATH_MAX];
-    DIR *dir;
-    struct dirent *ent = NULL;
-
-    /* Create a new entry */
-
-    if (files == NULL) {
-        finalfp = fopen(finalpath, "w");
-        if (!finalfp) {
-            merror("Unable to create merged file: '%s' due to [(%d)-(%s)].", finalpath, errno, strerror(errno));
-            return (0);
-        }
-
-        if (tag) {
-            fprintf(finalfp, "#%s\n", tag);
-        }
-
-        fclose(finalfp);
-
-        if (chmod(finalpath, 0660) < 0) {
-            merror(CHMOD_ERROR, finalpath, errno, strerror(errno));
-            return 0;
-        }
-
-        return (1);
-    }
+    FILE *fp = NULL;
 
     if (path_offset < 0) {
         char filename[PATH_MAX];
@@ -882,53 +898,42 @@ int MergeAppendFile(const char *finalpath, const char *files, const char *tag, i
         }
     }
 
-    /* Is a file */
-    if (dir = opendir(files), !dir) {
-
-        finalfp = fopen(finalpath, "a");
-        if (!finalfp) {
-            merror("Unable to append merged file: '%s' due to [(%d)-(%s)].", finalpath, errno, strerror(errno));
-            return (0);
-        }
-
-        fp = fopen(files, "r");
-
-        if (!fp) {
-            merror("Unable to merge file '%s' due to [(%d)-(%s)].", files, errno, strerror(errno));
-            fclose(finalfp);
-            return (0);
-        }
-
-        fseek(fp, 0, SEEK_END);
-        files_size = ftell(fp);
-
-        if (tag) {
-            fprintf(finalfp, "#%s\n", tag);
-        }
-
-        fprintf(finalfp, "!%ld %s\n", files_size, files + path_offset);
-        fseek(fp, 0, SEEK_SET);
-
-        while ((n = fread(buf, 1, sizeof(buf) - 1, fp)) > 0) {
-            buf[n] = '\0';
-            fwrite(buf, n, 1, finalfp);
-        }
-
-        fclose(fp);
-        fclose(finalfp);
+    if (fp = fopen(files, "r"), fp == NULL) {
+        merror("Unable to open file: '%s' due to [(%d)-(%s)].", files, errno, strerror(errno));
+        return (0);
     }
-    else { /* Is a directory */
-        mdebug2("Merging directory: %s", files);
 
-        while ((ent = readdir(dir)) != NULL) {
-            // Skip . and ..
-            if (ent->d_name[0] != '.' || (ent->d_name[1] && (ent->d_name[1] != '.' || ent->d_name[2]))) {
-                snprintf(newpath, PATH_MAX, "%s/%s", files, ent->d_name);
-                MergeAppendFile(finalpath, newpath, tag, path_offset);
-            }
-        }
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        merror("Unable to set EOF offset in file: '%s', due to [(%d)-(%s)].", files, errno, strerror(errno));
+        fclose(fp);
+        return (0);
+    }
 
-        closedir(dir);
+    files_size = ftell(fp);
+    if (files_size == 0) {
+        mwarn("File '%s' is empty.", files);
+    }
+
+    fprintf(finalfp, "!%ld %s\n", files_size, files + path_offset);
+
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        merror("Unable to set the offset in file: '%s', due to [(%d)-(%s)].", files, errno, strerror(errno));
+        fclose(fp);
+        return (0);
+    }
+
+    while ((n = fread(buf, 1, sizeof(buf) - 1, fp)) > 0) {
+        buf[n] = '\0';
+        fwrite(buf, n, 1, finalfp);
+    }
+
+    files_final_size = ftell(fp);
+
+    fclose(fp);
+
+    if (files_size != files_final_size) {
+        merror("File '%s' was modified after getting its size.", files);
+        return (0);
     }
 
     return (1);
@@ -977,64 +982,6 @@ int checkBinaryFile(const char *f_name) {
     }
     fclose(fp);
     return 0;
-}
-
-
-int MergeFiles(const char *finalpath, char **files, const char *tag)
-{
-    int i = 0, ret = 1;
-    size_t n = 0;
-    long files_size = 0;
-
-    char *tmpfile;
-    char buf[2048 + 1];
-    FILE *fp;
-    FILE *finalfp;
-
-    finalfp = fopen(finalpath, "w");
-    if (!finalfp) {
-        merror("Unable to create merged file: '%s' due to [(%d)-(%s)].", finalpath, errno, strerror(errno));
-        return (0);
-    }
-
-    if (tag) {
-        fprintf(finalfp, "#%s\n", tag);
-    }
-
-    while (files[i]) {
-        fp = fopen(files[i], "r");
-        if (!fp) {
-            merror("Unable to merge file '%s' due to [(%d)-(%s)].", files[i], errno, strerror(errno));
-            i++;
-            ret = 0;
-            continue;
-        }
-
-        fseek(fp, 0, SEEK_END);
-        files_size = ftell(fp);
-
-        /* Remove last entry */
-        tmpfile = strrchr(files[i], '/');
-        if (tmpfile) {
-            tmpfile++;
-        } else {
-            tmpfile = files[i];
-        }
-
-        fprintf(finalfp, "!%ld %s\n", files_size, tmpfile);
-
-        fseek(fp, 0, SEEK_SET);
-        while ((n = fread(buf, 1, sizeof(buf) - 1, fp)) > 0) {
-            buf[n] = '\0';
-            fwrite(buf, n, 1, finalfp);
-        }
-
-        fclose(fp);
-        i++;
-    }
-
-    fclose(finalfp);
-    return (ret);
 }
 
 
@@ -1873,6 +1820,7 @@ const char *getuname()
                 TCHAR wincomp[size];
                 DWORD winMajor = 0;
                 DWORD winMinor = 0;
+                DWORD buildRevision = 0;
                 DWORD dwCount = size;
                 unsigned long type=REG_DWORD;
 
@@ -1896,7 +1844,23 @@ const char *getuname()
                             snprintf(__wp, 63, " [Ver: %d.%d]", (unsigned int)winMajor, (unsigned int)winMinor);
                         }
                         else {
-                            snprintf(__wp, 63, " [Ver: %d.%d.%s]", (unsigned int)winMajor, (unsigned int)winMinor, wincomp);
+                            dwCount = size;
+                            dwRet = RegQueryValueEx(RegistryKey, TEXT("UBR"), NULL, &type, (LPBYTE)&buildRevision, &dwCount);
+                            if (dwRet != ERROR_SUCCESS) {
+                                snprintf(__wp,  sizeof(__wp), " [Ver: %d.%d.%s]", (unsigned int)winMajor, (unsigned int)winMinor, wincomp);
+                            }
+                            else {
+                                snprintf(__wp,  sizeof(__wp), " [Ver: %d.%d.%s.%lu]", (unsigned int)winMajor, (unsigned int)winMinor, wincomp, buildRevision);
+                            }
+
+                            char *endptr = NULL, *osVersion = NULL;
+                            const int buildNumber = (int) strtol(wincomp, &endptr, 10);
+
+                            if ('\0' == *endptr && buildNumber >= FIRST_BUILD_WINDOWS_11) {
+                                if (osVersion = strstr(ret, "Microsoft Windows 10"), osVersion != NULL) {
+                                    memcpy(osVersion, "Microsoft Windows 11", strlen("Microsoft Windows 11"));
+                                }
+                            }
                         }
                     }
                     RegCloseKey(RegistryKey);
@@ -1916,10 +1880,17 @@ const char *getuname()
                             snprintf(__wp, 63, " [Ver: 6.2]");
                         }
                         else {
-                            snprintf(__wp, 63, " [Ver: %s.%s]", winver,wincomp);
+                            dwCount = size;
+                            dwRet = RegQueryValueEx(RegistryKey, TEXT("UBR"), NULL, &type, (LPBYTE)&buildRevision, &dwCount);
+                            if (dwRet != ERROR_SUCCESS) {
+                                snprintf(__wp, sizeof(__wp), " [Ver: %s.%s]", winver,wincomp);
+                            }
+                            else {
+                                snprintf(__wp, sizeof(__wp), " [Ver: %s.%s.%lu]", winver, wincomp, buildRevision);
+                            }
                         }
-                        RegCloseKey(RegistryKey);
                     }
+                    RegCloseKey(RegistryKey);
                 }
 
                 strncat(ret, __wp, ret_size - 1);
@@ -2638,7 +2609,7 @@ long get_fp_size(FILE * fp) {
 
     // Move to end
 
-    if (fseek(fp, 0, SEEK_END) < 0) {
+    if (fseek(fp, 0, SEEK_END) != 0) {
         return -1;
     }
 
@@ -2650,7 +2621,7 @@ long get_fp_size(FILE * fp) {
 
     // Restore original offset
 
-    if (fseek(fp, offset, SEEK_SET) < 0) {
+    if (fseek(fp, offset, SEEK_SET) != 0) {
         return -1;
     }
 
@@ -2760,53 +2731,6 @@ FILE * wfopen(const char * pathname, const char * mode) {
 #else
     return fopen(pathname, mode);
 #endif
-}
-
-
-int w_remove_line_from_file(char *file, int line){
-    FILE *fp_src;
-    FILE *fp_dst;
-    size_t count_w;
-    char buffer[OS_SIZE_65536 + 1];
-    char destination[PATH_MAX] = {0};
-
-    fp_src = fopen(file, "r");
-
-    if (!fp_src) {
-        merror("At remove_line_from_file(): Couldn't open file '%s'", file);
-        return -1;
-    }
-
-    snprintf(destination, PATH_MAX, "%s.back", file);
-
-    /* Write to file */
-    fp_dst = fopen(destination, "w");
-
-    if (!fp_dst) {
-        mdebug1("At remove_line_from_file(): Couldn't open file '%s'", destination);
-        fclose(fp_src);
-        return -1;
-    }
-
-    /* Write message to the destination file */
-    int i = 0;
-    while (fgets(buffer, OS_SIZE_65536 + 1, fp_src) != NULL) {
-
-        if(i != line){
-            count_w = fwrite(buffer, 1, strlen(buffer) , fp_dst);
-
-            if (count_w != strlen(buffer) || ferror(fp_dst)) {
-                merror("At remove_line_from_file(): Couldn't write file '%s'", destination);
-                break;
-            }
-        }
-        i++;
-    }
-
-    fclose(fp_src);
-    fclose(fp_dst);
-
-    return w_copy_file(destination, file, 'w', NULL, 0);
 }
 
 
@@ -2998,7 +2922,7 @@ int is_ascii_utf8(const char * file, unsigned int max_lines_ascii, unsigned int 
 
         /* Check for UTF-8 BOM */
         if (b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF) {
-            if (fseek(fp, -1, SEEK_CUR) < 0) {
+            if (fseek(fp, -1, SEEK_CUR) != 0) {
                 merror(FSEEK_ERROR, file, errno, strerror(errno));
             }
             goto next;
@@ -3006,7 +2930,7 @@ int is_ascii_utf8(const char * file, unsigned int max_lines_ascii, unsigned int 
 
         /* Valid ASCII */
         if (b[0] == 0x09 || b[0] == 0x0A || b[0] == 0x0D || (0x20 <= b[0] && b[0] <= 0x7E)) {
-            if (fseek(fp, -nbytes + 1, SEEK_CUR) < 0) {
+            if (fseek(fp, -nbytes + 1, SEEK_CUR) != 0) {
                 merror(FSEEK_ERROR, file, errno, strerror(errno));
             }
             goto next;
@@ -3015,7 +2939,7 @@ int is_ascii_utf8(const char * file, unsigned int max_lines_ascii, unsigned int 
         /* Two bytes UTF-8 */
         if (b[0] >= 0xC2 && b[0] <= 0xDF) {
             if (b[1] >= 0x80 && b[1] <= 0xBF) {
-                if (fseek(fp, -2, SEEK_CUR) < 0) {
+                if (fseek(fp, -2, SEEK_CUR) != 0) {
                     merror(FSEEK_ERROR, file, errno, strerror(errno));
                 }
                 goto next;
@@ -3026,7 +2950,7 @@ int is_ascii_utf8(const char * file, unsigned int max_lines_ascii, unsigned int 
         if ( b[0] == 0xE0 ) {
             if ( b[1] >= 0xA0 && b[1] <= 0xBF) {
                 if ( b[2] >= 0x80 && b[2] <= 0xBF ) {
-                    if (fseek(fp, -1, SEEK_CUR) < 0 ) {
+                    if (fseek(fp, -1, SEEK_CUR) != 0 ) {
                         merror(FSEEK_ERROR, file, errno, strerror(errno));
                     }
                     goto next;
@@ -3038,7 +2962,7 @@ int is_ascii_utf8(const char * file, unsigned int max_lines_ascii, unsigned int 
         if ((b[0] >= 0xE1 && b[0] <= 0xEC) || b[0] == 0xEE || b[0] == 0xEF) {
             if (b[1] >= 0x80 && b[1] <= 0xBF) {
                 if (b[2] >= 0x80 && b[2] <= 0xBF) {
-                    if (fseek(fp, -1, SEEK_CUR) < 0 ) {
+                    if (fseek(fp, -1, SEEK_CUR) != 0 ) {
                         merror(FSEEK_ERROR, file, errno, strerror(errno));
                     }
                     goto next;
@@ -3050,7 +2974,7 @@ int is_ascii_utf8(const char * file, unsigned int max_lines_ascii, unsigned int 
         if (b[0] == 0xED) {
             if ( b[1] >= 0x80 && b[1] <= 0x9F) {
                 if ( b[2] >= 0x80 && b[2] <= 0xBF) {
-                    if (fseek(fp, -1, SEEK_CUR) < 0 ) {
+                    if (fseek(fp, -1, SEEK_CUR) != 0 ) {
                         merror(FSEEK_ERROR, file, errno, strerror(errno));
                     }
                     goto next;

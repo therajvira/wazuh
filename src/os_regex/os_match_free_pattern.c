@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -20,26 +20,23 @@
 /* Release all the memory created by the compilation/execution phases */
 void OSMatch_FreePattern(OSMatch *reg)
 {
+    if(reg == NULL)
+        return;
+
     /* Free the patterns */
     if (reg->patterns) {
         char **pattern = reg->patterns;
         while (*pattern) {
-            if (*pattern) {
-                os_free(*pattern);
-            }
+            os_free(*pattern);
             pattern++;
         }
 
         os_free(reg->patterns);
-        reg->patterns = NULL;
     }
 
     os_free(reg->size);
     os_free(reg->match_fp);
     os_free(reg->raw);
-
-    reg->size = NULL;
-    reg->match_fp = NULL;
 
     return;
 }

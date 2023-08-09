@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for Security Configuration Assessment
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * November 25, 2018.
  *
  * This program is free software; you can redistribute it
@@ -34,6 +34,7 @@ typedef struct wm_sca_policy_t {
     unsigned int remote:1;
     char *policy_path;
     char *policy_id;
+    char *policy_regex_type;
 } wm_sca_policy_t;
 
 typedef struct wm_sca_t {

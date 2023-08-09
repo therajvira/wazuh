@@ -1,6 +1,6 @@
 /*
  * Wazuh SysInfo
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * November 11, 2020.
  *
  * This program is free software; you can redistribute it
@@ -15,6 +15,10 @@
 
 // Define EXPORTED for any platform
 #include "commonDefs.h"
+#ifdef WAZUH_UNIT_TESTING
+#define EXPORTED
+#else
+#ifndef EXPORTED
 #ifdef _WIN32
 #ifdef WIN_EXPORT
 #define EXPORTED __declspec(dllexport)
@@ -25,6 +29,8 @@
 #define EXPORTED __attribute__((visibility("default")))
 #else
 #define EXPORTED
+#endif
+#endif
 #endif
 
 #include "cJSON.h"
@@ -122,6 +128,8 @@ EXPORTED int sysinfo_hotfixes(cJSON** js_result);
 
 
 typedef int(*sysinfo_networks_func)(cJSON** jsresult);
+typedef int(*sysinfo_os_func)(cJSON** jsresult);
+typedef int(*sysinfo_processes_func)(cJSON** jsresult);
 typedef void(*sysinfo_free_result_func)(cJSON** jsresult);
 
 #ifdef __cplusplus

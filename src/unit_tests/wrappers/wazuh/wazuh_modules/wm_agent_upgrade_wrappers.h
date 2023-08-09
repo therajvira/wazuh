@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -11,9 +11,9 @@
 #ifndef WM_AGENT_UPGRADE_WRAPPERS_H
 #define WM_AGENT_UPGRADE_WRAPPERS_H
 
-#include "headers/shared.h"
-#include "wazuh_modules/wmodules.h"
-#include "wazuh_modules/agent_upgrade/manager/wm_agent_upgrade_manager.h"
+#include "../../../../headers/shared.h"
+#include "../../../../wazuh_modules/wmodules.h"
+#include "../../../../wazuh_modules/agent_upgrade/manager/wm_agent_upgrade_manager.h"
 
 int setup_hash_table(void (free_data_function)(wm_agent_task* agent_task));
 
@@ -47,8 +47,6 @@ OSHashNode* __wrap_wm_agent_upgrade_get_next_node(unsigned int *index, OSHashNod
 
 cJSON* __wrap_wm_agent_upgrade_get_agent_ids();
 
-int __wrap_wm_agent_upgrade_compare_versions(const char *version1, const char *version2);
-
 bool __wrap_wm_agent_upgrade_validate_task_status_message(const cJSON *input_json, char **status, int *agent_id);
 
 int __wrap_wm_agent_upgrade_validate_id(int agent_id);
@@ -72,10 +70,6 @@ int __wrap_wm_agent_upgrade_remove_entry(int agent_id, int free);
 cJSON* __wrap_wm_agent_upgrade_parse_data_response(int error_id, const char* message, const int* agent_id);
 
 cJSON* __wrap_wm_agent_upgrade_parse_response(int error_id, cJSON *data);
-
-cJSON* __wrap_w_create_sendsync_payload(const char *daemon_name, cJSON *message);
-
-int __wrap_w_send_clustered_message(const char* command, const char* payload, char* response);
 
 bool __wrap_wm_agent_upgrade_validate_task_ids_message(const cJSON *input_json, int *agent_id, int *task_id, char** data);
 

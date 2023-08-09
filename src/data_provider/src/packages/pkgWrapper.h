@@ -1,6 +1,6 @@
 /*
  * Wazuh SYSINFO
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * December 14, 2020.
  *
  * This program is free software; you can redistribute it
@@ -14,10 +14,12 @@
 
 #include <fstream>
 #include <istream>
+#include <regex>
 #include "stringHelper.h"
 #include "ipackageWrapper.h"
 #include "sharedDefs.h"
 #include "plist/plist.h"
+#include "filesystemHelper.h"
 
 static const std::string APP_INFO_PATH      { "Contents/Info.plist" };
 static const std::string PLIST_BINARY_START { "bplist00"            };
@@ -27,7 +29,9 @@ class PKGWrapper final : public IPackageWrapper
 {
     public:
         explicit PKGWrapper(const PackageContext& ctx)
-            : m_format{"pkg"}
+            : m_architecture{UNKNOWN_VALUE}
+            , m_format{"pkg"}
+            , m_vendor{UNKNOWN_VALUE}
         {
             getPkgData(ctx.filePath + "/" + ctx.package + "/" + APP_INFO_PATH);
         }
@@ -70,6 +74,30 @@ class PKGWrapper final : public IPackageWrapper
         {
             return m_location;
         }
+        std::string vendor() const override
+        {
+            return m_vendor;
+        }
+
+        std::string priority() const override
+        {
+            return m_priority;
+        }
+
+        int size() const override
+        {
+            return m_size;
+        }
+
+        std::string install_time() const override
+        {
+            return m_installTime;
+        }
+
+        std::string multiarch() const override
+        {
+            return m_multiarch;
+        }
 
     private:
         void getPkgData(const std::string& filePath)
@@ -85,6 +113,8 @@ class PKGWrapper final : public IPackageWrapper
                 }
             };
             const auto isBinary { isBinaryFnc() };
+            constexpr auto BUNDLEID_PATTERN{R"(^[^.]+\.([^.]+).*$)"};
+            static std::regex bundleIdRegex{BUNDLEID_PATTERN};
 
             static const auto getValueFnc
             {
@@ -101,6 +131,8 @@ class PKGWrapper final : public IPackageWrapper
                 [this, &filePath](std::istream & data)
                 {
                     std::string line;
+                    std::string bundleShortVersionString;
+                    std::string bundleVersion;
 
                     while (std::getline(data, line))
                     {
@@ -114,7 +146,12 @@ class PKGWrapper final : public IPackageWrapper
                         else if (line == "<key>CFBundleShortVersionString</key>" &&
                                  std::getline(data, line))
                         {
-                            m_version = getValueFnc(line);
+                            bundleShortVersionString = getValueFnc(line);
+                        }
+                        else if (line == "<key>CFBundleVersion</key>" &&
+                                 std::getline(data, line))
+                        {
+                            bundleVersion = getValueFnc(line);
                         }
                         else if (line == "<key>LSApplicationCategoryType</key>" &&
                                  std::getline(data, line))
@@ -125,10 +162,31 @@ class PKGWrapper final : public IPackageWrapper
                                  std::getline(data, line))
                         {
                             m_description = getValueFnc(line);
+
+                            std::string vendor;
+
+                            if (Utils::findRegexInString(m_description, vendor, bundleIdRegex, 1))
+                            {
+                                m_vendor = vendor;
+                            }
                         }
                     }
 
-                    m_source   = filePath.find(UTILITIES_FOLDER) ? "utilities" : "applications";
+                    if (!bundleShortVersionString.empty() && Utils::startsWith(bundleVersion, bundleShortVersionString))
+                    {
+                        m_version = bundleVersion;
+                    }
+                    else
+                    {
+                        m_version = bundleShortVersionString;
+                    }
+
+                    m_architecture = UNKNOWN_VALUE;
+                    m_multiarch = UNKNOWN_VALUE;
+                    m_priority = UNKNOWN_VALUE;
+                    m_size = 0;
+                    m_installTime = UNKNOWN_VALUE;
+                    m_source = filePath.find(UTILITIES_FOLDER) ? "utilities" : "applications";
                     m_location = filePath;
                 }
             };
@@ -189,6 +247,11 @@ class PKGWrapper final : public IPackageWrapper
         std::string m_osPatch;
         std::string m_source;
         std::string m_location;
+        std::string m_multiarch;
+        std::string m_priority;
+        int m_size;
+        std::string m_vendor;
+        std::string m_installTime;
 };
 
 #endif //_PKG_WRAPPER_H

@@ -1,5 +1,5 @@
 /* Remote request manager
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * June 2, 2017.
  *
  * This program is free software; you can redistribute it
@@ -17,7 +17,7 @@
 #ifdef WIN32
 #include "../os_execd/execd.h"
 #include "../client-agent/agentd.h"
-#include "../syscheckd/syscheck.h"
+#include "../syscheckd/include/syscheck.h"
 #include "../wazuh_modules/wmodules.h"
 #include "../logcollector/logcollector.h"
 #include "../wazuh_modules/agent_upgrade/agent/wm_agent_upgrade_agent.h"
@@ -61,7 +61,7 @@ void req_init() {
     // Create hash table and request pool
 
     if (req_table = OSHash_Create(), !req_table) {
-        merror_exit("At req_main(): OSHash_Create()");
+        merror_exit("At req_init(): OSHash_Create()");
     }
     OSHash_SetFreeDataPointer(req_table, (void (*)(void *))req_free);
 
@@ -70,7 +70,7 @@ void req_init() {
     // Create hash table allowed sockets
 
     if (allowed_sockets = OSHash_Create(), !allowed_sockets) {
-        merror("At req_main(): OSHash_Create()");
+        merror("At req_init(): OSHash_Create()");
         goto ret;
     }
 
@@ -80,13 +80,13 @@ void req_init() {
     socket_agent = strdup(SOCKET_AGENT);
 
     if (!socket_log || !socket_sys || !socket_wodle || !socket_agent) {
-        merror("At req_main(): failed to allocate socket strings");
+        merror("At req_init(): failed to allocate socket strings");
         goto ret;
     }
 
     if (OSHash_Add(allowed_sockets, SOCKET_LOGCOLLECTOR, socket_log) != 2 || OSHash_Add(allowed_sockets, SOCKET_SYSCHECK, socket_sys) != 2 || \
     OSHash_Add(allowed_sockets, SOCKET_WMODULES, socket_wodle) != 2 || OSHash_Add(allowed_sockets, SOCKET_AGENT, socket_agent) != 2) {
-        merror("At req_main(): failed to add socket strings to hash list");
+        merror("At req_init(): failed to add socket strings to hash list");
         goto ret;
     }
 
@@ -172,10 +172,9 @@ int req_push(char * buffer, size_t length) {
 #endif
 
         // Send ACK, only in UDP mode
-
         if (agt->server[agt->rip_id].protocol == IPPROTO_UDP) {
-            mdebug2("req_push(): Sending ack (%s).", counter);
             // Example: #!-req 16 ack
+            mdebug2("req_push(): Sending ack (%s).", counter);
             snprintf(response, REQ_RESPONSE_LENGTH, CONTROL_HEADER HC_REQUEST "%s ack", counter);
             send_msg(response, -1);
         }
@@ -211,6 +210,8 @@ int req_push(char * buffer, size_t length) {
                 OSHash_Delete(req_table, counter);
                 w_mutex_unlock(&mutex_table);
 
+                snprintf(response, REQ_RESPONSE_LENGTH, CONTROL_HEADER HC_REQUEST "%s err Too many requests", counter);
+                send_msg(response, -1);
                 req_free(node);
                 return -1;
             } else {
@@ -227,7 +228,11 @@ int req_push(char * buffer, size_t length) {
 }
 
 // Request receiver thread start
+#ifdef WIN32
+DWORD WINAPI req_receiver(__attribute__((unused)) LPVOID arg) {
+#else
 void * req_receiver(__attribute__((unused)) void * arg) {
+#endif
     int attempts;
     long nsec;
     ssize_t length = 0;
@@ -235,8 +240,6 @@ void * req_receiver(__attribute__((unused)) void * arg) {
     char *buffer = NULL;
     char response[REQ_RESPONSE_LENGTH];
     int rlen;
-
-
 
     while (1) {
 
@@ -379,6 +382,9 @@ void * req_receiver(__attribute__((unused)) void * arg) {
         req_free(node);
     }
 
-
+#ifdef WIN32
+    return 0;
+#else
     return NULL;
+#endif
 }

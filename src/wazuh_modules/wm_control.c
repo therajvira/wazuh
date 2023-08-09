@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for Agent control
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * January, 2019
  *
  * This program is free software; you can redistribute it
@@ -9,6 +9,13 @@
  * Foundation.
  */
 
+#ifdef WAZUH_UNIT_TESTING
+// Remove static qualifier when unit testing
+#define STATIC
+#else
+#define STATIC static
+#endif
+
 #if defined (__linux__) || defined (__MACH__) || defined (sun) || defined(FreeBSD) || defined(OpenBSD)
 #include "wm_control.h"
 #include "sysInfo.h"
@@ -16,54 +23,22 @@
 #include "external/cJSON/cJSON.h"
 #include "file_op.h"
 #include "../os_net/os_net.h"
-
 static void *wm_control_main();
 static void wm_control_destroy();
 cJSON *wm_control_dump();
 
 const wm_context WM_CONTROL_CONTEXT = {
-    "control",
-    (wm_routine)wm_control_main,
-    (wm_routine)(void *)wm_control_destroy,
-    (cJSON * (*)(const void *))wm_control_dump,
-    NULL,
-    NULL
+    .name = "control",
+    .start = (wm_routine)wm_control_main,
+    .destroy = (void(*)(void *))wm_control_destroy,
+    .dump = (cJSON * (*)(const void *))wm_control_dump,
+    .sync = NULL,
+    .stop = NULL,
+    .query = NULL,
 };
-void *sysinfo_module = NULL;
-sysinfo_networks_func sysinfo_network_ptr = NULL;
-sysinfo_free_result_func sysinfo_free_result_ptr = NULL;
-
-#if defined (__linux__) || defined (__MACH__) || defined(FreeBSD) || defined(OpenBSD)
-#include <ifaddrs.h>
-#elif defined sun
-#include <net/if.h>
-#include <sys/sockio.h>
-
-/**
- * @brief Get the number of available network interfaces
- *
- * @return Number of network interfaces in the system.
- */
-static int get_if_num() {
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-
-    if (fd == -1) {
-        return -1;
-    }
-
-    struct lifnum ifn = { .lifn_family = AF_INET };
-
-    int retval = ioctl(fd, SIOCGLIFNUM, &ifn);
-    close(fd);
-
-    if (retval == -1) {
-        return -1;
-    }
-
-    return ifn.lifn_count;
-}
-
-#endif
+STATIC void *sysinfo_module = NULL;
+STATIC sysinfo_networks_func sysinfo_network_ptr = NULL;
+STATIC sysinfo_free_result_func sysinfo_free_result_ptr = NULL;
 
 /**
  * @brief Get the Primary IP address
@@ -78,7 +53,7 @@ char* getPrimaryIP(){
      /* Get Primary IP */
     char * agent_ip = NULL;
 
-#if defined __linux__ || defined __MACH__ || defined(FreeBSD) || defined(OpenBSD)
+#if defined __linux__ || defined __MACH__ || defined(FreeBSD) || defined(OpenBSD) || defined(sun)
     cJSON *object;
     if (sysinfo_network_ptr && sysinfo_free_result_ptr) {
         const int error_code = sysinfo_network_ptr(&object);
@@ -94,17 +69,34 @@ char* getPrimaryIP(){
                         }
                         cJSON *gateway = cJSON_GetObjectItem(element, "gateway");
                         if (gateway && cJSON_GetStringValue(gateway) && 0 != strcmp(gateway->valuestring," ")) {
-                            const cJSON *ipv4 = cJSON_GetObjectItem(element, "IPv4");
-                            if (!ipv4) {
-                                continue;
+                            
+                            const char * primaryIpType = NULL;
+                            const char * secondaryIpType = NULL;
+
+                            if (strchr(gateway->valuestring, ':') != NULL) {
+                                //Assume gateway is IPv6. IPv6 IP will be prioritary
+                                primaryIpType = "IPv6";
+                                secondaryIpType = "IPv4";
+                            } else {
+                                //Assume gateway is IPv4. IPv4 IP will be prioritary
+                                primaryIpType = "IPv4";
+                                secondaryIpType = "IPv6";
                             }
-                            const int size_proto_interfaces = cJSON_GetArraySize(ipv4);
-                            for (int j = 0; j < size_proto_interfaces; ++j) {
-                                const cJSON *element_ipv4 = cJSON_GetArrayItem(ipv4, j);
-                                if(!element_ipv4) {
+
+                            const cJSON * ip = cJSON_GetObjectItem(element, primaryIpType);
+                            if (NULL == ip) {
+                                ip = cJSON_GetObjectItem(element, secondaryIpType);
+                                if (NULL == ip) {
                                     continue;
                                 }
-                                cJSON *address = cJSON_GetObjectItem(element_ipv4, "address");
+                            }
+                            const int size_proto_interfaces = cJSON_GetArraySize(ip);
+                            for (int j = 0; j < size_proto_interfaces; ++j) {
+                                const cJSON *element_ip = cJSON_GetArrayItem(ip, j);
+                                if(!element_ip) {
+                                    continue;
+                                }
+                                cJSON *address = cJSON_GetObjectItem(element_ip, "address");
                                 if (address && cJSON_GetStringValue(address))
                                 {
                                     os_strdup(address->valuestring, agent_ip);
@@ -124,72 +116,13 @@ char* getPrimaryIP(){
             mterror(WM_CONTROL_LOGTAG, "Unable to get system network information. Error code: %d.", error_code);
         }
     }
-#elif defined sun
 
-    // Get number of interfaces
-
-    int if_count = get_if_num();
-
-    if (if_count == -1) {
-        return NULL;
-    }
-
-    // Initialize configuration structure
-
-    struct lifconf if_conf = { .lifc_family = AF_INET, .lifc_len = if_count * sizeof(struct lifreq) };
-    if_conf.lifc_buf = malloc(if_conf.lifc_len);
-    assert(if_conf.lifc_buf != NULL);
-
-    // Create helper socket
-
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-
-    if (fd == -1) {
-        goto end;
-    }
-
-    // Get interfaces
-
-    if (ioctl(fd, SIOCGLIFCONF, &if_conf) == -1) {
-        goto end;
-    }
-
-    // Scan interfaces
-
-    int i;
-    for (i = 0; i < if_count; i++) {
-        struct lifreq * if_req = if_conf.lifc_req + i;
-
-        // Get flags
-
-        if (ioctl(fd, SIOCGLIFFLAGS, if_req) == -1) {
-            goto end;
-        }
-
-        // Get the first interface that is up and is not loopback
-
-        int flags = if_req->lifr_flags;
-
-        if ((flags & IFF_UP) && (flags & IFF_LOOPBACK) == 0) {
-            // Get IP address
-
-            if (ioctl(fd, SIOCGLIFADDR, if_req) == -1) {
-                goto end;
-            }
-
-            struct sockaddr_in * addr = (struct sockaddr_in *)&if_req->lifr_addr;
-            agent_ip = strdup(inet_ntoa(addr->sin_addr));
-            break;
-        }
-    }
-
-end:
-    if (fd != -1) {
-        close(fd);
-    }
-
-    free(if_conf.lifc_buf);
 #endif
+
+    if (agent_ip && (strchr(agent_ip, ':') != NULL)) {
+        os_realloc(agent_ip, IPSIZE + 1, agent_ip);
+        OS_ExpandIPv6(agent_ip, IPSIZE);
+    }
 
     return agent_ip;
 }
@@ -240,7 +173,7 @@ void *send_ip(){
     ssize_t length;
     fd_set fdset;
 
-    if (sock = OS_BindUnixDomain(CONTROL_SOCK, SOCK_STREAM, OS_MAXSTR), sock < 0) {
+    if (sock = OS_BindUnixDomainWithPerms(CONTROL_SOCK, SOCK_STREAM, OS_MAXSTR, getuid(), wm_getGroupID(), 0660), sock < 0) {
         mterror(WM_CONTROL_LOGTAG, "Unable to bind to socket '%s': (%d) %s.", CONTROL_SOCK, errno, strerror(errno));
         return NULL;
     }

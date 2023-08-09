@@ -1,6 +1,6 @@
 /*
  * Wazuh RSYNC
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * September 10, 2020.
  *
  * This program is free software; you can redistribute it
@@ -61,7 +61,7 @@ namespace RSync
 
                     outputMessage["data"] = outputData;
 
-                    if (!data.checksum.empty())
+                    if (!data.checksum.empty() || INTEGRITY_CLEAR == data.type)
                     {
                         callback(outputMessage.dump());
                     }

@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -154,6 +154,16 @@ void expect_rename_ex(const char *source, const char *destination, int ret) {
     will_return(__wrap_rename_ex, ret);
 }
 
+int __wrap_mkstemp_ex(char *tmp_path) {
+    check_expected(tmp_path);
+    return mock();
+}
+
+void expect_mkstemp_ex(char *tmp_path, int ret) {
+    expect_string(__wrap_mkstemp_ex, tmp_path, tmp_path);
+    will_return(__wrap_mkstemp_ex, ret);
+}
+
 float __wrap_DirSize(const char *path) {
     check_expected(path);
 
@@ -180,6 +190,11 @@ int __wrap_cldir_ex(__attribute__((unused)) const char *name) {
     return mock();
 }
 
+int __wrap_cldir_ex_ignore(const char *name, __attribute__((unused)) const char ** ignore) {
+    check_expected(name);
+    return mock();
+}
+
 int __wrap_UnmergeFiles(const char *finalpath, const char *optdir, int mode) {
     check_expected(finalpath);
     check_expected(optdir);
@@ -203,4 +218,51 @@ int __wrap_w_fseek(FILE *x, int64_t pos, __attribute__((unused)) int mode) {
     check_expected(x);
     check_expected(pos);
     return mock_type(int);
+}
+
+int __wrap_MergeAppendFile(FILE *finalfp, __attribute__((unused)) const char *files, int path_offset) {
+    check_expected(finalfp);
+    check_expected(path_offset);
+    return mock_type(int);
+}
+
+int __wrap_OS_MoveFile(const char *src, const char *dst) {
+    check_expected(src);
+    check_expected(dst);
+    return mock_type(int);
+}
+
+int __wrap_TestUnmergeFiles(const char *finalpath, __attribute__((unused)) int mode) {
+    check_expected(finalpath);
+    return mock_type(int);
+}
+
+int __wrap_checkBinaryFile(const char *f_name) {
+    check_expected(f_name);
+    return mock_type(int);
+}
+
+int __wrap_w_copy_file(const char *src, const char *dst, char mode, __attribute__((unused)) char * message, int silent) {
+    check_expected(src);
+    check_expected(dst);
+    check_expected(mode);
+    check_expected(silent);
+    return mock_type(int);
+}
+
+char *__wrap_GetRandomNoise() {
+    return mock_ptr_type(char*);
+}
+
+const char *__wrap_getuname() {
+    return mock_ptr_type(char*);
+}
+
+char * __wrap_w_get_file_content(__attribute__ ((__unused__)) const char * path,
+                                 __attribute__ ((__unused__)) int max_size) {
+    return mock_type(char *);
+}
+
+void expect_w_get_file_content(const char *buffer) {
+    will_return(__wrap_w_get_file_content, buffer);
 }

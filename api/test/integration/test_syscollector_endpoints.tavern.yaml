@@ -1,9 +1,6 @@
 ---
 test_name: GET /syscollector/{agent_id}/os
 
-marks:
-  - base_tests
-
 stages:
 
   - name: Get the OS of an agent
@@ -54,6 +51,18 @@ stages:
       status_code: 400
       json:
         error: 1724
+
+  - name: Try to get 012 agent's syscollector OS data (never connected)
+    request:
+      verify: False
+      url: "{protocol:s}://{host:s}:{port:d}/syscollector/012/os"
+      method: GET
+      headers:
+        Authorization: "Bearer {test_login_token}"
+    response:
+      status_code: 400
+      json:
+        error: 2007
 
 ---
 test_name: GET /syscollector/{agent_id}/os?{select}
@@ -581,8 +590,7 @@ stages:
         error: !anyint
         data:
           affected_items: &processes_response_004
-            - cmd: !anystr
-              egroup: !anystr
+            - egroup: !anystr
               euser: !anystr
               fgroup: !anystr
               name: !anystr
@@ -905,7 +913,6 @@ stages:
             - <<: *processes_response_004
       save:
         json:
-          offset_test_cmd: data.affected_items[1].cmd
           offset_test_egroup: data.affected_items[1].egroup
           offset_test_euser: data.affected_items[1].euser
           offset_test_fgroup: data.affected_items[1].fgroup
@@ -949,8 +956,7 @@ stages:
         error: !anyint
         data:
           affected_items:
-            - cmd: "{offset_test_cmd}"
-              egroup: "{offset_test_egroup}"
+            - egroup: "{offset_test_egroup}"
               euser: "{offset_test_euser}"
               fgroup: "{offset_test_fgroup}"
               name: "{offset_test_name}"

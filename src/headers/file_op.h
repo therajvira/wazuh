@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -17,9 +17,10 @@
 #include <time.h>
 #include <stdbool.h>
 #include <sys/stat.h>
-#include <external/cJSON/cJSON.h>
+#include <cJSON.h>
 
 #ifdef WIN32
+#include <winsock2.h>
 #include <windows.h>
 #endif
 
@@ -199,26 +200,14 @@ void DeleteState();
 
 
 /**
- * @brief Merge the specified files into one single file.
- *
- * @param finalpath Path of the generated file.
- * @param files Files to be merged.
- * @param tag Tag to be added on the generated file.
- * @return 1 if the merged file was created, 0 on error.
- */
-int MergeFiles(const char *finalpath, char **files, const char *tag) __attribute__((nonnull(1, 2)));
-
-
-/**
  * @brief Merge files recursively into one single file.
  *
- * @param finalpath Path of the generated file.
+ * @param finalfp Handler of the file.
  * @param files Files to be merged.
- * @param tag Tag to be added on the generated file.
  * @param path_offset Offset for recursion.
  * @return 1 if the merged file was created, 0 on error.
  */
-int MergeAppendFile(const char *finalpath, const char *files, const char *tag, int path_offset) __attribute__((nonnull(1)));
+int MergeAppendFile(FILE *finalfp, const char *files, int path_offset) __attribute__((nonnull(1, 2)));
 
 
 /**
@@ -229,7 +218,7 @@ int MergeAppendFile(const char *finalpath, const char *files, const char *tag, i
  * @param mode Indicates if the merged file must be readed as a binary file  or not. Use `#OS_TEXT`, `#OS_BINARY`.
  * @return 1 if the file was unmerged, 0 on error.
  */
-int UnmergeFiles(const char *finalpath, const char *optdir, int mode) __attribute__((nonnull(1)));
+int UnmergeFiles(const char *finalpath, const char *optdir, int mode, const char ***unmerged_files) __attribute__((nonnull(1)));
 
 
 /**
@@ -392,16 +381,6 @@ char ** wreaddir(const char * name);
  * @return File pointer.
  */
 FILE * wfopen(const char * pathname, const char * mode);
-
-
-/**
- * @brief Delete a line from a file.
- *
- * @param file Path of the file.
- * @param line Line to be removed.
- * @return 0 on success, -1 on error.
- */
-int w_remove_line_from_file(char *file, int line);
 
 
 /**

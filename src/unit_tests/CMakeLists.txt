@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 #
 # This program is free software; you can redistribute it
 # and/or modify it under the terms of the GNU General Public
@@ -19,7 +19,6 @@ include_directories(${SRC_FOLDER}/external/bzip2)
 include_directories(${SRC_FOLDER}/external/cJSON)
 include_directories(${SRC_FOLDER}/external/msgpack/include)
 include_directories(${SRC_FOLDER}/shared_modules/common)
-include_directories(${SRC_FOLDER})
 add_definitions(-DWAZUH_UNIT_TESTING)
 
 # Wazuh libraries
@@ -54,11 +53,13 @@ if((${uname} STREQUAL "Linux") OR (${uname} STREQUAL "Win32"))
   add_subdirectory(os_xml)
   add_subdirectory(os_regex)
   add_subdirectory(os_zlib)
+  add_subdirectory(config)
   endif()
 
 if(${uname} STREQUAL "Linux")
   add_subdirectory(os_net)
   add_subdirectory(fluentd_forwarder)
+  add_subdirectory(active-response)
   endif()
 
 # Config files
@@ -116,7 +117,7 @@ add_custom_target(coverage
 
     # Add baseline counters
     COMMAND ${LCOV_PATH} -q --gcov-tool ${GCOV_PATH} -a coverage.base -a coverage.info --rc lcov_branch_coverage=1 --output-file coverage.total
-    COMMAND ${LCOV_PATH} --gcov-tool ${GCOV_PATH} --remove coverage.total "*external/*" --remove coverage.total "*unit_tests/*" --remove coverage.total "*data_provider/*" --remove coverage.total "*shared_modules/*" --remove coverage.total "*syscollector/*" --rc lcov_branch_coverage=1 --output-file coverage.info.cleaned
+    COMMAND ${LCOV_PATH} --gcov-tool ${GCOV_PATH} --remove coverage.total "*external/*" --remove coverage.total "*unit_tests/*" --remove coverage.total "*data_provider/*" --remove coverage.total "*shared_modules/*" --remove coverage.total "*syscollector/*" --remove coverage.total "*syscheckd/src/db/*" --rc lcov_branch_coverage=1 --output-file coverage.info.cleaned
 
     # Generate HTML report
     COMMAND ${GENHTML_PATH} -q --output-directory coverage-report --title "WAZUH unit-tests coverage" --rc lcov_branch_coverage=1 --legend coverage.info.cleaned

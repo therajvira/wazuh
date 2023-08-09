@@ -1,6 +1,6 @@
 /*
  * Wazuh SysCollector
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * October 7, 2020.
  *
  * This program is free software; you can redistribute it
@@ -30,7 +30,7 @@ do                                                                      \
     {                                                                   \
         if(m_logFunction)                                               \
         {                                                               \
-            m_logFunction(SYS_LOG_ERROR, std::string{ex.what()});       \
+            m_logFunction(LOG_ERROR, std::string{ex.what()});           \
         }                                                               \
     }                                                                   \
 }while(0)
@@ -951,7 +951,7 @@ void Syscollector::notifyChange(ReturnTypeCallback result, const nlohmann::json&
 {
     if (DB_ERROR == result)
     {
-        m_logFunction(SYS_LOG_ERROR, data.dump());
+        m_logFunction(LOG_ERROR, data.dump());
     }
     else if (m_notify && !m_stopping)
     {
@@ -967,7 +967,7 @@ void Syscollector::notifyChange(ReturnTypeCallback result, const nlohmann::json&
                 removeKeysWithEmptyValue(msg["data"]);
                 const auto msgToSend{msg.dump()};
                 m_reportDiffFunction(msgToSend);
-                m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Delta sent: " + msgToSend);
+                m_logFunction(LOG_DEBUG_VERBOSE, "Delta sent: " + msgToSend);
             }
         }
         else
@@ -981,7 +981,7 @@ void Syscollector::notifyChange(ReturnTypeCallback result, const nlohmann::json&
             removeKeysWithEmptyValue(msg["data"]);
             const auto msgToSend{msg.dump()};
             m_reportDiffFunction(msgToSend);
-            m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Delta sent: " + msgToSend);
+            m_logFunction(LOG_DEBUG_VERBOSE, "Delta sent: " + msgToSend);
             // LCOV_EXCL_STOP
         }
     }
@@ -1067,19 +1067,19 @@ void Syscollector::registerWithRsync()
                         fieldData["scan_time"] = Utils::getCurrentTimestamp();
                         const auto msgToSend{jsonData.dump()};
                         m_reportSyncFunction(msgToSend);
-                        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Sync sent: " + msgToSend);
+                        m_logFunction(LOG_DEBUG_VERBOSE, "Sync sent: " + msgToSend);
                     }
                     else
                     {
                         m_reportSyncFunction(dataString);
-                        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Sync sent: " + dataString);
+                        m_logFunction(LOG_DEBUG_VERBOSE, "Sync sent: " + dataString);
                     }
                 }
                 else
                 {
                     //LCOV_EXCL_START
                     m_reportSyncFunction(dataString);
-                    m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Sync sent: " + dataString);
+                    m_logFunction(LOG_DEBUG_VERBOSE, "Sync sent: " + dataString);
                     //LCOV_EXCL_STOP
                 }
             }
@@ -1153,7 +1153,7 @@ void Syscollector::registerWithRsync()
 void Syscollector::init(const std::shared_ptr<ISysInfo>& spInfo,
                         const std::function<void(const std::string&)> reportDiffFunction,
                         const std::function<void(const std::string&)> reportSyncFunction,
-                        const std::function<void(const syscollector_log_level_t, const std::string&)> logFunction,
+                        const std::function<void(const modules_log_level_t, const std::string&)> logFunction,
                         const std::string& dbPath,
                         const std::string& normalizerConfigPath,
                         const std::string& normalizerType,
@@ -1214,10 +1214,10 @@ void Syscollector::scanHardware()
 {
     if (m_hardware)
     {
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Starting hardware scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Starting hardware scan");
         const auto& hwData{getHardwareData()};
         updateChanges(HW_TABLE, hwData);
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Ending hardware scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Ending hardware scan");
     }
 }
 
@@ -1238,10 +1238,10 @@ void Syscollector::scanOs()
 {
     if (m_os)
     {
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Starting os scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Starting os scan");
         const auto& osData{getOSData()};
         updateChanges(OS_TABLE, osData);
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Ending os scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Ending os scan");
     }
 }
 
@@ -1257,6 +1257,13 @@ nlohmann::json Syscollector::getNetworkData()
     nlohmann::json ifaceTableDataList {};
     nlohmann::json protoTableDataList {};
     nlohmann::json addressTableDataList {};
+    constexpr auto IPV4 { 0 };
+    constexpr auto IPV6 { 1 };
+    static const std::map<int, std::string> IP_TYPE
+    {
+        { IPV4, "ipv4" },
+        { IPV6, "ipv6" }
+    };
 
     if (!networks.is_null())
     {
@@ -1287,22 +1294,26 @@ nlohmann::json Syscollector::getNetworkData()
                 ifaceTableData["item_id"]    = getItemId(ifaceTableData, NETIFACE_ITEM_ID_FIELDS);
                 ifaceTableDataList.push_back(std::move(ifaceTableData));
 
-                // "dbsync_network_protocol" table data to update and notify
-                nlohmann::json protoTableData {};
-                protoTableData["iface"]   = item.at("name");
-                protoTableData["type"]    = item.at("type");
-                protoTableData["gateway"] = item.at("gateway");
 
                 if (item.find("IPv4") != item.end())
                 {
+
+                    // "dbsync_network_protocol" table data to update and notify
+                    nlohmann::json protoTableData {};
+                    protoTableData["iface"]   = item.at("name");
+                    protoTableData["gateway"] = item.at("gateway");
+                    protoTableData["type"]    = IP_TYPE.at(IPV4);
+                    protoTableData["dhcp"]    = item.at("IPv4").begin()->at("dhcp");
+                    protoTableData["metric"]  = item.at("IPv4").begin()->at("metric");
+                    protoTableData["checksum"]  = getItemChecksum(protoTableData);
+                    protoTableData["item_id"]   = getItemId(protoTableData, NETPROTO_ITEM_ID_FIELDS);
+                    protoTableDataList.push_back(std::move(protoTableData));
+
                     for (auto addressTableData : item.at("IPv4"))
                     {
-                        protoTableData["dhcp"]    = addressTableData.at("dhcp");
-                        protoTableData["metric"]  = addressTableData.at("metric");
-
                         // "dbsync_network_address" table data to update and notify
                         addressTableData["iface"]     = item.at("name");
-                        addressTableData["proto"]     = 0;
+                        addressTableData["proto"]     = IPV4;
                         addressTableData["checksum"]  = getItemChecksum(addressTableData);
                         addressTableData["item_id"]   = getItemId(addressTableData, NETADDRESS_ITEM_ID_FIELDS);
                         addressTableDataList.push_back(std::move(addressTableData));
@@ -1311,23 +1322,27 @@ nlohmann::json Syscollector::getNetworkData()
 
                 if (item.find("IPv6") != item.end())
                 {
+                    // "dbsync_network_protocol" table data to update and notify
+                    nlohmann::json protoTableData {};
+                    protoTableData["iface"]   = item.at("name");
+                    protoTableData["gateway"] = item.at("gateway");
+                    protoTableData["type"]    = IP_TYPE.at(IPV6);
+                    protoTableData["dhcp"]    = item.at("IPv6").begin()->at("dhcp");
+                    protoTableData["metric"]  = item.at("IPv6").begin()->at("metric");
+                    protoTableData["checksum"]  = getItemChecksum(protoTableData);
+                    protoTableData["item_id"]   = getItemId(protoTableData, NETPROTO_ITEM_ID_FIELDS);
+                    protoTableDataList.push_back(std::move(protoTableData));
+
                     for (auto addressTableData : item.at("IPv6"))
                     {
-                        protoTableData["dhcp"]    = addressTableData.at("dhcp");
-                        protoTableData["metric"]  = addressTableData.at("metric");
-
                         // "dbsync_network_address" table data to update and notify
                         addressTableData["iface"]     = item.at("name");
-                        addressTableData["proto"]     = 1;
+                        addressTableData["proto"]     = IPV6;
                         addressTableData["checksum"]  = getItemChecksum(addressTableData);
                         addressTableData["item_id"]   = getItemId(addressTableData, NETADDRESS_ITEM_ID_FIELDS);
                         addressTableDataList.push_back(std::move(addressTableData));
                     }
                 }
-
-                protoTableData["checksum"]  = getItemChecksum(protoTableData);
-                protoTableData["item_id"]   = getItemId(protoTableData, NETPROTO_ITEM_ID_FIELDS);
-                protoTableDataList.push_back(std::move(protoTableData));
             }
 
             ret[NET_IFACE_TABLE] = std::move(ifaceTableDataList);
@@ -1343,7 +1358,7 @@ void Syscollector::scanNetwork()
 {
     if (m_network)
     {
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Starting network scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Starting network scan");
         const auto networkData(getNetworkData());
 
         if (!networkData.is_null())
@@ -1370,7 +1385,7 @@ void Syscollector::scanNetwork()
             }
         }
 
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Ending network scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Ending network scan");
     }
 }
 
@@ -1385,7 +1400,7 @@ void Syscollector::scanPackages()
 {
     if (m_packages)
     {
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Starting packages scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Starting packages scan");
         const auto callback
         {
             [this](ReturnTypeCallback result, const nlohmann::json & data)
@@ -1420,7 +1435,7 @@ void Syscollector::scanPackages()
         });
         txn.getDeletedRows(callback);
 
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Ending packages scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Ending packages scan");
     }
 }
 
@@ -1428,7 +1443,7 @@ void Syscollector::scanHotfixes()
 {
     if (m_hotfixes)
     {
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Starting hotfixes scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Starting hotfixes scan");
         auto hotfixes = m_spInfo->hotfixes();
 
         if (!hotfixes.is_null())
@@ -1441,7 +1456,7 @@ void Syscollector::scanHotfixes()
             updateChanges(HOTFIXES_TABLE, hotfixes);
         }
 
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Ending hotfixes scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Ending hotfixes scan");
     }
 }
 
@@ -1461,11 +1476,11 @@ nlohmann::json Syscollector::getPortsData()
     constexpr auto PORT_LISTENING_STATE { "listening" };
     constexpr auto TCP_PROTOCOL { "tcp" };
     constexpr auto UDP_PROTOCOL { "udp" };
-    const auto& data { m_spInfo->ports() };
+    auto data(m_spInfo->ports());
 
     if (!data.is_null())
     {
-        for (auto item : data)
+        for (auto& item : data)
         {
             const auto protocol { item.at("protocol").get_ref<const std::string&>() };
 
@@ -1522,10 +1537,10 @@ void Syscollector::scanPorts()
 {
     if (m_ports)
     {
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Starting ports scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Starting ports scan");
         const auto& portsData { getPortsData() };
         updateChanges(PORTS_TABLE, portsData);
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Ending ports scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Ending ports scan");
     }
 }
 
@@ -1538,7 +1553,7 @@ void Syscollector::scanProcesses()
 {
     if (m_processes)
     {
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Starting processes scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Starting processes scan");
         const auto callback
         {
             [this](ReturnTypeCallback result, const nlohmann::json & data)
@@ -1567,7 +1582,7 @@ void Syscollector::scanProcesses()
         });
         txn.getDeletedRows(callback);
 
-        m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Ending processes scan");
+        m_logFunction(LOG_DEBUG_VERBOSE, "Ending processes scan");
     }
 }
 
@@ -1578,7 +1593,7 @@ void Syscollector::syncProcesses()
 
 void Syscollector::scan()
 {
-    m_logFunction(SYS_LOG_INFO, "Starting evaluation.");
+    m_logFunction(LOG_INFO, "Starting evaluation.");
     m_scanTime = Utils::getCurrentTimestamp();
 
     TRY_CATCH_TASK(scanHardware);
@@ -1589,12 +1604,12 @@ void Syscollector::scan()
     TRY_CATCH_TASK(scanPorts);
     TRY_CATCH_TASK(scanProcesses);
     m_notify = true;
-    m_logFunction(SYS_LOG_INFO, "Evaluation finished.");
+    m_logFunction(LOG_INFO, "Evaluation finished.");
 }
 
 void Syscollector::sync()
 {
-    m_logFunction(SYS_LOG_DEBUG, "Starting syscollector sync");
+    m_logFunction(LOG_DEBUG, "Starting syscollector sync");
     TRY_CATCH_TASK(syncHardware);
     TRY_CATCH_TASK(syncOs);
     TRY_CATCH_TASK(syncNetwork);
@@ -1602,12 +1617,12 @@ void Syscollector::sync()
     TRY_CATCH_TASK(syncHotfixes);
     TRY_CATCH_TASK(syncPorts);
     TRY_CATCH_TASK(syncProcesses);
-    m_logFunction(SYS_LOG_DEBUG, "Ending syscollector sync");
+    m_logFunction(LOG_DEBUG, "Ending syscollector sync");
 }
 
 void Syscollector::syncLoop(std::unique_lock<std::mutex>& lock)
 {
-    m_logFunction(SYS_LOG_INFO, "Module started.");
+    m_logFunction(LOG_INFO, "Module started.");
 
     if (m_scanOnStart)
     {
@@ -1640,12 +1655,11 @@ void Syscollector::push(const std::string& data)
         try
         {
             m_spRsync->pushMessage(std::vector<uint8_t> {buff, buff + rawData.size()});
-            m_logFunction(SYS_LOG_DEBUG_VERBOSE, "Message pushed: " + data);
         }
         // LCOV_EXCL_START
         catch (const std::exception& ex)
         {
-            m_logFunction(SYS_LOG_ERROR, ex.what());
+            m_logFunction(LOG_ERROR, ex.what());
         }
     }
 

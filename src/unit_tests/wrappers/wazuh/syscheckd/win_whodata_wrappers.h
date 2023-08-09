@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -11,7 +11,7 @@
 #ifndef WIN_WHODATA_WRAPPERS_H
 #define WIN_WHODATA_WRAPPERS_H
 
-#include "config/syscheck-config.h"
+#include "../../../../config/syscheck-config.h"
 
 int __wrap_run_whodata_scan();
 

@@ -6,8 +6,8 @@
 #include <string.h>
 
 #include "shared.h"
-#include "os_auth/check_cert.h"
-#include "os_auth/auth.h"
+#include "../os_auth/check_cert.h"
+#include "../os_auth/auth.h"
 
 #include "../wrappers/common.h"
 #include "../wrappers/posix/stat_wrappers.h"
@@ -23,11 +23,11 @@
 #define NEW_IP1         "192.0.0.0"
 #define RAW_KEY         "6dd186d1740f6c80d4d380ebe72c8061db175881e07e809eb44404c836a7ef96"
 
-extern int w_enrollment_concat_src_ip(char *buff, const char* sender_ip, const int use_src_ip);
+extern int w_enrollment_concat_src_ip(char *buff, const size_t remain_size, const char* sender_ip, const int use_src_ip);
 extern void w_enrollment_concat_group(char *buff, const char* centralized_group);
 extern void w_enrollment_concat_key(char *buff, keyentry* key_entry);
-extern void w_enrollment_verify_ca_certificate(const SSL *ssl, const char *ca_cert, const char *hostname);
-extern int w_enrollment_connect(w_enrollment_ctx *cfg, const char * server_address);
+extern int w_enrollment_verify_ca_certificate(const SSL *ssl, const char *ca_cert, const char *hostname);
+extern int w_enrollment_connect(w_enrollment_ctx *cfg, const char * server_address, uint32_t network_interface);
 extern int w_enrollment_send_message(w_enrollment_ctx *cfg);
 extern int w_enrollment_store_key_entry(const char* keys);
 extern int w_enrollment_process_agent_key(char *buffer);
@@ -134,6 +134,14 @@ int test_setup_concats(void **state) {
     return 0;
 }
 
+int test_setup_concats_small_buff(void **state) {
+    char *buf;
+    os_calloc(30, sizeof(char), buf);
+    buf[29] = '\0';
+    *state = buf;
+    return 0;
+}
+
 //Teardown
 int test_teardown_concats(void **state) {
     free(*state);
@@ -171,13 +179,7 @@ int test_teardown_context(void **state) {
     os_free(cfg->target_cfg->agent_name);
     os_free(cfg->target_cfg->sender_ip);
     os_free(cfg->target_cfg);
-    os_free(cfg->cert_cfg->agent_cert);
-    os_free(cfg->cert_cfg->agent_key);
-    os_free(cfg->cert_cfg->authpass);
-    os_free(cfg->cert_cfg->ca_cert);
-    os_free(cfg->cert_cfg->ciphers);
-    os_free(cfg->cert_cfg->authpass_file);
-    os_free(cfg->cert_cfg);
+    w_enrollment_cert_destroy(cfg->cert_cfg);
     os_free(cfg->keys);
     if(cfg->ssl) {
         SSL_free(cfg->ssl);
@@ -267,20 +269,14 @@ int test_teardown_w_enrollment_request_key(void **state) {
     os_free(cfg->target_cfg->manager_name);
     os_free(cfg->target_cfg->sender_ip);
     os_free(cfg->target_cfg);
-    os_free(cfg->cert_cfg->agent_cert);
-    os_free(cfg->cert_cfg->agent_key);
-    os_free(cfg->cert_cfg->authpass);
-    os_free(cfg->cert_cfg->ca_cert);
-    os_free(cfg->cert_cfg->ciphers);
-    os_free(cfg->cert_cfg->authpass_file);
-    os_free(cfg->cert_cfg);
+    w_enrollment_cert_destroy(cfg->cert_cfg);
     os_free(cfg->keys);
+
     w_enrollment_destroy(cfg);
     test_mode = 0;
     return 0;
 }
 
-//Setup
 int test_setup_ssl_context(void **state) {
     SSL_CTX *ctx = get_ssl_context(DEFAULT_CIPHERS, 0);
     SSL *ssl = __real_SSL_new(ctx);
@@ -307,10 +303,8 @@ int test_setup_enrollment_load_pass(void **state) {
 int test_teardown_enrollment_load_pass(void **state) {
     w_enrollment_cert *cert_cfg;
     cert_cfg = *state;
-    os_free(cert_cfg->ciphers);
-    os_free(cert_cfg->authpass);
-    os_free(cert_cfg->authpass_file);
-    os_free(cert_cfg);
+    w_enrollment_cert_destroy(cert_cfg);
+
     test_mode = 0;
     return 0;
 }
@@ -325,7 +319,7 @@ void test_w_enrollment_concat_src_ip_invalid_ip(void **state) {
     will_return(__wrap_OS_IsValidIP, 0);
 
     expect_string(__wrap__merror, formatted_msg, "Invalid IP address provided for sender IP.");
-    int ret = w_enrollment_concat_src_ip(buf, sender_ip, 0);
+    int ret = w_enrollment_concat_src_ip(buf, OS_SIZE_65536 + OS_SIZE_4096 - strlen(buf), sender_ip, 0);
     assert_int_equal(ret, -1);
 }
 
@@ -336,7 +330,7 @@ void test_w_enrollment_concat_src_ip_valid_ip(void **state) {
     expect_value(__wrap_OS_IsValidIP, final_ip, NULL);
     will_return(__wrap_OS_IsValidIP, 1);
 
-    int ret = w_enrollment_concat_src_ip(buf, sender_ip, 0);
+    int ret = w_enrollment_concat_src_ip(buf, OS_SIZE_65536 + OS_SIZE_4096 - strlen(buf), sender_ip, 0);
     assert_int_equal(ret, 0);
     assert_string_equal(buf, " IP:'192.168.1.1'");
 }
@@ -345,7 +339,7 @@ void test_w_enrollment_concat_src_ip_empty_ip(void **state) {
     char *buf = *state;
     const char* sender_ip = NULL;
 
-    int ret = w_enrollment_concat_src_ip(buf, sender_ip, 1);
+    int ret = w_enrollment_concat_src_ip(buf, OS_SIZE_65536 + OS_SIZE_4096 - strlen(buf), sender_ip, 1);
     assert_int_equal(ret, 0);
     assert_string_equal(buf, " IP:'src'");
 }
@@ -355,21 +349,43 @@ void test_w_enrollment_concat_src_ip_incomaptible_opt(void **state) {
     const char* sender_ip ="192.168.1.1";
 
     expect_string(__wrap__merror, formatted_msg, "Incompatible sender_ip options: Forcing IP while using use_source_ip flag.");
-    int ret = w_enrollment_concat_src_ip(buf, sender_ip, 1);
+    int ret = w_enrollment_concat_src_ip(buf, OS_SIZE_65536 + OS_SIZE_4096 - strlen(buf), sender_ip, 1);
     assert_int_equal(ret, -1);
+}
+
+void test_w_enrollment_concat_src_ip_small_buff(void **state) {
+    int ret = 0;
+    char *buf = *state;
+    const char* sender_ip = "192.168.1.1";
+
+    expect_string(__wrap_OS_IsValidIP, ip_address, sender_ip);
+    expect_value(__wrap_OS_IsValidIP, final_ip, NULL);
+    will_return(__wrap_OS_IsValidIP, 1);
+
+    ret = w_enrollment_concat_src_ip(buf, 30 - strlen(buf), sender_ip, 0);
+    assert_int_equal(ret, 0);
+    assert_string_equal(buf, " IP:'192.168.1.1'");
+
+    expect_string(__wrap_OS_IsValidIP, ip_address, sender_ip);
+    expect_value(__wrap_OS_IsValidIP, final_ip, NULL);
+    will_return(__wrap_OS_IsValidIP, 1);
+
+    ret = w_enrollment_concat_src_ip(buf, 30 - strlen(buf), sender_ip, 0);
+    assert_int_equal(ret, 0);
+    assert_string_equal(buf, " IP:'192.168.1.1' IP:'192.168");
 }
 
 void test_w_enrollment_concat_src_ip_default(void **state) {
     char *buf = *state;
     const char* sender_ip = NULL;
 
-    int ret = w_enrollment_concat_src_ip(buf, sender_ip, 0);
+    int ret = w_enrollment_concat_src_ip(buf, OS_SIZE_65536 + OS_SIZE_4096 - strlen(buf), sender_ip, 0);
     assert_int_equal(ret, 0);
     assert_string_equal(buf, "");
 }
 
 void test_w_enrollment_concat_src_ip_empty_buff(void **state) {
-    expect_assert_failure(w_enrollment_concat_src_ip(NULL, NULL, 0));
+    expect_assert_failure(w_enrollment_concat_src_ip(NULL, 0, NULL, 0));
 }
 
 /**********************************************/
@@ -429,7 +445,8 @@ void test_w_enrollment_verify_ca_certificate_null_connection(void **state) {
 void test_w_enrollment_verify_ca_certificate_no_certificate(void **state) {
     SSL *ssl = *state;
     expect_string(__wrap__mdebug1, formatted_msg, "Registering agent to unverified manager");
-    w_enrollment_verify_ca_certificate(ssl, NULL, "hostname");
+    int retval = w_enrollment_verify_ca_certificate(ssl, NULL, "hostname");
+    assert_int_equal(retval, 0);
 }
 
 void test_verificy_ca_certificate_invalid_certificate(void **state) {
@@ -441,7 +458,8 @@ void test_verificy_ca_certificate_invalid_certificate(void **state) {
 
     expect_string(__wrap__minfo, formatted_msg, "Verifying manager's certificate");
     expect_string(__wrap__merror, formatted_msg, "Unable to verify server certificate");
-    w_enrollment_verify_ca_certificate(ssl, "BAD_CERTIFICATE", "hostname");
+    int retval = w_enrollment_verify_ca_certificate(ssl, "BAD_CERTIFICATE", "hostname");
+    assert_int_equal(retval, 1);
 }
 
 void test_verificy_ca_certificate_valid_certificate(void **state) {
@@ -453,18 +471,20 @@ void test_verificy_ca_certificate_valid_certificate(void **state) {
 
     expect_string(__wrap__minfo, formatted_msg, "Verifying manager's certificate");
     expect_string(__wrap__minfo, formatted_msg, "Manager has been verified successfully");
-    w_enrollment_verify_ca_certificate(ssl, "GOOD_CERTIFICATE", "hostname");
+    int retval = w_enrollment_verify_ca_certificate(ssl, "GOOD_CERTIFICATE", "hostname");
+    assert_int_equal(retval, 0);
+
 }
 
 /**********************************************/
 /********** w_enrollment_connect *******/
 void test_w_enrollment_connect_empty_address(void **state) {
     w_enrollment_ctx *cfg = *state;
-    expect_assert_failure(w_enrollment_connect(cfg, NULL));
+    expect_assert_failure(w_enrollment_connect(cfg, NULL, 0));
 }
 
 void test_w_enrollment_connect_empty_config(void **state) {
-    expect_assert_failure(w_enrollment_connect(NULL, "hostname"));
+    expect_assert_failure(w_enrollment_connect(NULL, "hostname", 0));
 }
 
 void test_w_enrollment_connect_invalid_hostname(void **state) {
@@ -474,7 +494,7 @@ void test_w_enrollment_connect_invalid_hostname(void **state) {
     will_return(__wrap_OS_GetHost, NULL);
     expect_string(__wrap__merror, formatted_msg, "Could not resolve hostname: valid_hostname\n");
 
-    int ret = w_enrollment_connect(cfg, cfg->target_cfg->manager_name);
+    int ret = w_enrollment_connect(cfg, cfg->target_cfg->manager_name, 0);
     assert_int_equal(ret, ENROLLMENT_WRONG_CONFIGURATION);
 }
 
@@ -492,8 +512,8 @@ void test_w_enrollment_connect_could_not_setup(void **state) {
     expect_value(__wrap_os_ssl_keys, auto_method, 0);
     will_return(__wrap_os_ssl_keys, NULL);
 
-    expect_string(__wrap__merror, formatted_msg, "Could not set up SSL connection! Check ceritification configuration.");
-    int ret = w_enrollment_connect(cfg, cfg->target_cfg->manager_name);
+    expect_string(__wrap__merror, formatted_msg, "Could not set up SSL connection! Check certification configuration.");
+    int ret = w_enrollment_connect(cfg, cfg->target_cfg->manager_name, 0);
     assert_int_equal(ret, ENROLLMENT_WRONG_CONFIGURATION);
 }
 
@@ -519,8 +539,8 @@ void test_w_enrollment_connect_socket_error(void **state) {
     expect_value(__wrap_OS_ConnectTCP, ipv6, 0);
     will_return(__wrap_OS_ConnectTCP, -1);
 
-    expect_string(__wrap__merror, formatted_msg, "Unable to connect to 127.0.0.1:1234");
-    int ret = w_enrollment_connect(cfg, cfg->target_cfg->manager_name);
+    expect_string(__wrap__merror, formatted_msg, "(1208): Unable to connect to enrollment service at '[127.0.0.1]:1234'");
+    int ret = w_enrollment_connect(cfg, cfg->target_cfg->manager_name, 0);
     assert_int_equal(ret, ENROLLMENT_CONNECTION_FAILURE);
 }
 
@@ -558,7 +578,7 @@ void test_w_enrollment_connect_SSL_connect_error(void **state) {
     expect_value(__wrap_OS_CloseSocket, sock, 5);
     will_return(__wrap_OS_CloseSocket, 0);
 
-    int ret = w_enrollment_connect(cfg, cfg->target_cfg->manager_name);
+    int ret = w_enrollment_connect(cfg, cfg->target_cfg->manager_name, 0);
     assert_int_equal(ret, ENROLLMENT_CONNECTION_FAILURE);
 }
 
@@ -588,7 +608,7 @@ void test_w_enrollment_connect_success(void **state) {
     will_return(__wrap_SSL_new, cfg->ssl);
     will_return(__wrap_SSL_connect, 1);
 
-    expect_string(__wrap__mdebug1, formatted_msg, "Connected to 127.0.0.1:1234");
+    expect_string(__wrap__mdebug1, formatted_msg, "(1209): Connected to enrollment service at '[127.0.0.1]:1234'");
 
     // verify_ca_certificate
     expect_value(__wrap_check_x509_cert, ssl, cfg->ssl);
@@ -597,7 +617,7 @@ void test_w_enrollment_connect_success(void **state) {
     expect_string(__wrap__minfo, formatted_msg, "Verifying manager's certificate");
     expect_string(__wrap__minfo, formatted_msg, "Manager has been verified successfully");
 
-    int ret = w_enrollment_connect(cfg, cfg->target_cfg->manager_name);
+    int ret = w_enrollment_connect(cfg, cfg->target_cfg->manager_name, 0);
     assert_int_equal(ret, 5);
 }
 
@@ -640,7 +660,10 @@ void test_w_enrollment_send_message_fix_invalid_hostname(void **state) {
     // If gethostname returns an invalid string should be fixed by OS_ConvertToValidAgentName
     expect_string(__wrap__minfo, formatted_msg, "Using agent name as: InvalidHostname");
     expect_value(__wrap_SSL_write, ssl, cfg->ssl);
-    expect_string(__wrap_SSL_write, buf, "OSSEC A:'InvalidHostname'\n");
+    char buff[128];
+    snprintf(buff,128,"OSSEC A:'InvalidHostname' V:'v4.5.0'\n");
+
+    expect_string(__wrap_SSL_write, buf, buff);
     will_return(__wrap_SSL_write, -1);
     expect_string(__wrap__merror, formatted_msg, "SSL write error (unable to send message.)");
     expect_string(__wrap__merror, formatted_msg, "If Agent verification is enabled, agent key and certificates are required!");
@@ -679,7 +702,11 @@ void test_w_enrollment_send_message_ssl_error(void **state) {
 #endif
     expect_string(__wrap__minfo, formatted_msg, "Using agent name as: host.name");
     expect_value(__wrap_SSL_write, ssl, cfg->ssl);
-    expect_string(__wrap_SSL_write, buf, "OSSEC A:'host.name'\n");
+
+    char buff[128];
+    snprintf(buff,128,"OSSEC A:'host.name' V:'v4.5.0'\n");
+
+    expect_string(__wrap_SSL_write, buf, buff);
     will_return(__wrap_SSL_write, -1);
     expect_string(__wrap__merror, formatted_msg, "SSL write error (unable to send message.)");
     expect_string(__wrap__merror, formatted_msg, "If Agent verification is enabled, agent key and certificates are required!");
@@ -701,7 +728,11 @@ void test_w_enrollment_send_message_success(void **state) {
     expect_value(__wrap_OS_IsValidIP, final_ip, NULL);
     will_return(__wrap_OS_IsValidIP, 1);
     expect_value(__wrap_SSL_write, ssl, cfg->ssl);
-    expect_string(__wrap_SSL_write, buf, "OSSEC PASS: test_password OSSEC A:'test_agent' G:'test_group' IP:'192.168.1.1' K:'0965e68d9935a35530910bf32d35052995efe7bd'\n");
+
+    char buff[256];
+    snprintf(buff,256,"OSSEC PASS: test_password OSSEC A:'test_agent' V:'v4.5.0' G:'test_group' IP:'192.168.1.1' K:'0965e68d9935a35530910bf32d35052995efe7bd'\n");
+
+    expect_string(__wrap_SSL_write, buf, buff);
     will_return(__wrap_SSL_write, 0);
     expect_string(__wrap__mdebug1, formatted_msg,"Request sent to manager");
     int ret = w_enrollment_send_message(cfg);
@@ -735,7 +766,11 @@ void test_w_enrollment_send_message_success_different_hostname(void **state) {
 #endif
     expect_string(__wrap__minfo, formatted_msg, "Using agent name as: host.name");
     expect_value(__wrap_SSL_write, ssl, cfg->ssl);
-    expect_string(__wrap_SSL_write, buf, "OSSEC A:'host.name' K:'0965e68d9935a35530910bf32d35052995efe7bd'\n");
+
+    char buff[128];
+    snprintf(buff,128,"OSSEC A:'host.name' V:'v4.5.0' K:'0965e68d9935a35530910bf32d35052995efe7bd'\n");
+
+    expect_string(__wrap_SSL_write, buf, buff);
     will_return(__wrap_SSL_write, 0);
     expect_string(__wrap__mdebug1, formatted_msg,"Request sent to manager");
     int ret = w_enrollment_send_message(cfg);
@@ -998,12 +1033,13 @@ void test_w_enrollment_process_response_success(void **state) {
 /**********************************************/
 /******* w_enrollment_request_key ********/
 void test_w_enrollment_request_key_null_cfg(void **state) {
-    expect_assert_failure(w_enrollment_request_key(NULL, "server_adress"));
+    expect_assert_failure(w_enrollment_request_key(NULL, "server_adress", 0));
 }
 
 void test_w_enrollment_request_key(void **state) {
     w_enrollment_ctx *cfg = *state;
     SSL_CTX *ctx = get_ssl_context(DEFAULT_CIPHERS, 0);
+    char buff[128];
 
     expect_string(__wrap__minfo, formatted_msg, "Requesting a key from server: valid_hostname");
 
@@ -1036,7 +1072,7 @@ void test_w_enrollment_request_key(void **state) {
         will_return(__wrap_SSL_new, cfg->ssl);
         will_return(__wrap_SSL_connect, 1);
 
-        expect_string(__wrap__mdebug1, formatted_msg, "Connected to 192.168.1.1:1234");
+        expect_string(__wrap__mdebug1, formatted_msg, "(1209): Connected to enrollment service at '[192.168.1.1]:1234'");
 
         // verify_ca_certificate
         expect_value(__wrap_check_x509_cert, ssl, cfg->ssl);
@@ -1052,7 +1088,9 @@ void test_w_enrollment_request_key(void **state) {
         expect_value(__wrap_OS_IsValidIP, final_ip, NULL);
         will_return(__wrap_OS_IsValidIP, 1);
         expect_value(__wrap_SSL_write, ssl, cfg->ssl);
-        expect_string(__wrap_SSL_write, buf, "OSSEC PASS: test_password OSSEC A:'test_agent' G:'test_group' IP:'192.168.1.1'\n");
+
+        snprintf(buff,128,"OSSEC PASS: test_password OSSEC A:'test_agent' V:'v4.5.0' G:'test_group' IP:'192.168.1.1'\n");
+        expect_string(__wrap_SSL_write, buf, buff);
         will_return(__wrap_SSL_write, 0);
         expect_string(__wrap__mdebug1, formatted_msg,"Request sent to manager");
     }
@@ -1102,7 +1140,7 @@ void test_w_enrollment_request_key(void **state) {
         will_return(__wrap_SSL_get_error, SSL_ERROR_NONE);
         expect_string(__wrap__mdebug1, formatted_msg, "Connection closed.");
     }
-    int ret = w_enrollment_request_key(cfg, NULL);
+    int ret = w_enrollment_request_key(cfg, NULL, 0);
     assert_int_equal(ret, 0);
 }
 
@@ -1199,6 +1237,7 @@ int main() {
         cmocka_unit_test_setup_teardown(test_w_enrollment_concat_src_ip_valid_ip, test_setup_concats, test_teardown_concats),
         cmocka_unit_test_setup_teardown(test_w_enrollment_concat_src_ip_empty_ip, test_setup_concats, test_teardown_concats),
         cmocka_unit_test_setup_teardown(test_w_enrollment_concat_src_ip_incomaptible_opt, test_setup_concats, test_teardown_concats),
+        cmocka_unit_test_setup_teardown(test_w_enrollment_concat_src_ip_small_buff, test_setup_concats_small_buff, test_teardown_concats),
         cmocka_unit_test(test_w_enrollment_concat_src_ip_empty_buff),
         // w_enrollment_concat_group
         cmocka_unit_test(test_w_enrollment_concat_group_empty_buff),

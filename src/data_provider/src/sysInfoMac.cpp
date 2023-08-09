@@ -1,6 +1,6 @@
 /*
  * Wazuh SysInfo
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * October 7, 2020.
  *
  * This program is free software; you can redistribute it
@@ -25,20 +25,15 @@
 #include "packages/packageFamilyDataAFactory.h"
 #include "packages/pkgWrapper.h"
 #include "packages/packageMac.h"
+#include "hardware/factoryHardwareFamilyCreator.h"
+#include "hardware/hardwareWrapperImplMac.h"
+#include "osPrimitivesImplMac.h"
 
 const std::string MAC_APPS_PATH{"/Applications"};
 const std::string MAC_UTILITIES_PATH{"/Applications/Utilities"};
+constexpr auto MAC_ROSETTA_DEFAULT_ARCH {"arm64"};
 
 using ProcessTaskInfo = struct proc_taskallinfo;
-
-static const std::map<int, std::string> s_mapTaskInfoState =
-{
-    { 1, "I"},  // Idle
-    { 2, "R"},  // Running
-    { 3, "S"},  // Sleep
-    { 4, "T"},  // Stopped
-    { 5, "Z"}   // Zombie
-};
 
 static const std::vector<int> s_validFDSock =
 {
@@ -64,10 +59,7 @@ static nlohmann::json getProcessInfo(const ProcessTaskInfo& taskInfo, const pid_
     jsProcessInfo["pid"]        = std::to_string(pid);
     jsProcessInfo["name"]       = taskInfo.pbsd.pbi_name;
 
-    const auto procState { s_mapTaskInfoState.find(taskInfo.pbsd.pbi_status) };
-    jsProcessInfo["state"]      = (procState != s_mapTaskInfoState.end())
-                                  ? procState->second
-                                  : "E";   // Internal error
+    jsProcessInfo["state"]      = UNKNOWN_VALUE;
     jsProcessInfo["ppid"]       = taskInfo.pbsd.pbi_ppid;
 
     const auto eUser { getpwuid(taskInfo.pbsd.pbi_uid) };
@@ -94,93 +86,20 @@ static nlohmann::json getProcessInfo(const ProcessTaskInfo& taskInfo, const pid_
     jsProcessInfo["priority"]   = taskInfo.ptinfo.pti_priority;
     jsProcessInfo["nice"]       = taskInfo.pbsd.pbi_nice;
     jsProcessInfo["vm_size"]    = taskInfo.ptinfo.pti_virtual_size / KByte;
+    jsProcessInfo["start_time"] = taskInfo.pbsd.pbi_start_tvsec;
     return jsProcessInfo;
 }
 
-void SysInfo::getMemory(nlohmann::json& info) const
+nlohmann::json SysInfo::getHardware() const
 {
-    constexpr auto vmPageSize{"vm.pagesize"};
-    constexpr auto vmPageFreeCount{"vm.page_free_count"};
-    uint64_t ram{0};
-    const std::vector<int> mib{CTL_HW, HW_MEMSIZE};
-    size_t len{sizeof(ram)};
-    auto ret{sysctl(const_cast<int*>(mib.data()), mib.size(), &ram, &len, nullptr, 0)};
-
-    if (ret)
-    {
-        throw std::system_error
-        {
-            ret,
-            std::system_category(),
-            "Error reading total RAM."
-        };
-    }
-
-    const auto ramTotal{ram / KByte};
-    info["ram_total"] = ramTotal;
-    u_int pageSize{0};
-    len = sizeof(pageSize);
-    ret = sysctlbyname(vmPageSize, &pageSize, &len, nullptr, 0);
-
-    if (ret)
-    {
-        throw std::system_error
-        {
-            ret,
-            std::system_category(),
-            "Error reading page size."
-        };
-    }
-
-    uint64_t freePages{0};
-    len = sizeof(freePages);
-    ret = sysctlbyname(vmPageFreeCount, &freePages, &len, nullptr, 0);
-
-    if (ret)
-    {
-        throw std::system_error
-        {
-            ret,
-            std::system_category(),
-            "Error reading free pages."
-        };
-    }
-
-    const auto ramFree{(freePages * pageSize) / KByte};
-    info["ram_free"] = ramFree;
-    info["ram_usage"] = 100 - (100 * ramFree / ramTotal);
-}
-
-int SysInfo::getCpuMHz() const
-{
-    constexpr auto MHz{1000000};
-    unsigned long cpuMHz{0};
-    constexpr auto clockRate{"hw.cpufrequency"};
-    size_t len{sizeof(cpuMHz)};
-    const auto ret{sysctlbyname(clockRate, &cpuMHz, &len, nullptr, 0)};
-
-    if (ret)
-    {
-        throw std::system_error
-        {
-            ret,
-            std::system_category(),
-            "Error reading cpu frequency."
-        };
-    }
-
-    return cpuMHz / MHz;
-}
-
-std::string SysInfo::getSerialNumber() const
-{
-    const auto rawData{Utils::exec("system_profiler SPHardwareDataType | grep Serial")};
-    return Utils::trim(rawData.substr(rawData.find(":")), " :\t\r\n");
+    nlohmann::json hardware;
+    FactoryHardwareFamilyCreator<OSPlatformType::BSDBASED>::create(std::make_shared<OSHardwareWrapperMac<OsPrimitivesMac>>())->buildHardwareData(hardware);
+    return hardware;
 }
 
 static void getPackagesFromPath(const std::string& pkgDirectory, const int pkgType, std::function<void(nlohmann::json&)> callback)
 {
-    const auto packages {Utils::enumerateDir(pkgDirectory) };
+    const auto packages { Utils::enumerateDir(pkgDirectory) };
 
     for (const auto& package : packages)
     {
@@ -189,7 +108,7 @@ static void getPackagesFromPath(const std::string& pkgDirectory, const int pkgTy
             if (Utils::endsWith(package, ".app"))
             {
                 nlohmann::json jsPackage;
-                FactoryPackageFamilyCreator<OSType::BSDBASED>::create(std::make_pair(PackageContext{pkgDirectory, package, ""}, pkgType))->buildPackageData(jsPackage);
+                FactoryPackageFamilyCreator<OSPlatformType::BSDBASED>::create(std::make_pair(PackageContext{pkgDirectory, package, ""}, pkgType))->buildPackageData(jsPackage);
 
                 if (!jsPackage.at("name").get_ref<const std::string&>().empty())
                 {
@@ -202,14 +121,14 @@ static void getPackagesFromPath(const std::string& pkgDirectory, const int pkgTy
         {
             if (!Utils::startsWith(package, "."))
             {
-                const auto packageVersions {Utils::enumerateDir(pkgDirectory + "/" + package) };
+                const auto packageVersions { Utils::enumerateDir(pkgDirectory + "/" + package) };
 
                 for (const auto& version : packageVersions)
                 {
                     if (!Utils::startsWith(version, "."))
                     {
                         nlohmann::json jsPackage;
-                        FactoryPackageFamilyCreator<OSType::BSDBASED>::create(std::make_pair(PackageContext{pkgDirectory, package, version}, pkgType))->buildPackageData(jsPackage);
+                        FactoryPackageFamilyCreator<OSPlatformType::BSDBASED>::create(std::make_pair(PackageContext{pkgDirectory, package, version}, pkgType))->buildPackageData(jsPackage);
 
                         if (!jsPackage.at("name").get_ref<const std::string&>().empty())
                         {
@@ -248,6 +167,43 @@ nlohmann::json SysInfo::getProcessesInfo() const
     return jsProcessesList;
 }
 
+static bool isRunningOnRosetta()
+{
+
+    /* Rosetta is a translation process that allows users to run
+     *  apps that contain x86_64 instructions on Apple silicon.
+     * The sysctl.proc_translated indicates if current process is being translated
+     *   from x86_64 to arm64 (1) or not (0).
+     * If sysctl.proc_translated flag cannot be found, the current process is
+     *  nativally running on x86_64.
+     * Ref: https://developer.apple.com/documentation/apple-silicon/about-the-rosetta-translation-environment
+    */
+    constexpr auto PROCESS_TRANSLATED {1};
+    auto retVal {false};
+    auto isTranslated{0};
+    auto len{sizeof(isTranslated)};
+    const auto result{sysctlbyname("sysctl.proc_translated", &isTranslated, &len, NULL, 0)};
+
+    if (result)
+    {
+        if (errno != ENOENT)
+        {
+            throw std::system_error
+            {
+                result,
+                std::system_category(),
+                "Error reading rosetta status."
+            };
+        }
+    }
+    else
+    {
+        retVal = PROCESS_TRANSLATED == isTranslated;
+    }
+
+    return retVal;
+}
+
 nlohmann::json SysInfo::getOsInfo() const
 {
     nlohmann::json ret;
@@ -256,6 +212,11 @@ nlohmann::json SysInfo::getOsInfo() const
     parser.parseSwVersion(Utils::exec("sw_vers"), ret);
     parser.parseUname(Utils::exec("uname -r"), ret);
 
+    if (!parser.parseSystemProfiler(Utils::exec("system_profiler SPSoftwareDataType"), ret))
+    {
+        ret["os_name"] = "macOS";
+    }
+
     if (uname(&uts) >= 0)
     {
         ret["sysname"] = uts.sysname;
@@ -263,6 +224,11 @@ nlohmann::json SysInfo::getOsInfo() const
         ret["version"] = uts.version;
         ret["architecture"] = uts.machine;
         ret["release"] = uts.release;
+    }
+
+    if (isRunningOnRosetta())
+    {
+        ret["architecture"] = MAC_ROSETTA_DEFAULT_ARCH;
     }
 
     return ret;

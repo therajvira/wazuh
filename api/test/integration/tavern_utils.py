@@ -1,5 +1,9 @@
 import json
+import re
+import subprocess
+import time
 from base64 import b64decode
+from datetime import datetime
 from json import loads
 
 from box import Box
@@ -41,7 +45,7 @@ def test_token_raw_format(response):
     assert type(response.text) is str
 
 
-def test_select_key_affected_items(response, select_key):
+def test_select_key_affected_items(response, select_key, flag_nested_key_list=False):
     """Check that all items in response have no other keys than those specified in 'select_key'.
 
     Absence of 'select_key' in response does not raise any error. However, extra keys in response (not specified
@@ -50,9 +54,14 @@ def test_select_key_affected_items(response, select_key):
     Some keys like 'id', 'agent_id', etc. are accepted even if not specified in 'select_key' since
     they ignore the 'select' param in API.
 
-    :param response: Request response
-    :param select_key: Keys requested in select parameter.
-        Lists and nested fields accepted e.g: id,cpu.mhz,json
+    Parameters
+    ----------
+    response : Request response
+    select_key : str
+        Keys requested in select parameter. Lists and nested fields accepted e.g: id,cpu.mhz,json
+    flag_nested_key_list : bool
+        Flag used to indicate that the nested key contains a list. Used to test endpoints like
+        GET /sca/{agent_id}/checks/{policy_id}.
     """
     main_keys = set()
     nested_keys = dict()
@@ -75,15 +84,50 @@ def test_select_key_affected_items(response, select_key):
 
         # Check if there are keys in response that were not specified in 'select_keys', apart from those which can be
         # mandatory (id, agent_id, etc).
-        assert (set1 == set() or set1 == set1.intersection({'id', 'agent_id', 'file', 'task_id'} | main_keys)), \
-            f'Select keys are {main_keys}, but the response contains these keys: {set1}'
+        assert (set1 == set() or set1 == set1.intersection(
+            {'id', 'agent_id', 'file', 'task_id',
+             'policy_id'} | main_keys)), f'Select keys are {main_keys}, but the response contains these keys: {set1}'
 
         for nested_key in nested_keys.items():
+            # nested_key = compliance, value
             try:
-                set2 = nested_key[1].symmetric_difference(set(item[nested_key[0]].keys()))
+                if not flag_nested_key_list:
+                    set2 = nested_key[1].symmetric_difference(set(item[nested_key[0]].keys()))
+
+                # If we are using select in endpoints like GET /sca/{agent_id}/checks/{policy_id},
+                # the nested field contains a list
+                else:
+                    set2 = nested_key[1].symmetric_difference(set(item[nested_key[0]][0].keys()))
+
                 assert set2 == set(), f'Nested select keys are {nested_key[1]}, but this one is different {set2}'
             except KeyError:
                 assert nested_key[0] in main_keys
+
+
+def test_select_distinct_nested_sca_checks(response, select_key):
+    """Check that all items in response have no other keys than those specified in 'select_key'.
+
+    This function is specifically used for the SCA checks endpoint, when distinct=True and select contains a nested
+    field.
+
+    This function does not take into account min select fields.
+
+    Absence of 'select_key' in response does not raise any error. However, extra keys in response (not specified
+    in 'select_key') will raise assertion error.
+
+    Parameters
+    ----------
+    response : Request response
+    select_key : str
+        Keys requested in select parameter. Lists and nested fields accepted e.g: id,cpu.mhz,json
+    """
+    main_keys = set(select_key.split(','))
+
+    for item in response.json()['data']['affected_items']:
+        # Check that there are no keys in the item that are not specified in 'select_keys'
+        set1 = main_keys.symmetric_difference(set(item.keys()))
+        assert set1 == set() or set1 == set1.intersection(main_keys), \
+            f'Select keys are {main_keys}, but an item contains the keys: {set(item.keys())}'
 
 
 def test_select_key_affected_items_with_agent_id(response, select_key):
@@ -183,7 +227,7 @@ def test_sort_response(response, key=None, reverse=False):
 
 
 def test_validate_data_dict_field(response, fields_dict):
-    assert fields_dict, f'Fields dict is empty'
+    assert fields_dict, "Fields dict is empty"
     for field, dikt in fields_dict.items():
         field_list = response.json()['data'][field]
 
@@ -203,7 +247,7 @@ def test_count_elements(response, n_expected_items):
     assert len(response.json()['data']['affected_items']) == n_expected_items
 
 
-def test_expected_value(response, key, expected_values):
+def test_expected_value(response, key, expected_values, empty_response_possible=False):
     """Iterate all items in the response and check that <key> value is within <expected_values>.
 
     Parameters
@@ -214,11 +258,18 @@ def test_expected_value(response, key, expected_values):
         Key whose value is checked.
     expected_values : str, list
         List of values which are allowed.
+    empty_response_possible : bool
+        Indicates whether the response could be empty or not. Set to True when the key value does not depend on the
+        test itself, for instance, node. Default: `False`
     """
     expected_values = set(expected_values.split(',')) if not isinstance(expected_values, list) else set(expected_values)
+    affected_items = response.json()['data']['affected_items']
 
-    for item in response.json()['data']['affected_items']:
-        response_set = set(item[key]) if isinstance(item[key], list) else {item[key]}
+    if not affected_items and not empty_response_possible:
+        raise Exception("No items found in the response")
+
+    for item in affected_items:
+        response_set = set(map(str, item[key])) if isinstance(item[key], list) else {str(item[key])}
         assert bool(expected_values.intersection(response_set)), \
             f'Expected values {expected_values} not found in {item[key]}'
 
@@ -229,6 +280,10 @@ def test_response_is_different(response, response_value, unexpected_value):
     :param unexpected_value: Response value should be different to this.
     """
     assert response_value != unexpected_value, f"{response_value} and {unexpected_value} shouldn't be the same"
+
+
+def test_save_token_raw_format(response):
+    return Box({'login_token': response.text})
 
 
 def test_save_response_data(response):
@@ -245,29 +300,31 @@ def test_save_response_data_mitre(response, fields):
 
 
 def test_validate_mitre(response, data, index=0):
+    data = data.replace('"', '\\"')  # Escape " character in data
     data = json.loads(data.replace("'", '"'))
     for element in data:
         for k, v in element.items():
+            if isinstance(v, str):
+                v = v.replace('\\"', '"')  # Remove \\ characters used to escape "
             assert v == response.json()['data']['affected_items'][index][k]
 
 
 def test_validate_restart_by_node(response, data):
     data = json.loads(data.replace("'", '"'))
     affected_items = list()
-    failed_items = list()
     for item in data['affected_items']:
         if item['status'] == 'active':
             affected_items.append(item['id'])
-        else:
-            failed_items.append(item['id'])
     assert response.json()['data']['affected_items'] == affected_items
-    assert response.json()['data']['failed_items'] == failed_items
+    assert not response.json()['data']['failed_items']
+    healthcheck_agent_restart(response, affected_items)
 
 
 def test_validate_restart_by_node_rbac(response, permitted_agents):
     data = response.json().get('data', None)
     if data:
         if data['affected_items']:
+            healthcheck_agent_restart(response, data['affected_items'])
             for agent in data['affected_items']:
                 assert agent in permitted_agents
         else:
@@ -327,3 +384,127 @@ def test_validate_search(response, search_param):
         values = get_values(item)
         if not any(filter(lambda x: search_param in x, values)):
             raise ValueError(f'{search_param} not present in {values}')
+
+
+def test_validate_key_not_in_response(response, key):
+    assert all(key not in item for item in response.json()["data"]["affected_items"])
+
+
+def test_validate_vd_scans(response, first_node_name, first_node_count, second_node_name, second_node_count,
+                           third_node_name, third_node_count):
+    nodes = []
+    if first_node_count > 0:
+        nodes.append(first_node_name)
+    if second_node_count > 0:
+        nodes.append(second_node_name)
+    if third_node_count > 0:
+        nodes.append(third_node_name)
+
+    # All the names in nodes must be in the response
+    assert all(node in response.json()["data"]["affected_items"] for node in nodes)
+
+
+def check_agentd_started(response, agents_list):
+    """Wait until all the agents have their agentd process started correctly. This will avoid race conditions caused by
+    agents reconnections before restarting.
+
+    Parameters
+    ----------
+    response : Request response
+    agents_list : list
+        List of expected agents to be restarted.
+    """
+    timestamp_regex = re.compile(r'^\d\d\d\d/\d\d/\d\d\s\d\d:\d\d:\d\d')
+    agentd_started_regex = re.compile(r'agentd.+Started')
+
+    def get_timestamp(log):
+        """Get timestamp from log.
+
+        Parameters
+        ----------
+        log : str
+            String representing the log to get the timestamp from.
+
+        Returns
+        -------
+        datetime
+            Datetime object representing the timestamp got.
+        """
+        timestamp = timestamp_regex.search(string=log).group(0)
+        return datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
+
+    # Save the time when the restart command was sent
+    restart_request_time = datetime.utcnow().replace(microsecond=0) - response.elapsed
+
+    for agent_id in agents_list:
+        tries = 0
+        while tries < 80:
+            try:
+                # Save agentd logs in a list
+                command = f"docker exec env_wazuh-agent{int(agent_id)}_1 grep agentd /var/ossec/logs/ossec.log"
+                output = subprocess.check_output(command.split()).decode().strip().split('\n')
+            except subprocess.SubprocessError as exc:
+                raise subprocess.SubprocessError(f"Error while trying to get logs from agent {agent_id}") from exc
+
+            # Ignore agentd logs before restart_request_time
+            logs_after_restart = [agentd_log for agentd_log in output if
+                                  get_timestamp(agentd_log).timestamp() >= restart_request_time.timestamp()]
+
+            # Check the log indicating agentd started is in the agent's ossec.log (after the restart request)
+            if any(agentd_started_regex.search(string=agentd_log) for agentd_log in logs_after_restart):
+                break
+
+            tries += 1
+            time.sleep(1)
+        else:
+            raise ProcessLookupError("The wazuh-agentd daemon was not started after requesting the restart")
+
+
+def check_agent_active_status(agents_list):
+    """Wait until all the agents have active status in the global.db. This will avoid race conditions caused by
+    non-active agents in following test cases.
+
+    Parameters
+    ----------
+    agents_list : list
+        List of expected agents to be restarted.
+    """
+    active_agents_script_path = "/tools/print_active_agents.py"
+    id_active_agents = []
+    tries = 0
+    while tries < 25:
+        try:
+            # Get active agents
+            output = subprocess.check_output(f"docker exec env_wazuh-master_1 /var/ossec/framework/python/bin/python3 "
+                                             f"{active_agents_script_path}".split()).decode().strip()
+        except subprocess.SubprocessError as exc:
+            raise subprocess.SubprocessError("Error while trying to get agents") from exc
+
+        # Transform string representation of list to list and save agents id
+        id_active_agents = [agent['id'] for agent in eval(output)]
+
+        if all(a in id_active_agents for a in agents_list):
+            break
+
+        tries += 1
+        time.sleep(1)
+    else:
+        non_active_agents = [a for a in agents_list if a not in id_active_agents]
+        raise SystemError(f"Agents {non_active_agents} have a status different to active after restarting")
+
+
+def healthcheck_agent_restart(response, agents_list):
+    """Wait until the restart process is finished for every agent in the given list.
+
+    Parameters
+    ----------
+    response : Request response
+    agents_list : list
+        List of expected agents to be restarted.
+    """
+    # Wait for agentd daemon start (up to 80 seconds)
+    check_agentd_started(response, agents_list)
+    # Wait for cluster synchronization process (20 seconds)
+    time.sleep(20)
+    # Wait for active agent status (up to 25 seconds)
+    check_agent_active_status(agents_list)

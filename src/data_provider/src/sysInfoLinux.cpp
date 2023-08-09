@@ -1,6 +1,6 @@
 /*
  * Wazuh SysInfo
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * October 7, 2020.
  *
  * This program is free software; you can redistribute it
@@ -10,13 +10,14 @@
  */
 #include <fstream>
 #include <iostream>
+#include <regex>
+#include <sys/utsname.h>
 #include "sharedDefs.h"
 #include "stringHelper.h"
 #include "filesystemHelper.h"
 #include "cmdHelper.h"
 #include "osinfo/sysOsParsers.h"
 #include "sysInfo.hpp"
-#include "shared.h"
 #include "readproc.h"
 #include "networkUnixHelper.h"
 #include "networkHelper.h"
@@ -26,6 +27,8 @@
 #include "ports/portImpl.h"
 #include "packages/berkeleyRpmDbHelper.h"
 #include "packages/packageLinuxDataRetriever.h"
+
+#include "linuxInfoHelper.h"
 
 struct ProcTableDeleter
 {
@@ -120,9 +123,9 @@ static nlohmann::json getProcessInfo(const SysInfoProcess& process)
     jsProcessInfo["nice"]       = process->nice;
     jsProcessInfo["size"]       = process->size;
     jsProcessInfo["vm_size"]    = process->vm_size;
-    jsProcessInfo["resident"]   = process->resident;
+    jsProcessInfo["resident"]   = process->vm_rss;
     jsProcessInfo["share"]      = process->share;
-    jsProcessInfo["start_time"] = process->start_time;
+    jsProcessInfo["start_time"] = Utils::timeTick2unixTime(process->start_time);
     jsProcessInfo["pgrp"]       = process->pgrp;
     jsProcessInfo["session"]    = process->session;
     jsProcessInfo["tgid"]       = process->tgid;
@@ -132,7 +135,7 @@ static nlohmann::json getProcessInfo(const SysInfoProcess& process)
     return jsProcessInfo;
 }
 
-std::string SysInfo::getSerialNumber() const
+static std::string getSerialNumber()
 {
     std::string serial;
     std::fstream file{WM_SYS_HW_DIR, std::ios_base::in};
@@ -149,7 +152,7 @@ std::string SysInfo::getSerialNumber() const
     return serial;
 }
 
-std::string SysInfo::getCpuName() const
+static std::string getCpuName()
 {
     std::string retVal { UNKNOWN_VALUE };
     std::map<std::string, std::string> systemInfo;
@@ -164,7 +167,7 @@ std::string SysInfo::getCpuName() const
     return retVal;
 }
 
-int SysInfo::getCpuCores() const
+static int getCpuCores()
 {
     int retVal { 0 };
     std::map<std::string, std::string> systemInfo;
@@ -179,7 +182,7 @@ int SysInfo::getCpuCores() const
     return retVal;
 }
 
-int SysInfo::getCpuMHz() const
+static int getCpuMHz()
 {
     int retVal { 0 };
     std::map<std::string, std::string> systemInfo;
@@ -191,11 +194,48 @@ int SysInfo::getCpuMHz() const
     {
         retVal = std::stoi(it->second) + 1;
     }
+    else
+    {
+        int cpuFreq { 0 };
+        const auto cpusInfo { Utils::enumerateDir(WM_SYS_CPU_FREC_DIR) };
+        constexpr auto CPU_FREQ_DIRNAME_PATTERN {"cpu[0-9]+"};
+        const std::regex cpuDirectoryRegex {CPU_FREQ_DIRNAME_PATTERN};
+
+        for (const auto& cpu : cpusInfo)
+        {
+            if (std::regex_match(cpu, cpuDirectoryRegex))
+            {
+                std::fstream file{WM_SYS_CPU_FREC_DIR + cpu + "/cpufreq/cpuinfo_max_freq", std::ios_base::in};
+
+                if (file.is_open())
+                {
+                    std::string frequency;
+                    std::getline(file, frequency);
+
+                    try
+                    {
+                        cpuFreq = std::stoi(frequency);  // Frequency on KHz
+
+                        if (cpuFreq > retVal)
+                        {
+                            retVal = cpuFreq;
+                        }
+                    }
+                    catch (...)
+                    {
+                    }
+                }
+            }
+        }
+
+        retVal /= 1000;  // Convert frequency from KHz to MHz
+    }
+
 
     return retVal;
 }
 
-void SysInfo::getMemory(nlohmann::json& info) const
+static void getMemory(nlohmann::json& info)
 {
     std::map<std::string, std::string> systemInfo;
     getSystemInfo(WM_SYS_MEM_DIR, ":", systemInfo);
@@ -210,9 +250,14 @@ void SysInfo::getMemory(nlohmann::json& info) const
         memTotal = std::stoull(itTotal->second);
     }
 
+    const auto& itAvailable { systemInfo.find("MemAvailable") };
     const auto& itFree { systemInfo.find("MemFree") };
 
-    if (itFree != systemInfo.end())
+    if (itAvailable != systemInfo.end())
+    {
+        memFree = std::stoull(itAvailable->second);
+    }
+    else if (itFree != systemInfo.end())
     {
         memFree = std::stoull(itFree->second);
     }
@@ -221,6 +266,17 @@ void SysInfo::getMemory(nlohmann::json& info) const
     info["ram_total"] = ramTotal;
     info["ram_free"] = memFree;
     info["ram_usage"] = 100 - (100 * memFree / ramTotal);
+}
+
+nlohmann::json SysInfo::getHardware() const
+{
+    nlohmann::json hardware;
+    hardware["board_serial"] = getSerialNumber();
+    hardware["cpu_name"] = getCpuName();
+    hardware["cpu_cores"] = getCpuCores();
+    hardware["cpu_mhz"] = double(getCpuMHz());
+    getMemory(hardware);
+    return hardware;
 }
 
 nlohmann::json SysInfo::getPackages() const
@@ -341,7 +397,7 @@ nlohmann::json SysInfo::getNetworks() const
 
         for (auto addr : interface.second)
         {
-            const auto networkInterfacePtr { FactoryNetworkFamilyCreator<OSType::LINUX>::create(std::make_shared<NetworkLinuxInterface>(addr)) };
+            const auto networkInterfacePtr { FactoryNetworkFamilyCreator<OSPlatformType::LINUX>::create(std::make_shared<NetworkLinuxInterface>(addr)) };
 
             if (networkInterfacePtr)
             {

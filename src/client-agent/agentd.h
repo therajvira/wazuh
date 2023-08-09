@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -13,8 +13,8 @@
 
 #include "shared.h"
 #include "sec.h"
-#include "config/config.h"
-#include "config/client-config.h"
+#include "../config/config.h"
+#include "../config/client-config.h"
 #include "state.h"
 
 /* Buffer functions */
@@ -51,7 +51,9 @@ void *EventForward(void);
 int receive_msg(void);
 
 /* Receiver messages for Windows */
-void *receiver_thread(void *none);
+#ifdef WIN32
+DWORD WINAPI receiver_thread(LPVOID none);
+#endif
 
 /* Initialize agent buffer */
 void buffer_init();
@@ -60,8 +62,11 @@ void buffer_init();
 int buffer_append(const char *msg);
 
 /* Thread to dispatch messages from the buffer */
+#ifdef WIN32
+DWORD WINAPI dispatch_buffer(LPVOID arg);
+#else
 void *dispatch_buffer(void * arg);
-
+#endif
 /**
  * @brief get the number of events in buffer
  *
@@ -93,10 +98,11 @@ void send_agent_stopped_message();
 
 /**
  * Tries to enroll to a server indicated by server_rip
- * @return 0 on success
- *         -1 on error
+ * @return 0 on success -1 on error
+ * @param server_rip the server ip where enrollment is attempted
+ * @param network_interface network interface through which enrollment is attempted. (Required for IPv6 link-local addresses)
  * */
-int try_enroll_to_server(const char *server_rip);
+int try_enroll_to_server(const char *server_rip, uint32_t network_interface);
 
 /* Notify server */
 void run_notify(void);
@@ -105,7 +111,11 @@ void run_notify(void);
 int format_labels(char *str, size_t size);
 
 // Thread to rotate internal log
+#ifdef WIN32
+DWORD WINAPI w_rotate_log_thread(LPVOID arg);
+#else
 void * w_rotate_log_thread(void * arg);
+#endif
 
 // Initialize request module
 void req_init();
@@ -114,7 +124,11 @@ void req_init();
 int req_push(char * buffer, size_t length);
 
 // Request receiver thread start
+#ifdef WIN32
+DWORD WINAPI req_receiver(LPVOID arg);
+#else
 void * req_receiver(void * arg);
+#endif
 
 // Restart agent
 void * restartAgent();
@@ -124,7 +138,6 @@ int verifyRemoteConf();
 
 // Clear merged.mg hash cache value.
 void clear_merged_hash_cache();
-
 
 size_t agcom_dispatch(char * command, char ** output);
 size_t agcom_getconfig(const char * section, char ** output);

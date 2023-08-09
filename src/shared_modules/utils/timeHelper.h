@@ -1,6 +1,6 @@
 /*
  * Wazuh shared modules utils
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * December 28, 2020.
  *
  * This program is free software; you can redistribute it
@@ -22,11 +22,11 @@
 
 namespace Utils
 {
-    static std::string getTimestamp(std::time_t time)
+    static std::string getTimestamp(const std::time_t& time, const bool utc = true)
     {
         std::stringstream ss;
         // gmtime: result expressed as a UTC time
-        tm* localTime { gmtime(&time) };
+        tm* localTime { utc ? gmtime(&time) : localtime(&time)};
         // Final timestamp: "YYYY/MM/DD hh:mm:ss"
         // Date
         ss << std::setfill('0') << std::setw(4) << std::to_string(localTime->tm_year + 1900);
@@ -49,5 +49,7 @@ namespace Utils
         return getTimestamp(std::time(nullptr));
     }
 };
+
+#pragma GCC diagnostic pop
 
 #endif // _TIME_HELPER_H

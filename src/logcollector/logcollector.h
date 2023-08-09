@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -36,10 +36,12 @@
 #define OS_LOGCOLLECTOR_JSON_HASH       "hash"
 #define OS_LOGCOLLECTOR_JSON_OFFSET     "offset"
 
+
 #include "shared.h"
-#include "config/localfile-config.h"
-#include "config/config.h"
-#include "os_crypto/sha1/sha1_op.h"
+#include "../config/localfile-config.h"
+#include "../config/config.h"
+#include "../os_crypto/sha1/sha1_op.h"
+#include "macos_log.h"
 
 
 /*** Function prototypes ***/
@@ -93,8 +95,18 @@ void *read_mssql_log(logreader *lf, int *rc, int drop_it);
 /* Read postgresql log format */
 void *read_postgresql_log(logreader *lf, int *rc, int drop_it);
 
-/* read multi line logs */
+/* Read multi line logs */
 void *read_multiline(logreader *lf, int *rc, int drop_it);
+
+/**
+ * @brief Check if any logs should be ignored
+ *
+ * @param ignore_exp List of ignore regex expressions to be checked
+ * @param restrict_exp List of restrict regex expressions to be checked
+ * @param log_line Log where to search for a match
+ * @return 0 if log should be processed, 1 if log should be ignored
+ */
+int check_ignore_and_restrict(OSList * ignore_exp, OSList * restrict_exp, const char *log_line);
 
 /**
  * @brief Read multi line logs with variable lenght
@@ -105,6 +117,19 @@ void *read_multiline(logreader *lf, int *rc, int drop_it);
  * @return NULL
  */
 void *read_multiline_regex(logreader *lf, int *rc, int drop_it);
+
+#if defined(Darwin) || (defined(__linux__) && defined(WAZUH_UNIT_TESTING))
+/**
+ * @brief Read macOS log process output
+ *
+ * @param lf status and configuration of the macOS instance
+ * @param rc output parameter, returns zero
+ * @param drop_it if drop_it is different from 0, the logs will be read and discarded
+ * @return NULL
+ */
+void *read_macos(logreader *lf, int *rc, int drop_it);
+
+#endif
 
 /* Read DJB multilog format */
 /* Initializes multilog */
@@ -263,6 +288,23 @@ extern int N_INPUT_THREADS;
 extern int OUTPUT_QUEUE_SIZE;
 #ifndef WIN32
 extern rlim_t nofile;
+#endif
+
+#if defined(Darwin) || (defined(__linux__) && defined(WAZUH_UNIT_TESTING))
+/**
+ * @brief This function is called to release macOS log's "show" and/or "stream" resources
+ */
+void w_macos_release_log_execution(void);
+
+/**
+ * @brief This function is called to release macOS log's "show" resources
+ */
+void w_macos_release_log_show(void);
+
+/**
+ * @brief This function is called to release macOS log's "stream" resources
+ */
+void w_macos_release_log_stream(void);
 #endif
 
 #endif /* LOGREADER_H */

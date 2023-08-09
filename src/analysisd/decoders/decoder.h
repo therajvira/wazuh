@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -92,6 +92,48 @@ typedef struct dbsync_context_t {
 } dbsync_context_t;
 
 /**
+ * @brief Struct used to have a 1:1 matching between upcoming agent syscollector
+ *  data fields and their corresponding table
+ */
+struct deltas_fields_match {
+    char *key;
+    char *value;
+};
+
+/**
+ * @brief Linked list of deltas fields match
+ */
+struct deltas_fields_match_list {
+    struct deltas_fields_match current;
+    const struct deltas_fields_match_list *next;
+};
+
+
+/**
+ * @brief Generic function to handle value mapping
+ *
+ */
+typedef bool (*mapping_t)(cJSON*,const char*);
+
+/**
+ * @brief Struct to map a field name their custom value mapper function
+ *
+ */
+struct delta_values_mapping {
+    char *key;
+    mapping_t mapping;
+};
+
+/**
+ * @brief Linked list of deltas values mappers
+ *
+ */
+struct delta_values_mapping_list {
+    struct delta_values_mapping current;
+    const struct delta_values_mapping_list *next;
+};
+
+/**
  * @brief Structure to save decoders which have program_name or parent with program_name
  */
 extern OSDecoderNode *os_analysisd_decoderlist_pn;
@@ -134,9 +176,12 @@ void OS_CreateOSDecoderList(void);
  * @param pi decoder to add in decoder list
  * @param pn_osdecodernode decoder list for events with program name
  * @param npn_osdecodernode decoder list for events without program name
- * @return 1 on success, otherwise 0
+ * @return status code
+ * @retval 1 success
+ * @retval 0 failure, the decoder has not been added to the list
+ * @retval -1 failure, but the decoder has already been added to the list
  */
-int OS_AddOSDecoder(OSDecoderInfo *pi, OSDecoderNode **pn_osdecodernode, 
+int OS_AddOSDecoder(OSDecoderInfo *pi, OSDecoderNode **pn_osdecodernode,
                     OSDecoderNode **npn_osdecodernode, OSList* log_msg);
 
 OSDecoderNode *OS_GetFirstOSDecoder(const char *pname);

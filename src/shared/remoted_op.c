@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * July 23, 2020.
  *
  * This program is free software; you can redistribute it
@@ -22,7 +22,7 @@
  * @retval A string pointer to the architecture. NULL if not found.
  */
 char * get_os_arch(char * os_header) {
-    const char * ARCHS[] = { "x86_64", "i386", "i686", "sparc", "amd64", "i86pc", "ia64", "AIX", "armv6", "armv7", NULL };
+    const char * ARCHS[] = { "x86_64", "i386", "i686", "sparc", "amd64", "i86pc", "ia64", "AIX", "armv6", "armv7", "aarch64", NULL };
     char * os_arch = NULL;
     int i;
 
@@ -83,8 +83,7 @@ void parse_uname_string (char *uname,
 
         os_strdup(str_tmp, osd->os_version);
         os_strdup("windows", osd->os_platform);
-    }
-    else {
+    } else {
         if (str_tmp = strstr(uname, " ["), str_tmp) {
             *str_tmp = '\0';
             str_tmp += 2;
@@ -157,8 +156,9 @@ int parse_agent_update_msg (char *msg,
     char sdelim[] = { '\n', '\0' };
     const char * agent_ip_label = "#\"_agent_ip\":";
 
-    if (!agent_data)
+    if (!agent_data) {
         return OS_INVALID;
+    }
 
     // Temporary coping the msg string
     os_strdup(msg, msg_tmp);

@@ -1,6 +1,6 @@
 /*
  * Wazuh shared modules utils
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * October 23, 2020.
  *
  * This program is free software; you can redistribute it
@@ -31,6 +31,15 @@ TEST_F(FilesystemUtilsTest, FilesystemEnumerateDir)
 TEST_F(FilesystemUtilsTest, FilesystemExistsDir)
 {
     EXPECT_TRUE(Utils::existsDir(R"(/usr)"));
+}
+
+TEST_F(FilesystemUtilsTest, FilesystemExistsRegular)
+{
+    // Check correct input, for macos and linux.
+    EXPECT_TRUE(Utils::existsRegular(R"(/etc/services)"));
+
+    // Check wrong input
+    EXPECT_FALSE(Utils::existsRegular(R"(/etc)"));
 }
 
 TEST_F(FilesystemUtilsTest, FilesystemEnumerateDir)

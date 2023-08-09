@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -11,7 +11,7 @@
 #ifndef READPROC_WRAPPERS_H
 #define READPROC_WRAPPERS_H
 
-#include "external/procps/readproc.h"
+#include "../external/procps/readproc.h"
 
 void __wrap_closeproc(PROCTAB* PT);
 

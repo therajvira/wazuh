@@ -1,7 +1,7 @@
 /* Network buffer library for Remoted
  * November 26, 2018
  *
- * Copyright (C) 2015-2021 Wazuh Inc.
+ * Copyright (C) 2015 Wazuh Inc.
  * All right reserved.
  *
  * This program is free software; you can redistribute it
@@ -13,12 +13,13 @@
 #include <shared.h>
 #include <os_net/os_net.h>
 #include "remoted.h"
+#include "state.h"
 
 extern wnotify_t * notify;
 
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-void nb_open(netbuffer_t * buffer, int sock, const struct sockaddr_in * peer_info) {
+void nb_open(netbuffer_t * buffer, int sock, const struct sockaddr_storage * peer_info) {
     w_mutex_lock(&mutex);
 
     if (sock >= buffer->max_fd) {
@@ -27,7 +28,7 @@ void nb_open(netbuffer_t * buffer, int sock, const struct sockaddr_in * peer_inf
     }
 
     memset(buffer->buffers + sock, 0, sizeof(sockbuffer_t));
-    memcpy(&buffer->buffers[sock].peer_info, peer_info, sizeof(struct sockaddr_in));
+    memcpy(&buffer->buffers[sock].peer_info, peer_info, sizeof(struct sockaddr_storage));
 
     buffer->buffers[sock].bqueue = bqueue_init(send_buffer_size, BQUEUE_SHRINK);
 
@@ -180,14 +181,15 @@ int nb_send(netbuffer_t * buffer, int socket) {
     return sent_bytes;
 }
 
-int nb_queue(netbuffer_t * buffer, int socket, char * crypt_msg, ssize_t msg_size) {
+int nb_queue(netbuffer_t * buffer, int socket, char * crypt_msg, ssize_t msg_size, char * agent_id) {
     int retval = -1;
     int header_size = sizeof(uint32_t);
     char data[msg_size + header_size];
+    const uint32_t bytes = wnet_order(msg_size);
 
     memcpy((data + header_size), crypt_msg, msg_size);
     // Add header at begining, first 4 bytes, it is message msg_size
-    *(uint32_t *)(data) = wnet_order(msg_size);
+    memcpy(data, &bytes, header_size);
 
     w_mutex_lock(&mutex);
 
@@ -223,6 +225,7 @@ int nb_queue(netbuffer_t * buffer, int socket, char * crypt_msg, ssize_t msg_siz
     w_mutex_unlock(&mutex);
 
     if (retval < 0) {
+        rem_inc_send_discarded(agent_id);
         mwarn("Package dropped. Could not append data into buffer.");
     }
 

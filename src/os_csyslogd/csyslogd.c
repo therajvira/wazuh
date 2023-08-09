@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -85,7 +85,7 @@ void OS_CSyslogD(SyslogConfig **syslog_config)
         mdebug2("Resolving server hostname: %s", syslog_config[s]->server);
         resolve_hostname(&syslog_config[s]->server, 5);
 
-        syslog_config[s]->socket = OS_ConnectUDP(syslog_config[s]->port, get_ip_from_resolved_hostname(syslog_config[s]->server), 0);
+        syslog_config[s]->socket = OS_ConnectUDP(syslog_config[s]->port, get_ip_from_resolved_hostname(syslog_config[s]->server), 0, 0);
 
         if (syslog_config[s]->socket < 0) {
             merror(CONNS_ERROR, syslog_config[s]->server, syslog_config[s]->port, "udp", strerror(errno));

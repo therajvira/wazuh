@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -66,6 +66,46 @@ typedef struct __registry_group_information {
     char *name;
     char *id;
 } registry_group_information_t;
+
+#ifdef TEST_WINAGENT
+#define BASE_WIN_ALLOWED_ACE "[" \
+    "\"delete\"," \
+    "\"read_control\"," \
+    "\"write_dac\"," \
+    "\"write_owner\"," \
+    "\"synchronize\"," \
+    "\"read_data\"," \
+    "\"write_data\"," \
+    "\"append_data\"," \
+    "\"read_ea\"," \
+    "\"write_ea\"," \
+    "\"execute\"," \
+    "\"read_attributes\"," \
+    "\"write_attributes\"" \
+"]"
+
+#define BASE_WIN_DENIED_ACE "[" \
+    "\"read_control\"," \
+    "\"synchronize\"," \
+    "\"read_data\"," \
+    "\"read_ea\"," \
+    "\"execute\"," \
+    "\"read_attributes\"" \
+"]"
+
+#define BASE_WIN_ACE "{" \
+    "\"name\": \"Users\"," \
+    "\"allowed\": " BASE_WIN_ALLOWED_ACE "," \
+    "\"denied\": " BASE_WIN_DENIED_ACE \
+"}"
+
+#define BASE_WIN_SID "S-1-5-32-636"
+
+static cJSON *create_win_permissions_object() {
+    static const char * const BASE_WIN_PERMS = "{\"" BASE_WIN_SID "\": " BASE_WIN_ACE "}";
+    return cJSON_Parse(BASE_WIN_PERMS);
+}
+#endif
 
 /* setup/teardown */
 
@@ -2144,6 +2184,296 @@ static void test_decode_win_attributes_some_attributes(void **state) {
                              "READONLY, RECALL_ON_OPEN, SPARSE_FILE, TEMPORARY");
 }
 
+/* decode_win_acl_json */
+void assert_ace_full_perms(const cJSON * const ace) {
+    int i;
+    const char *it;
+    cJSON *element;
+    static const char * const perm_strings[] = {
+        "generic_read",
+        "generic_write",
+        "generic_execute",
+        "generic_all",
+        "delete",
+        "read_control",
+        "write_dac",
+        "write_owner",
+        "synchronize",
+        "read_data",
+        "write_data",
+        "append_data",
+        "read_ea",
+        "write_ea",
+        "execute",
+        "read_attributes",
+        "write_attributes",
+        NULL
+    };
+
+    assert_non_null(ace);
+    assert_true(cJSON_IsArray(ace));
+
+    for (i = 0, it = perm_strings[0]; it; it = perm_strings[++i]) {
+        int fail = 1;
+        cJSON_ArrayForEach(element, ace) {
+            if (strcmp(cJSON_GetStringValue(element), it) == 0) {
+                fail = 0;
+                break;
+            }
+        }
+
+        if (fail) {
+            fail_msg("%s not found", it);
+        }
+    }
+}
+
+#define set_full_perms(x)                                                                                   \
+    x |= GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | GENERIC_ALL | DELETE | READ_CONTROL | WRITE_DAC | \
+         WRITE_OWNER | SYNCHRONIZE | FILE_READ_DATA | FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_READ_EA |   \
+         FILE_WRITE_EA | FILE_EXECUTE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES
+
+static void test_decode_win_acl_json_null_json(void **state) {
+    expect_assert_failure(decode_win_acl_json(NULL));
+}
+
+static void test_decode_win_acl_fail_creating_object(void **state) {
+    int full_perms = 0, i = 0;
+    const char * it;
+    cJSON *acl = __real_cJSON_CreateObject();
+    cJSON *ace = __real_cJSON_CreateObject();
+    cJSON *element;
+
+    if (acl == NULL || ace == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    *state = acl;
+    set_full_perms(full_perms);
+
+    cJSON_AddItemToObject(acl, "S-1-5-32-636", ace);
+
+    cJSON_AddItemToObject(ace, "allowed", cJSON_CreateNumber(full_perms));
+
+    will_return(__wrap_cJSON_CreateArray, NULL);
+
+    expect_string(__wrap__mwarn, formatted_msg, FIM_CJSON_ERROR_CREATE_ITEM);
+
+    decode_win_acl_json(acl);
+
+    ace = cJSON_GetObjectItem(acl, "S-1-5-32-636");
+    assert_non_null(ace);
+
+    cJSON *denied = cJSON_GetObjectItem(ace, "denied");
+    assert_null(denied);
+
+    cJSON *allowed = cJSON_GetObjectItem(ace, "allowed");
+    assert_non_null(allowed);
+    assert_int_equal(full_perms, allowed->valueint);
+}
+
+static void test_decode_win_acl_json_allowed_ace_only(void **state) {
+    int full_perms = 0, i = 0;
+    const char * it;
+    cJSON *acl = __real_cJSON_CreateObject();
+    cJSON *ace = __real_cJSON_CreateObject();
+    cJSON *element;
+
+    if (acl == NULL || ace == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    *state = acl;
+    set_full_perms(full_perms);
+
+    cJSON_AddItemToObject(acl, "S-1-5-32-636", ace);
+
+    cJSON_AddItemToObject(ace, "allowed", cJSON_CreateNumber(full_perms));
+
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+
+    decode_win_acl_json(acl);
+
+    ace = cJSON_GetObjectItem(acl, "S-1-5-32-636");
+    assert_non_null(ace);
+
+    cJSON *denied = cJSON_GetObjectItem(ace, "denied");
+    assert_null(denied);
+
+    cJSON *allowed = cJSON_GetObjectItem(ace, "allowed");
+    assert_ace_full_perms(allowed);
+}
+
+static void test_decode_win_acl_json_denied_ace_only(void **state) {
+    int full_perms = 0, i = 0;
+    const char * it;
+    cJSON *acl = __real_cJSON_CreateObject();
+    cJSON *ace = __real_cJSON_CreateObject();
+    cJSON *element;
+
+    if (acl == NULL || ace == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    *state = acl;
+    set_full_perms(full_perms);
+
+    cJSON_AddItemToObject(acl, "S-1-5-32-636", ace);
+
+    cJSON_AddItemToObject(ace, "denied", cJSON_CreateNumber(full_perms));
+
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+
+    decode_win_acl_json(acl);
+
+    ace = cJSON_GetObjectItem(acl, "S-1-5-32-636");
+    assert_non_null(ace);
+
+    cJSON *allowed = cJSON_GetObjectItem(ace, "allowed");
+    assert_null(allowed);
+
+    cJSON *denied = cJSON_GetObjectItem(ace, "denied");
+    assert_ace_full_perms(denied);
+}
+
+static void test_decode_win_acl_json_both_ace_types(void **state) {
+    int full_perms = 0, i = 0;
+    const char * it;
+    cJSON *acl = __real_cJSON_CreateObject();
+    cJSON *ace = __real_cJSON_CreateObject();
+    cJSON *element;
+
+    if (acl == NULL || ace == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    *state = acl;
+    set_full_perms(full_perms);
+
+    cJSON_AddItemToObject(acl, "S-1-5-32-636", ace);
+
+    cJSON_AddItemToObject(ace, "name", cJSON_CreateString("username"));
+    cJSON_AddItemToObject(ace, "denied", cJSON_CreateNumber(full_perms));
+    cJSON_AddItemToObject(ace, "allowed", cJSON_CreateNumber(full_perms));
+
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+
+    decode_win_acl_json(acl);
+
+    ace = cJSON_GetObjectItem(acl, "S-1-5-32-636");
+    assert_non_null(ace);
+
+    cJSON *allowed = cJSON_GetObjectItem(ace, "allowed");
+    assert_ace_full_perms(allowed);
+
+    cJSON *denied = cJSON_GetObjectItem(ace, "denied");
+    assert_ace_full_perms(denied);
+
+    // User name must be untouched, same as other unused fields
+    cJSON *name = cJSON_GetObjectItem(ace, "name");
+    assert_non_null(name);
+    assert_string_equal("username", cJSON_GetStringValue(name));
+}
+
+static void test_decode_win_acl_json_empty_acl(void **state) {
+    cJSON *acl = __real_cJSON_CreateObject();
+    *state = acl;
+
+    if (acl == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    decode_win_acl_json(acl);
+
+    assert_int_equal(0, cJSON_GetArraySize(acl));
+}
+
+static void test_decode_win_acl_json_empty_ace(void **state) {
+    int full_perms = 0, i = 0;
+    const char * it;
+    cJSON *acl = __real_cJSON_CreateObject();
+    cJSON *ace = __real_cJSON_CreateObject();
+    cJSON *element;
+
+    if (acl == NULL || ace == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    *state = acl;
+    set_full_perms(full_perms);
+
+    cJSON_AddItemToObject(acl, "S-1-5-32-636", ace);
+
+    decode_win_acl_json(acl);
+
+    ace = cJSON_GetObjectItem(acl, "S-1-5-32-636");
+    assert_non_null(ace);
+    assert_int_equal(0, cJSON_GetArraySize(ace));
+}
+
+static void test_decode_win_acl_json_multiple_aces(void **state) {
+    const char * const SIDS[] = {
+        [0] = "S-1-5-32-636",
+        [1] = "S-1-5-32-363",
+        [2] = "S-1-5-32-444",
+        [3] = NULL
+    };
+    const char * const USERNAMES[] = {
+        [0] = "username",
+        [1] = "someone",
+        [2] = "anon",
+        [3] = NULL
+    };
+    int full_perms = 0, i = 0;
+    const char * it;
+    cJSON *acl = __real_cJSON_CreateObject();
+    cJSON *ace = NULL;
+    cJSON *element;
+
+    if (acl == NULL) {
+        fail_msg("Failed to create ACL cJSON object");
+    }
+
+    *state = acl;
+    set_full_perms(full_perms);
+
+    for (i = 0, it = SIDS[0]; it; it = SIDS[++i]) {
+        ace = __real_cJSON_CreateObject();
+        if (ace == NULL) {
+            fail_msg("Failed to create ACE cJSON object");
+        }
+
+        cJSON_AddItemToObject(acl, it, ace);
+
+        cJSON_AddItemToObject(ace, "name", cJSON_CreateString(USERNAMES[i]));
+        cJSON_AddItemToObject(ace, "denied", cJSON_CreateNumber(full_perms));
+        cJSON_AddItemToObject(ace, "allowed", cJSON_CreateNumber(full_perms));
+
+        will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+        will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+    }
+
+    decode_win_acl_json(acl);
+
+    for (i = 0, it = SIDS[0]; it; it = SIDS[++i]) {
+        ace = cJSON_GetObjectItem(acl, it);
+        assert_non_null(ace);
+
+        cJSON *allowed = cJSON_GetObjectItem(ace, "allowed");
+        assert_ace_full_perms(allowed);
+
+        cJSON *denied = cJSON_GetObjectItem(ace, "denied");
+        assert_ace_full_perms(denied);
+
+        // User name must be untouched, same as other unused fields
+        cJSON *name = cJSON_GetObjectItem(ace, "name");
+        assert_non_null(name);
+        assert_string_equal(USERNAMES[i], cJSON_GetStringValue(name));
+    }
+}
+
+
 /* decode_win_permissions tests */
 static void test_decode_win_permissions_success_all_permissions(void **state) {
     char raw_perm[OS_SIZE_1024] = { '\0' };
@@ -2258,6 +2588,256 @@ static void test_decode_win_permissions_overrun_inner_buffer(void **state) {
     *state = output;
 
     assert_true(strlen(output) < MAX_WIN_PERM_SIZE);
+}
+
+/* compare_win_permissions */
+#define BASE_WIN_ALLOWED_ACE "[" \
+    "\"delete\"," \
+    "\"read_control\"," \
+    "\"write_dac\"," \
+    "\"write_owner\"," \
+    "\"synchronize\"," \
+    "\"read_data\"," \
+    "\"write_data\"," \
+    "\"append_data\"," \
+    "\"read_ea\"," \
+    "\"write_ea\"," \
+    "\"execute\"," \
+    "\"read_attributes\"," \
+    "\"write_attributes\"" \
+"]"
+
+#define BASE_WIN_DENIED_ACE "[" \
+    "\"read_control\"," \
+    "\"synchronize\"," \
+    "\"read_data\"," \
+    "\"read_ea\"," \
+    "\"execute\"," \
+    "\"read_attributes\"" \
+"]"
+
+#define BASE_WIN_ACE "{" \
+    "\"name\": \"Users\"," \
+    "\"allowed\": " BASE_WIN_ALLOWED_ACE "," \
+    "\"denied\": " BASE_WIN_DENIED_ACE \
+"}"
+
+static const char * const BASE_WIN_PERMS = "{\"S-1-5-32-636\": " BASE_WIN_ACE "}";
+
+static void test_compare_win_permissions_equal_acls(void **state) {
+    cJSON *acl1 = cJSON_Parse(BASE_WIN_PERMS);
+    cJSON *acl2 = cJSON_Parse(BASE_WIN_PERMS);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    assert_true(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_null_acl1(void **state) {
+    cJSON *acl1 = NULL;
+    cJSON *acl2 = cJSON_Parse(BASE_WIN_PERMS);
+
+    assert_non_null(acl2);
+
+    assert_false(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_null_acl2(void **state) {
+    cJSON *acl1 = cJSON_Parse(BASE_WIN_PERMS);
+    cJSON *acl2 = NULL;
+
+    assert_non_null(acl1);
+
+    assert_false(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+}
+
+static void test_compare_win_permissions_both_acls_null(void **state) {
+    cJSON *acl1 = NULL;
+    cJSON *acl2 = NULL;
+
+    assert_true(compare_win_permissions(acl1, acl2));
+}
+
+static void test_compare_win_permissions_acl1_larger_than_acl2(void **state) {
+    cJSON *acl1 = cJSON_Parse(BASE_WIN_PERMS);
+    cJSON *acl2 = cJSON_Parse(BASE_WIN_PERMS);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    cJSON_AddItemToObject(acl1, "S-1-5-18", __real_cJSON_CreateObject());
+
+    assert_false(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_acl2_larger_than_acl1(void **state) {
+    cJSON *acl1 = cJSON_Parse(BASE_WIN_PERMS);
+    cJSON *acl2 = cJSON_Parse(BASE_WIN_PERMS);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    cJSON_AddItemToObject(acl2, "S-1-5-18", __real_cJSON_CreateObject());
+
+    assert_false(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_different_entries(void **state) {
+    const char * const ACL2 = "{ \"S-1-5-18\":" BASE_WIN_ACE "}";
+    cJSON *acl1 = cJSON_Parse(BASE_WIN_PERMS);
+    cJSON *acl2 = cJSON_Parse(ACL2);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    assert_false(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_no_allowed_ace(void **state) {
+    const char *const NO_ALLOWED_ACE = "{\"S-1-5-32-636\": {"
+                                       "\"name\": \"Users\","
+                                       "\"denied\": " BASE_WIN_DENIED_ACE "}}";
+    cJSON *acl1 = cJSON_Parse(NO_ALLOWED_ACE);
+    cJSON *acl2 = cJSON_Parse(NO_ALLOWED_ACE);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    assert_true(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_no_allowed_ace1(void **state) {
+    const char *const NO_ALLOWED_ACE = "{\"S-1-5-32-636\": {"
+                                       "\"name\": \"Users\","
+                                       "\"denied\": " BASE_WIN_DENIED_ACE "}}";
+    cJSON *acl1 = cJSON_Parse(NO_ALLOWED_ACE);
+    cJSON *acl2 = cJSON_Parse(BASE_WIN_PERMS);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    assert_false(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_no_allowed_ace2(void **state) {
+    const char *const NO_ALLOWED_ACE = "{\"S-1-5-32-636\": {"
+                                       "\"name\": \"Users\","
+                                       "\"denied\": " BASE_WIN_DENIED_ACE "}}";
+    cJSON *acl1 = cJSON_Parse(BASE_WIN_PERMS);
+    cJSON *acl2 = cJSON_Parse(NO_ALLOWED_ACE);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    assert_false(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_no_denied_ace(void **state) {
+    const char *const NO_DENIED_ACE = "{\"S-1-5-32-636\": {"
+                                       "\"name\": \"Users\","
+                                       "\"allowed\": " BASE_WIN_ALLOWED_ACE "}}";
+    cJSON *acl1 = cJSON_Parse(NO_DENIED_ACE);
+    cJSON *acl2 = cJSON_Parse(NO_DENIED_ACE);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    assert_true(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_no_denied_ace1(void **state) {
+    const char *const NO_DENIED_ACE = "{\"S-1-5-32-636\": {"
+                                       "\"name\": \"Users\","
+                                       "\"allowed\": " BASE_WIN_ALLOWED_ACE "}}";
+    cJSON *acl1 = cJSON_Parse(NO_DENIED_ACE);
+    cJSON *acl2 = cJSON_Parse(BASE_WIN_PERMS);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    assert_false(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_no_denied_ace2(void **state) {
+    const char *const NO_DENIED_ACE = "{\"S-1-5-32-636\": {"
+                                       "\"name\": \"Users\","
+                                       "\"allowed\": " BASE_WIN_ALLOWED_ACE "}}";
+    cJSON *acl1 = cJSON_Parse(BASE_WIN_PERMS);
+    cJSON *acl2 = cJSON_Parse(NO_DENIED_ACE);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    assert_false(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_different_allowed_ace(void **state) {
+    const char *const CUSTOM_WIN_PERMS = "{\"S-1-5-32-636\": {"
+                                       "\"name\": \"Users\","
+                                       "\"allowed\": [\"read_control\"],"
+                                       "\"denied\": " BASE_WIN_DENIED_ACE "}}";
+    cJSON *acl1 = cJSON_Parse(BASE_WIN_PERMS);
+    cJSON *acl2 = cJSON_Parse(CUSTOM_WIN_PERMS);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    assert_false(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
+}
+
+static void test_compare_win_permissions_different_denied_ace(void **state) {
+    const char *const CUSTOM_WIN_PERMS = "{\"S-1-5-32-636\": {"
+                                       "\"name\": \"Users\","
+                                       "\"denied\": [\"read_control\"],"
+                                       "\"allowed\": " BASE_WIN_ALLOWED_ACE "}}";
+    cJSON *acl1 = cJSON_Parse(BASE_WIN_PERMS);
+    cJSON *acl2 = cJSON_Parse(CUSTOM_WIN_PERMS);
+
+    assert_non_null(acl1);
+    assert_non_null(acl2);
+
+    assert_false(compare_win_permissions(acl1, acl2));
+
+    cJSON_Delete(acl1);
+    cJSON_Delete(acl2);
 }
 
 /* attrs_to_json tests */
@@ -2633,6 +3213,176 @@ static void test_win_perm_to_json_multiple_accounts(void **state) {
     assert_string_equal(string, "WRITE_ATTRIBUTES");
 }
 
+static void test_win_perm_to_json_malformed_permission_1(void **state) {
+    char *input = "first (allowed): generic_read|generic_write|generic_execute,"
+        " first (denied): generic_all|delete|read_control|write_dac|write_owner,"
+        " second (allowed): synchronize|read_data|write_data,"
+        " third (denied): append_data|read_ea|write_ea|execute|read_attributes|write_attributes,"
+        " fourth ";
+    cJSON *output;
+    cJSON *user, *permissions_array;
+    char *string;
+
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
+
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+
+    will_return_always(__wrap_wstr_split, 1);  // use real wstr_split
+    expect_string(__wrap__mdebug1, formatted_msg,
+        "Uncontrolled condition when parsing the username from 'fourth '. Skipping permission.");
+    output = win_perm_to_json(input);
+
+    *state = output;
+
+    assert_int_equal(cJSON_GetArraySize(output), 3);
+
+    user = cJSON_GetArrayItem(output, 0);
+
+    string = cJSON_GetStringValue(cJSON_GetObjectItem(user, "name"));
+    assert_string_equal(string, "first");
+
+    permissions_array = cJSON_GetObjectItem(user, "allowed");
+    assert_int_equal(cJSON_GetArraySize(permissions_array), 3);
+
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 0));
+    assert_string_equal(string, "GENERIC_READ");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 1));
+    assert_string_equal(string, "GENERIC_WRITE");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 2));
+    assert_string_equal(string, "GENERIC_EXECUTE");
+
+    permissions_array = cJSON_GetObjectItem(user, "denied");
+    assert_int_equal(cJSON_GetArraySize(permissions_array), 5);
+
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 0));
+    assert_string_equal(string, "GENERIC_ALL");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 1));
+    assert_string_equal(string, "DELETE");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 2));
+    assert_string_equal(string, "READ_CONTROL");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 3));
+    assert_string_equal(string, "WRITE_DAC");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 4));
+    assert_string_equal(string, "WRITE_OWNER");
+
+    user = cJSON_GetArrayItem(output, 1);
+
+    string = cJSON_GetStringValue(cJSON_GetObjectItem(user, "name"));
+    assert_string_equal(string, "second");
+
+    permissions_array = cJSON_GetObjectItem(user, "allowed");
+    assert_int_equal(cJSON_GetArraySize(permissions_array), 3);
+
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 0));
+    assert_string_equal(string, "SYNCHRONIZE");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 1));
+    assert_string_equal(string, "READ_DATA");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 2));
+    assert_string_equal(string, "WRITE_DATA");
+
+    user = cJSON_GetArrayItem(output, 2);
+
+    string = cJSON_GetStringValue(cJSON_GetObjectItem(user, "name"));
+    assert_string_equal(string, "third");
+
+    permissions_array = cJSON_GetObjectItem(user, "denied");
+    assert_int_equal(cJSON_GetArraySize(permissions_array), 6);
+
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 0));
+    assert_string_equal(string, "APPEND_DATA");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 1));
+    assert_string_equal(string, "READ_EA");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 2));
+    assert_string_equal(string, "WRITE_EA");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 3));
+    assert_string_equal(string, "EXECUTE");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 4));
+    assert_string_equal(string, "READ_ATTRIBUTES");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 5));
+    assert_string_equal(string, "WRITE_ATTRIBUTES");
+
+}
+
+static void test_win_perm_to_json_malformed_permission_2(void **state) {
+    char *input = "first (allowed): generic_read|generic_write|generic_execute,"
+        " first (denied): generic_all|delete|read_control|write_dac|write_owner,"
+        " second (allowed): synchronize|read_data|write_data,"
+        " third (error,"
+        " fourth (denied): append_data|read_ea|write_ea|execute|read_attributes|write_attributes";
+    cJSON *output;
+    cJSON *user, *permissions_array;
+    char *string;
+
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
+
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+    will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
+
+    will_return_always(__wrap_wstr_split, 1);  // use real wstr_split
+    expect_string(__wrap__mdebug1, formatted_msg,
+        "Uncontrolled condition when parsing the permission type from 'error'. Skipping permission.");
+    output = win_perm_to_json(input);
+
+    *state = output;
+
+    assert_int_equal(cJSON_GetArraySize(output), 3);
+
+    user = cJSON_GetArrayItem(output, 0);
+
+    string = cJSON_GetStringValue(cJSON_GetObjectItem(user, "name"));
+    assert_string_equal(string, "first");
+
+    permissions_array = cJSON_GetObjectItem(user, "allowed");
+    assert_int_equal(cJSON_GetArraySize(permissions_array), 3);
+
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 0));
+    assert_string_equal(string, "GENERIC_READ");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 1));
+    assert_string_equal(string, "GENERIC_WRITE");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 2));
+    assert_string_equal(string, "GENERIC_EXECUTE");
+
+    permissions_array = cJSON_GetObjectItem(user, "denied");
+    assert_int_equal(cJSON_GetArraySize(permissions_array), 5);
+
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 0));
+    assert_string_equal(string, "GENERIC_ALL");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 1));
+    assert_string_equal(string, "DELETE");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 2));
+    assert_string_equal(string, "READ_CONTROL");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 3));
+    assert_string_equal(string, "WRITE_DAC");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 4));
+    assert_string_equal(string, "WRITE_OWNER");
+
+    user = cJSON_GetArrayItem(output, 1);
+
+    string = cJSON_GetStringValue(cJSON_GetObjectItem(user, "name"));
+    assert_string_equal(string, "second");
+
+    permissions_array = cJSON_GetObjectItem(user, "allowed");
+    assert_int_equal(cJSON_GetArraySize(permissions_array), 3);
+
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 0));
+    assert_string_equal(string, "SYNCHRONIZE");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 1));
+    assert_string_equal(string, "READ_DATA");
+    string = cJSON_GetStringValue(cJSON_GetArrayItem(permissions_array, 2));
+    assert_string_equal(string, "WRITE_DATA");
+}
+
 static void test_win_perm_to_json_fragmented_acl(void **state) {
     char *input = "first (allowed): generic_read|generic_write|generic_execute,"
         " first (allowed): generic_all|delete|read_control|write_dac|write_owner,";
@@ -2729,7 +3479,7 @@ static void test_win_perm_to_json_incorrect_permission_format(void **state) {
     will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
 
     expect_string(__wrap__mdebug1, formatted_msg,
-        "Uncontrolled condition when parsing a Windows permission from 'This format is incorrect'.");
+        "Uncontrolled condition when parsing the username from 'This format is incorrect'. Skipping permission.");
 
     output = win_perm_to_json(input);
 
@@ -2742,7 +3492,7 @@ static void test_win_perm_to_json_incorrect_permission_format_2(void **state) {
     will_return(__wrap_cJSON_CreateArray, __real_cJSON_CreateArray());
 
     expect_string(__wrap__mdebug1, formatted_msg,
-        "Uncontrolled condition when parsing a Windows permission from 'This format is incorrect (too'.");
+        "Uncontrolled condition when parsing the permission type from 'too'. Skipping permission.");
 
     output = win_perm_to_json(input);
 
@@ -2834,15 +3584,15 @@ static void test_get_file_user_GetSecurityInfo_error(void **state) {
 
     expect_GetSecurityInfo_call(NULL, (PSID)"", ERROR_ACCESS_DENIED);
 
-    expect_GetLastError_call(ERROR_ACCESS_DENIED);
+    expect_ConvertSidToStringSid_call("", FALSE);
 
-    expect_ConvertSidToStringSid_call("dummy", FALSE);
+    will_return(__wrap_win_strerror,"Access denied.");
 
     expect_string(__wrap__mdebug1, formatted_msg, "The user's SID could not be extracted.");
 
     snprintf(error_msg,
              OS_SIZE_1024,
-             "GetSecurityInfo error = %lu",
+             "GetSecurityInfo error code = (%lu), 'Access denied.'",
              ERROR_ACCESS_DENIED);
 
     expect_string(__wrap__merror, formatted_msg, error_msg);
@@ -2865,8 +3615,8 @@ static void test_get_file_user_LookupAccountSid_error(void **state) {
 
     expect_LookupAccountSid_call("", "domainname", FALSE);
     expect_GetLastError_call(ERROR_ACCESS_DENIED);
-
-    expect_string(__wrap__merror, formatted_msg, "Error in LookupAccountSid.");
+    expect_FormatMessage_call("Access is denied.");
+    expect_string(__wrap__mwarn, formatted_msg, "(6950): Error in LookupAccountSid getting user. (5): Access is denied.");
 
     array[0] = get_file_user("C:\\a\\path", &array[1]);
 
@@ -2980,117 +3730,8 @@ void test_w_get_account_info_success(void **state) {
     assert_string_equal(array[1], "domainName");
 }
 
-void test_copy_ace_info_invalid_ace(void **state) {
-    int ret;
-    char perm[OS_SIZE_1024] = { '\0' };
-    ACCESS_ALLOWED_ACE ace = {
-        .Header.AceType = SYSTEM_AUDIT_ACE_TYPE,
-    };
-
-    expect_string(__wrap__mdebug2, formatted_msg, "Invalid ACE type.");
-
-    ret = copy_ace_info(&ace, perm, OS_SIZE_1024);
-
-    assert_int_equal(ret, 0);
-}
-
-void test_copy_ace_info_invalid_sid(void **state) {
-    int ret;
-    char perm[OS_SIZE_1024] = { '\0' };
-    ACCESS_ALLOWED_ACE ace = {
-        .Header.AceType = ACCESS_DENIED_ACE_TYPE,
-    };
-
-    will_return(wrap_IsValidSid, 0);
-
-    expect_string(__wrap__mdebug2, formatted_msg, "Invalid SID found in ACE.");
-
-    ret = copy_ace_info(&ace, perm, OS_SIZE_1024);
-
-    assert_int_equal(ret, 0);
-}
-
-void test_copy_ace_info_no_information_from_account_or_sid(void **state) {
-    int ret;
-    char perm[OS_SIZE_1024] = { '\0' };
-    ACCESS_ALLOWED_ACE ace = {
-        .Header.AceType = ACCESS_ALLOWED_ACE_TYPE,
-    };
-
-    will_return(wrap_IsValidSid, 1);
-
-    // Inside w_get_account_info
-    will_return(wrap_LookupAccountSid, OS_SIZE_1024);   // Name size
-    will_return(wrap_LookupAccountSid, OS_SIZE_1024);   // Domain size
-    will_return(wrap_LookupAccountSid, 0);
-
-    will_return(wrap_GetLastError, ERROR_INVALID_NAME);
-    will_return(wrap_GetLastError, ERROR_INVALID_NAME);
-
-    expect_string(__wrap__mdebug2, formatted_msg, "No information could be extracted from the account linked to the SID. Error: 123.");
-
-    will_return(wrap_ConvertSidToStringSid, NULL);
-    will_return(wrap_ConvertSidToStringSid, 0);
-
-    expect_string(__wrap__mdebug2, formatted_msg, "Could not extract the SID.");
-
-    ret = copy_ace_info(&ace, perm, OS_SIZE_1024);
-
-    assert_int_equal(ret, 0);
-}
-
-void test_copy_ace_info_success(void **state) {
-    int ret;
-    char perm[OS_SIZE_1024] = { '\0' };
-    ACCESS_ALLOWED_ACE ace = {
-        .Header.AceType = ACCESS_ALLOWED_ACE_TYPE,
-        .Mask = 123456,
-    };
-
-    will_return(wrap_IsValidSid, 1);
-
-    // Inside w_get_account_info
-    will_return(wrap_LookupAccountSid, OS_SIZE_1024);   // Name size
-    will_return(wrap_LookupAccountSid, OS_SIZE_1024);   // Domain size
-    will_return(wrap_LookupAccountSid, 1);
-
-    will_return(wrap_LookupAccountSid, "accountName");
-    will_return(wrap_LookupAccountSid, "domainName");
-    will_return(wrap_LookupAccountSid, 1);
-
-    ret = copy_ace_info(&ace, perm, OS_SIZE_1024);
-
-    assert_int_equal(ret, 21);
-    assert_string_equal(perm, "|accountName,0,123456");
-}
-
-void test_copy_ace_info_insufficient_size(void **state) {
-    int ret;
-    char perm[OS_SIZE_1024] = { '\0' };
-    ACCESS_ALLOWED_ACE ace = {
-        .Header.AceType = ACCESS_ALLOWED_ACE_TYPE,
-        .Mask = 123456,
-    };
-
-    will_return(wrap_IsValidSid, 1);
-
-    // Inside w_get_account_info
-    will_return(wrap_LookupAccountSid, OS_SIZE_1024);   // Name size
-    will_return(wrap_LookupAccountSid, OS_SIZE_1024);   // Domain size
-    will_return(wrap_LookupAccountSid, 1);
-
-    will_return(wrap_LookupAccountSid, "accountName");
-    will_return(wrap_LookupAccountSid, "domainName");
-    will_return(wrap_LookupAccountSid, 1);
-
-    ret = copy_ace_info(&ace, perm, 10);
-
-    assert_int_equal(ret, 0);
-    assert_string_equal(perm, "");
-}
-
 void test_w_get_file_permissions_GetFileSecurity_error_on_size(void **state) {
-    char permissions[OS_SIZE_1024];
+    cJSON *permissions = NULL;
     int ret;
 
     expect_string(wrap_GetFileSecurity, lpFileName, "C:\\a\\path");
@@ -3098,15 +3739,15 @@ void test_w_get_file_permissions_GetFileSecurity_error_on_size(void **state) {
     will_return(wrap_GetFileSecurity, 0);
 
     will_return(wrap_GetLastError, ERROR_ACCESS_DENIED);
-    will_return(wrap_GetLastError, ERROR_ACCESS_DENIED);
 
-    ret = w_get_file_permissions("C:\\a\\path", permissions, OS_SIZE_1024);
+    ret = w_get_file_permissions("C:\\a\\path", &permissions);
 
     assert_int_equal(ret, ERROR_ACCESS_DENIED);
+    assert_null(permissions);
 }
 
 void test_w_get_file_permissions_GetFileSecurity_error(void **state) {
-    char permissions[OS_SIZE_1024];
+    cJSON *permissions = NULL;
     int ret;
 
     expect_string(wrap_GetFileSecurity, lpFileName, "C:\\a\\path");
@@ -3119,13 +3760,14 @@ void test_w_get_file_permissions_GetFileSecurity_error(void **state) {
 
     will_return(wrap_GetLastError, ERROR_ACCESS_DENIED);
 
-    ret = w_get_file_permissions("C:\\a\\path", permissions, OS_SIZE_1024);
+    ret = w_get_file_permissions("C:\\a\\path", &permissions);
 
     assert_int_equal(ret, ERROR_ACCESS_DENIED);
+    assert_null(permissions);
 }
 
-void test_w_get_file_permissions_GetSecurityDescriptorDacl_error(void **state) {
-    char permissions[OS_SIZE_1024];
+void test_w_get_file_permissions_create_cjson_error(void **state) {
+    cJSON *permissions = NULL;
     int ret;
     SECURITY_DESCRIPTOR sec_desc;
 
@@ -3136,21 +3778,47 @@ void test_w_get_file_permissions_GetSecurityDescriptorDacl_error(void **state) {
     expect_string(wrap_GetFileSecurity, lpFileName, "C:\\a\\path");
     will_return(wrap_GetFileSecurity, &sec_desc);
     will_return(wrap_GetFileSecurity, 1);
+
+    will_return(__wrap_cJSON_CreateObject, NULL);
+
+    expect_string(__wrap__mwarn, formatted_msg, FIM_CJSON_ERROR_CREATE_ITEM);
+
+    ret = w_get_file_permissions("C:\\a\\path", &permissions);
+
+    assert_int_equal(ret, -1);
+    assert_null(permissions);
+}
+
+void test_w_get_file_permissions_GetSecurityDescriptorDacl_error(void **state) {
+    cJSON *permissions = NULL;
+    int ret;
+    SECURITY_DESCRIPTOR sec_desc;
+
+    expect_string(wrap_GetFileSecurity, lpFileName, "C:\\a\\path");
+    will_return(wrap_GetFileSecurity, OS_SIZE_1024);
+    will_return(wrap_GetFileSecurity, 1);
+
+    expect_string(wrap_GetFileSecurity, lpFileName, "C:\\a\\path");
+    will_return(wrap_GetFileSecurity, &sec_desc);
+    will_return(wrap_GetFileSecurity, 1);
+
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
 
     will_return(wrap_GetSecurityDescriptorDacl, FALSE);
     will_return(wrap_GetSecurityDescriptorDacl, 0);
 
-    expect_string(__wrap__mdebug1, formatted_msg, "The DACL of the file could not be obtained.");
+    expect_string(__wrap__mdebug2, formatted_msg, "GetSecurityDescriptorDacl failed. GetLastError returned: 5");
 
     will_return(wrap_GetLastError, ERROR_ACCESS_DENIED);
 
-    ret = w_get_file_permissions("C:\\a\\path", permissions, OS_SIZE_1024);
+    ret = w_get_file_permissions("C:\\a\\path", &permissions);
 
     assert_int_equal(ret, ERROR_ACCESS_DENIED);
+    assert_null(permissions);
 }
 
 void test_w_get_file_permissions_no_dacl(void **state) {
-    char permissions[OS_SIZE_1024];
+    cJSON *permissions = NULL;
     int ret;
     SECURITY_DESCRIPTOR sec_desc;
 
@@ -3161,19 +3829,22 @@ void test_w_get_file_permissions_no_dacl(void **state) {
     expect_string(wrap_GetFileSecurity, lpFileName, "C:\\a\\path");
     will_return(wrap_GetFileSecurity, &sec_desc);
     will_return(wrap_GetFileSecurity, 1);
+
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
 
     will_return(wrap_GetSecurityDescriptorDacl, FALSE);
     will_return(wrap_GetSecurityDescriptorDacl, 1);
 
-    expect_string(__wrap__mdebug1, formatted_msg, "'C:\\a\\path' has no DACL, so no permits can be extracted.");
+    expect_string(__wrap__mdebug2, formatted_msg, "No DACL was found (all access is denied), or a NULL DACL (unrestricted access) was found.");
 
-    ret = w_get_file_permissions("C:\\a\\path", permissions, OS_SIZE_1024);
+    ret = w_get_file_permissions("C:\\a\\path", &permissions);
 
-    assert_int_equal(ret, 0);
+    assert_int_equal(ret, -2);
+    assert_null(permissions);
 }
 
 void test_w_get_file_permissions_GetAclInformation_error(void **state) {
-    char permissions[OS_SIZE_1024];
+    cJSON *permissions = NULL;
     int ret;
     SECURITY_DESCRIPTOR sec_desc;
 
@@ -3184,6 +3855,8 @@ void test_w_get_file_permissions_GetAclInformation_error(void **state) {
     expect_string(wrap_GetFileSecurity, lpFileName, "C:\\a\\path");
     will_return(wrap_GetFileSecurity, &sec_desc);
     will_return(wrap_GetFileSecurity, 1);
+
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
 
     will_return(wrap_GetSecurityDescriptorDacl, TRUE);
     will_return(wrap_GetSecurityDescriptorDacl, (PACL)123456);
@@ -3192,17 +3865,18 @@ void test_w_get_file_permissions_GetAclInformation_error(void **state) {
     will_return(wrap_GetAclInformation, NULL);
     will_return(wrap_GetAclInformation, 0);
 
-    expect_string(__wrap__mdebug1, formatted_msg, "No information could be obtained from the ACL.");
-
     will_return(wrap_GetLastError, ERROR_ACCESS_DENIED);
 
-    ret = w_get_file_permissions("C:\\a\\path", permissions, OS_SIZE_1024);
+    expect_string(__wrap__mdebug2, formatted_msg, "GetAclInformation failed. GetLastError returned: 5");
+
+    ret = w_get_file_permissions("C:\\a\\path", &permissions);
 
     assert_int_equal(ret, ERROR_ACCESS_DENIED);
+    assert_null(permissions);
 }
 
 void test_w_get_file_permissions_GetAce_error(void **state) {
-    char permissions[OS_SIZE_1024];
+    cJSON *permissions = NULL;
     int ret;
     SECURITY_DESCRIPTOR sec_desc;
     ACL_SIZE_INFORMATION acl_size = { .AceCount = 1 };
@@ -3215,6 +3889,8 @@ void test_w_get_file_permissions_GetAce_error(void **state) {
     will_return(wrap_GetFileSecurity, &sec_desc);
     will_return(wrap_GetFileSecurity, 1);
 
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
+
     will_return(wrap_GetSecurityDescriptorDacl, TRUE);
     will_return(wrap_GetSecurityDescriptorDacl, (PACL)123456);
     will_return(wrap_GetSecurityDescriptorDacl, 1);
@@ -3225,16 +3901,18 @@ void test_w_get_file_permissions_GetAce_error(void **state) {
     will_return(wrap_GetAce, NULL);
     will_return(wrap_GetAce, 0);
 
-    expect_string(__wrap__mdebug1, formatted_msg, "ACE number 0 could not be obtained.");
+    will_return(wrap_GetLastError, ERROR_ACCESS_DENIED);
+    expect_string(__wrap__mdebug2, formatted_msg, "GetAce failed. GetLastError returned: 5");
 
-    ret = w_get_file_permissions("C:\\a\\path", permissions, OS_SIZE_1024);
+    ret = w_get_file_permissions("C:\\a\\path", &permissions);
 
-    assert_int_equal(ret, -2);
-    assert_string_equal(permissions, "");
+    assert_int_equal(ret, 0);
+    assert_non_null(permissions);
+    cJSON_Delete(permissions);
 }
 
 void test_w_get_file_permissions_success(void **state) {
-    char permissions[OS_SIZE_1024];
+    cJSON *permissions = NULL;
     int ret;
     SECURITY_DESCRIPTOR sec_desc;
     ACL_SIZE_INFORMATION acl_size = {
@@ -3252,6 +3930,8 @@ void test_w_get_file_permissions_success(void **state) {
     will_return(wrap_GetFileSecurity, &sec_desc);
     will_return(wrap_GetFileSecurity, 1);
 
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
+
     will_return(wrap_GetSecurityDescriptorDacl, TRUE);
     will_return(wrap_GetSecurityDescriptorDacl, (PACL)123456);
     will_return(wrap_GetSecurityDescriptorDacl, 1);
@@ -3262,7 +3942,7 @@ void test_w_get_file_permissions_success(void **state) {
     will_return(wrap_GetAce, &ace);
     will_return(wrap_GetAce, 1);
 
-    // Inside copy_ace_info
+    // Inside process_ace_info
     {
         will_return(wrap_IsValidSid, 1);
 
@@ -3274,16 +3954,31 @@ void test_w_get_file_permissions_success(void **state) {
         will_return(wrap_LookupAccountSid, "accountName");
         will_return(wrap_LookupAccountSid, "domainName");
         will_return(wrap_LookupAccountSid, 1);
+
+        expect_ConvertSidToStringSid_call(BASE_WIN_SID, TRUE);
     }
 
-    ret = w_get_file_permissions("C:\\a\\path", permissions, OS_SIZE_1024);
+    // Inside add_ace_to_json
+    {
+        will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
+    }
+
+    ret = w_get_file_permissions("C:\\a\\path", &permissions);
 
     assert_int_equal(ret, 0);
-    assert_string_equal(permissions, "|accountName,0,0");
+    assert_non_null(permissions);
+
+    cJSON *ace_json = cJSON_GetObjectItem(permissions, BASE_WIN_SID);
+    assert_non_null(ace_json);
+    assert_string_equal(cJSON_GetStringValue(cJSON_GetObjectItem(ace_json, "name")), "accountName");
+    assert_int_equal(cJSON_GetObjectItem(ace_json, "allowed")->valueint, 0);
+    assert_null(cJSON_GetObjectItem(ace_json, "denied"));
+
+    cJSON_Delete(permissions);
 }
 
-void test_w_get_file_permissions_copy_ace_info_error(void **state) {
-    char permissions[OS_SIZE_1024];
+void test_w_get_file_permissions_process_ace_info_error(void **state) {
+    cJSON *permissions = NULL;
     int ret;
     SECURITY_DESCRIPTOR sec_desc;
     ACL_SIZE_INFORMATION acl_size = {
@@ -3301,6 +3996,8 @@ void test_w_get_file_permissions_copy_ace_info_error(void **state) {
     will_return(wrap_GetFileSecurity, &sec_desc);
     will_return(wrap_GetFileSecurity, 1);
 
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
+
     will_return(wrap_GetSecurityDescriptorDacl, TRUE);
     will_return(wrap_GetSecurityDescriptorDacl, (PACL)123456);
     will_return(wrap_GetSecurityDescriptorDacl, 1);
@@ -3311,16 +4008,16 @@ void test_w_get_file_permissions_copy_ace_info_error(void **state) {
     will_return(wrap_GetAce, &ace);
     will_return(wrap_GetAce, 1);
 
-    // Inside copy_ace_info
+    // Inside process_ace_info
     expect_string(__wrap__mdebug2, formatted_msg, "Invalid ACE type.");
 
     expect_string(__wrap__mdebug1, formatted_msg,
-        "The parameters of ACE number 0 from 'C:\\a\\path' could not be extracted. 1024 bytes remaining.");
+        "ACE number 0 could not be processed.");
 
-    ret = w_get_file_permissions("C:\\a\\path", permissions, OS_SIZE_1024);
+    ret = w_get_file_permissions("C:\\a\\path", &permissions);
 
     assert_int_equal(ret, 0);
-    assert_string_equal(permissions, "");
+    assert_non_null(permissions);
 }
 
 void test_w_get_file_attrs_error(void **state) {
@@ -3412,11 +4109,12 @@ void test_get_registry_group_GetSecurityInfo_fails(void **state) {
     char error_msg[OS_SIZE_1024];
 
     expect_GetSecurityInfo_call(NULL, (PSID)"", ERROR_ACCESS_DENIED);
-    expect_GetLastError_call(ERROR_ACCESS_DENIED);
+    expect_ConvertSidToStringSid_call("", TRUE);
+    will_return(__wrap_win_strerror, "Access denied.");
 
     snprintf(error_msg,
              OS_SIZE_1024,
-             "GetSecurityInfo error = %lu",
+             "GetSecurityInfo error code = (%lu), 'Access denied.'",
              ERROR_ACCESS_DENIED);
 
     expect_string(__wrap__merror, formatted_msg, error_msg);
@@ -3459,8 +4157,8 @@ void test_get_registry_group_LookupAccountSid_fails(void **state) {
 
     expect_LookupAccountSid_call("", "domainname", FALSE);
     expect_GetLastError_call(ERROR_ACCESS_DENIED);
-
-    expect_string(__wrap__merror, formatted_msg, "Error in LookupAccountSid.");
+    expect_FormatMessage_call("Access is denied.");
+    expect_string(__wrap__mwarn, formatted_msg, "(6950): Error in LookupAccountSid getting group. (5): Access is denied.");
 
     group = get_registry_group(&group_id, hndl);
 
@@ -3510,61 +4208,64 @@ void test_get_registry_group_success(void **state) {
 void test_get_registry_permissions_RegGetKeySecurity_insufficient_buffer(void **state) {
     HKEY hndl = (HKEY)123456;
     unsigned int retval = 0;
-    char permissions[OS_SIZE_6144 + 1];
+    cJSON *permissions = NULL;
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_ACCESS_DENIED);
-    expect_GetLastError_call(ERROR_ACCESS_DENIED);
 
-    retval = get_registry_permissions(hndl, permissions);
+    retval = get_registry_permissions(hndl, &permissions);
 
     assert_int_equal(retval, ERROR_ACCESS_DENIED);
-    assert_string_equal(permissions, "");
+    assert_null(permissions);
 }
 
 void test_get_registry_permissions_RegGetKeySecurity_fails(void **state) {
     HKEY hndl = (HKEY)123456;
     unsigned int retval = 0;
-    char permissions[OS_SIZE_6144 + 1];
+    cJSON *permissions = NULL;
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_INSUFFICIENT_BUFFER);
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_ACCESS_DENIED);
 
-    retval = get_registry_permissions(hndl, permissions);
+    retval = get_registry_permissions(hndl, &permissions);
 
     assert_int_equal(retval, ERROR_ACCESS_DENIED);
-    assert_string_equal(permissions, "");
+    assert_null(permissions);
 }
 
 void test_get_registry_permissions_GetSecurityDescriptorDacl_fails(void **state) {
     HKEY hndl = (HKEY)123456;
     unsigned int retval = 0;
-    char permissions[OS_SIZE_6144 + 1];
+    cJSON *permissions = NULL;
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_INSUFFICIENT_BUFFER);
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_SUCCESS);
+
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
 
     expect_GetSecurityDescriptorDacl_call(TRUE, (PACL*)0, FALSE);
 
     expect_GetLastError_call(ERROR_SUCCESS);
     expect_string(__wrap__mdebug2, formatted_msg, "GetSecurityDescriptorDacl failed. GetLastError returned: 0");
 
-    retval = get_registry_permissions(hndl, permissions);
+    retval = get_registry_permissions(hndl, &permissions);
 
     assert_int_equal(retval, ERROR_SUCCESS);
-    assert_string_equal(permissions, "");
+    assert_null(permissions);
 }
 
 void test_get_registry_permissions_GetSecurityDescriptorDacl_no_DACL(void **state) {
     HKEY hndl = (HKEY)123456;
     unsigned int retval = 0;
-    char permissions[OS_SIZE_6144 + 1];
+    cJSON *permissions = NULL;
     char error_msg[OS_SIZE_1024];
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_INSUFFICIENT_BUFFER);
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_SUCCESS);
+
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
 
     expect_GetSecurityDescriptorDacl_call(TRUE, (PACL*)0, TRUE);
 
@@ -3575,20 +4276,22 @@ void test_get_registry_permissions_GetSecurityDescriptorDacl_no_DACL(void **stat
 
     expect_string(__wrap__mdebug2, formatted_msg, error_msg);
 
-    retval = get_registry_permissions(hndl, permissions);
+    retval = get_registry_permissions(hndl, &permissions);
 
     assert_int_not_equal(retval, ERROR_SUCCESS);
-    assert_string_equal(permissions, "");
+    assert_null(permissions);
 }
 
 void test_get_registry_permissions_GetAclInformation_fails(void **state) {
     HKEY hndl = (HKEY)123456;
     unsigned int retval = 0;
-    char permissions[OS_SIZE_6144 + 1];
+    cJSON *permissions = NULL;
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_INSUFFICIENT_BUFFER);
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_SUCCESS);
+
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
 
     expect_GetSecurityDescriptorDacl_call(TRUE, (PACL*)4321, TRUE);
 
@@ -3597,21 +4300,23 @@ void test_get_registry_permissions_GetAclInformation_fails(void **state) {
     expect_GetLastError_call(ERROR_SUCCESS);
     expect_string(__wrap__mdebug2, formatted_msg, "GetAclInformation failed. GetLastError returned: 0");
 
-    retval = get_registry_permissions(hndl, permissions);
+    retval = get_registry_permissions(hndl, &permissions);
 
     assert_int_equal(retval, ERROR_SUCCESS);
-    assert_string_equal(permissions, "");
+    assert_null(permissions);
 }
 
 void test_get_registry_permissions_GetAce_fails(void **state) {
     HKEY hndl = (HKEY)123456;
     unsigned int retval = 0;
-    char permissions[OS_SIZE_6144 + 1];
+    cJSON *permissions = NULL;
     ACL_SIZE_INFORMATION acl_size = { .AceCount = 1 };
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_INSUFFICIENT_BUFFER);
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_SUCCESS);
+
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
 
     expect_GetSecurityDescriptorDacl_call(TRUE, (PACL*)4321, TRUE);
 
@@ -3622,16 +4327,16 @@ void test_get_registry_permissions_GetAce_fails(void **state) {
     expect_GetLastError_call(ERROR_SUCCESS);
     expect_string(__wrap__mdebug2, formatted_msg, "GetAce failed. GetLastError returned: 0");
 
-    retval = get_registry_permissions(hndl, permissions);
+    retval = get_registry_permissions(hndl, &permissions);
 
     assert_int_equal(retval, ERROR_SUCCESS);
-    assert_string_equal(permissions, "");
+    assert_non_null(permissions);
 }
 
 void test_get_registry_permissions_success(void **state) {
     HKEY hndl = (HKEY)123456;
     unsigned int retval = 0;
-    char permissions[OS_SIZE_6144 + 1];
+    cJSON *permissions = NULL;
     ACL_SIZE_INFORMATION acl_size = { .AceCount = 1 };
     ACCESS_ALLOWED_ACE ace = {
         .Header.AceType = ACCESS_ALLOWED_ACE_TYPE,
@@ -3641,13 +4346,15 @@ void test_get_registry_permissions_success(void **state) {
 
     expect_RegGetKeySecurity_call((LPDWORD)120, ERROR_SUCCESS);
 
+    will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
+
     expect_GetSecurityDescriptorDacl_call(TRUE, (PACL*)4321, TRUE);
 
     expect_GetAclInformation_call(&acl_size, TRUE);
 
     expect_GetAce_call((LPVOID*)&ace, TRUE);
 
-    // Inside copy_ace_info
+    // Inside process_ace_info
     {
         will_return(wrap_IsValidSid, 1);
 
@@ -3659,12 +4366,24 @@ void test_get_registry_permissions_success(void **state) {
         will_return(wrap_LookupAccountSid, "accountName");
         will_return(wrap_LookupAccountSid, "domainName");
         will_return(wrap_LookupAccountSid, 1);
+
+        expect_ConvertSidToStringSid_call(BASE_WIN_SID, TRUE);
+
+        will_return(__wrap_cJSON_CreateObject, __real_cJSON_CreateObject());
     }
 
-    retval = get_registry_permissions(hndl, permissions);
+    retval = get_registry_permissions(hndl, &permissions);
 
     assert_int_equal(retval, ERROR_SUCCESS);
-    assert_string_equal(permissions, "|accountName,0,0");
+    assert_non_null(permissions);
+
+    cJSON *ace_json = cJSON_GetObjectItem(permissions, BASE_WIN_SID);
+    assert_non_null(ace_json);
+    assert_string_equal(cJSON_GetStringValue(cJSON_GetObjectItem(ace_json, "name")), "accountName");
+    assert_int_equal(cJSON_GetObjectItem(ace_json, "allowed")->valueint, 0);
+    assert_null(cJSON_GetObjectItem(ace_json, "denied"));
+
+    cJSON_Delete(permissions);
 }
 
 void test_get_registry_mtime_RegQueryInfoKeyA_fails(void **state) {
@@ -3691,6 +4410,206 @@ void test_get_registry_mtime_success(void **state) {
     retval = get_registry_mtime(hndl);
 
     assert_int_not_equal(retval, 0);
+}
+
+void test_get_subkey(void **state)
+{
+    char* test_vector_path[4] = {
+        "HKEY_SOMETHING\\*\\A",
+        "HKEY_SOMETHING\\A\\B\\*",
+        "HKEY_SOMETHING\\A?",
+        "HKEY_SOMETHING\\A\\B\\C?"
+    };
+
+    char* expected_subkey[4] = {
+        "",
+        "A\\B",
+        "",
+        "A\\B"
+    };
+
+    for (int scenario = 0; scenario < 4; scenario++) {
+        char* result_function = get_subkey(test_vector_path[scenario]);
+        assert_string_equal(result_function, expected_subkey[scenario]);
+    }
+}
+
+void test_w_is_still_a_wildcard(void **state) {
+    int ret;
+    reg_path_struct** test_reg;
+    int has_wildcard_vec[4] = {0, 1, 1, 0};
+    int checked_vec[4] = {0, 1, 0, 1};
+    int expected_result[4] = {0, 0, 1, 0};
+
+    test_reg    = (reg_path_struct**)calloc(2, sizeof(reg_path_struct*));
+    test_reg[0] = (reg_path_struct*)calloc(1, sizeof(reg_path_struct));
+    test_reg[1] = NULL;
+
+    for(int scenario = 0; scenario < 4; scenario++) {
+        test_reg[0]->has_wildcard = has_wildcard_vec[scenario];
+        test_reg[0]->checked = checked_vec[scenario];
+        ret = w_is_still_a_wildcard(test_reg);
+        assert_int_equal(expected_result[scenario], ret);
+    }
+
+    os_free(test_reg[0]);
+    os_free(test_reg);
+}
+
+void test_w_list_all_keys_subkey_notnull(void** state) {
+    HKEY root_key = HKEY_LOCAL_MACHINE;
+    HKEY keyhandle;
+    FILETIME last_write_time = { 0, 1000 };
+
+    char* subkey = "HARDWARE";
+    char* result[4] = {
+        "ACPI",
+        "DESCRIPTION",
+        "DEVICEMAP",
+        "RESOURCEMAP"
+    };
+
+    expect_RegOpenKeyEx_call(root_key, subkey, 0, KEY_READ | KEY_WOW64_64KEY, NULL, ERROR_SUCCESS);
+    expect_RegQueryInfoKey_call(4, 0, &last_write_time, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("ACPI", 5, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("DESCRIPTION", 12, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("DEVICEMAP", 10, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("RESOURCEMAP", 12, ERROR_SUCCESS);
+
+    char** query_result = w_list_all_keys(root_key, subkey);
+
+    for (int idx = 0; idx < 4; idx++) {
+        assert_string_equal(query_result[idx], result[idx]);
+        os_free(query_result[idx]);
+    }
+}
+
+void test_w_list_all_keys_subkey_null(void** state) {
+    HKEY root_key = HKEY_LOCAL_MACHINE;
+    HKEY keyhandle;
+    FILETIME last_write_time = { 0, 1000 };
+
+    char* subkey = "";
+    char* result[6] = {
+        "BCD00000000",
+        "HARDWARE",
+        "SAM",
+        "SECURITY",
+        "SOFTWARE",
+        "SYSTEM",
+    };
+
+    expect_RegOpenKeyEx_call(root_key, subkey, 0, KEY_READ | KEY_WOW64_64KEY, NULL, ERROR_SUCCESS);
+    expect_RegQueryInfoKey_call(6, 0, &last_write_time, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("BCD00000000", 12, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("HARDWARE", 9, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SAM", 4, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SECURITY", 9, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SOFTWARE", 9, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SYSTEM", 7, ERROR_SUCCESS);
+
+    char** query_result = w_list_all_keys(root_key, subkey);
+
+    for (int idx = 0; idx < 6; idx++) {
+        assert_string_equal(query_result[idx], result[idx]);
+        os_free(query_result[idx]);
+    }
+}
+
+void test_w_switch_root_key(void** state) {
+    char* root_key_valid_lm = "HKEY_LOCAL_MACHINE";
+    char* root_key_valid_cr = "HKEY_CLASSES_ROOT";
+    char* root_key_valid_cc = "HKEY_CURRENT_CONFIG";
+    char* root_key_valid_us = "HKEY_USERS";
+    char* root_key_valid_cu = "HKEY_CURRENT_USER";
+
+    char* root_key_invalid  = "HKEY_SOMETHING";
+
+    expect_any_always(__wrap__mdebug1, formatted_msg);
+
+    HKEY ret;
+
+    ret = w_switch_root_key(root_key_valid_lm);
+    assert_int_equal(ret, HKEY_LOCAL_MACHINE);
+
+    ret = w_switch_root_key(root_key_valid_cr);
+    assert_int_equal(ret, HKEY_CLASSES_ROOT);
+
+    ret = w_switch_root_key(root_key_valid_cc);
+    assert_int_equal(ret, HKEY_CURRENT_CONFIG);
+
+    ret = w_switch_root_key(root_key_valid_us);
+    assert_int_equal(ret, HKEY_USERS);
+
+    ret = w_switch_root_key(root_key_valid_cu);
+    assert_int_equal(ret, HKEY_CURRENT_USER);
+
+    ret = w_switch_root_key(root_key_invalid);
+    assert_null(ret);
+}
+
+void test_expand_wildcard_registers_star_only(void **state){
+    char* entry     = "HKEY_LOCAL_MACHINE\\*";
+    char** paths    = NULL;
+    os_calloc(OS_SIZE_1024, sizeof(char*), paths);
+    char* subkey    = "";
+    HKEY root_key   = HKEY_LOCAL_MACHINE;
+
+    char* result[6] = {
+        "HKEY_LOCAL_MACHINE\\BCD00000000",
+        "HKEY_LOCAL_MACHINE\\HARDWARE",
+        "HKEY_LOCAL_MACHINE\\SAM",
+        "HKEY_LOCAL_MACHINE\\SECURITY",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE",
+        "HKEY_LOCAL_MACHINE\\SYSTEM",
+    };
+
+    HKEY keyhandle;
+    FILETIME last_write_time = { 0, 1000 };
+
+    expect_RegOpenKeyEx_call(root_key, subkey, 0, KEY_READ | KEY_WOW64_64KEY, NULL, ERROR_SUCCESS);
+    expect_RegQueryInfoKey_call(6, 0, &last_write_time, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("BCD00000000", 12, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("HARDWARE", 9, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SAM", 4, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SECURITY", 9, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SOFTWARE", 9, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SYSTEM", 7, ERROR_SUCCESS);
+
+    expand_wildcard_registers(entry, paths);
+
+    int i = 0;
+    while(*paths != NULL){
+        assert_string_equal(*paths, result[i]);
+        os_free(*paths);
+        paths++;
+        i++;
+    }
+}
+
+void test_expand_wildcard_registers_invalid_path(void **state){
+    char* entry     = "HKEY_LOCAL_MACHINE\\????";
+    char** paths    = NULL;
+    os_calloc(OS_SIZE_1024, sizeof(char*), paths);
+    char* subkey    = "";
+    HKEY root_key   = HKEY_LOCAL_MACHINE;
+
+    FILETIME last_write_time = { 0, 1000 };
+
+    expect_RegOpenKeyEx_call(root_key, subkey, 0, KEY_READ | KEY_WOW64_64KEY, NULL, ERROR_SUCCESS);
+    expect_RegQueryInfoKey_call(6, 0, &last_write_time, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("BCD00000000", 12, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("HARDWARE", 9, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SAM", 4, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SECURITY", 9, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SOFTWARE", 9, ERROR_SUCCESS);
+    expect_RegEnumKeyEx_call("SYSTEM", 7, ERROR_SUCCESS);
+
+    expand_wildcard_registers(entry, paths);
+
+    assert_null(*paths);
+    os_free(paths);
+
 }
 
 #endif
@@ -3818,6 +4737,16 @@ int main(int argc, char *argv[]) {
         cmocka_unit_test(test_decode_win_attributes_no_attributes),
         cmocka_unit_test(test_decode_win_attributes_some_attributes),
 
+        /* decode_win_acl_json */
+        cmocka_unit_test(test_decode_win_acl_json_null_json),
+        cmocka_unit_test_teardown(test_decode_win_acl_fail_creating_object, teardown_cjson),
+        cmocka_unit_test_teardown(test_decode_win_acl_json_allowed_ace_only, teardown_cjson),
+        cmocka_unit_test_teardown(test_decode_win_acl_json_denied_ace_only, teardown_cjson),
+        cmocka_unit_test_teardown(test_decode_win_acl_json_both_ace_types, teardown_cjson),
+        cmocka_unit_test_teardown(test_decode_win_acl_json_empty_acl, teardown_cjson),
+        cmocka_unit_test_teardown(test_decode_win_acl_json_empty_ace, teardown_cjson),
+        cmocka_unit_test_teardown(test_decode_win_acl_json_multiple_aces, teardown_cjson),
+
         /* decode_win_permissions tests */
         cmocka_unit_test_teardown(test_decode_win_permissions_success_all_permissions, teardown_string),
         cmocka_unit_test_teardown(test_decode_win_permissions_success_no_permissions, teardown_string),
@@ -3827,6 +4756,23 @@ int main(int argc, char *argv[]) {
         cmocka_unit_test_teardown(test_decode_win_permissions_fail_no_access_type, teardown_string),
         cmocka_unit_test_teardown(test_decode_win_permissions_fail_wrong_format, teardown_string),
         cmocka_unit_test_teardown(test_decode_win_permissions_overrun_inner_buffer, teardown_string),
+
+        /* compare_win_permissions */
+        cmocka_unit_test(test_compare_win_permissions_equal_acls),
+        cmocka_unit_test(test_compare_win_permissions_null_acl1),
+        cmocka_unit_test(test_compare_win_permissions_null_acl2),
+        cmocka_unit_test(test_compare_win_permissions_both_acls_null),
+        cmocka_unit_test(test_compare_win_permissions_acl1_larger_than_acl2),
+        cmocka_unit_test(test_compare_win_permissions_acl2_larger_than_acl1),
+        cmocka_unit_test(test_compare_win_permissions_different_entries),
+        cmocka_unit_test(test_compare_win_permissions_no_allowed_ace),
+        cmocka_unit_test(test_compare_win_permissions_no_allowed_ace1),
+        cmocka_unit_test(test_compare_win_permissions_no_allowed_ace2),
+        cmocka_unit_test(test_compare_win_permissions_no_denied_ace),
+        cmocka_unit_test(test_compare_win_permissions_no_denied_ace1),
+        cmocka_unit_test(test_compare_win_permissions_no_denied_ace2),
+        cmocka_unit_test(test_compare_win_permissions_different_allowed_ace),
+        cmocka_unit_test(test_compare_win_permissions_different_denied_ace),
 
         /* attrs_to_json tests */
         cmocka_unit_test_teardown(test_attrs_to_json_single_attribute, teardown_cjson),
@@ -3841,6 +4787,8 @@ int main(int argc, char *argv[]) {
         cmocka_unit_test_teardown(test_win_perm_to_json_empty_permissions, teardown_cjson),
         cmocka_unit_test_teardown(test_win_perm_to_json_allowed_denied_permissions, teardown_cjson),
         cmocka_unit_test_teardown(test_win_perm_to_json_multiple_accounts, teardown_cjson),
+        cmocka_unit_test_teardown(test_win_perm_to_json_malformed_permission_1, teardown_cjson),
+        cmocka_unit_test_teardown(test_win_perm_to_json_malformed_permission_2, teardown_cjson),
         cmocka_unit_test_teardown(test_win_perm_to_json_fragmented_acl, teardown_cjson),
         cmocka_unit_test_teardown(test_win_perm_to_json_null_input, teardown_cjson),
         cmocka_unit_test_teardown(test_win_perm_to_json_unable_to_create_main_array, teardown_cjson),
@@ -3865,22 +4813,16 @@ int main(int argc, char *argv[]) {
         cmocka_unit_test_setup_teardown(test_w_get_account_info_LookupAccountSid_error_second_call, setup_string_array, teardown_string_array),
         cmocka_unit_test_setup_teardown(test_w_get_account_info_success, setup_string_array, teardown_string_array),
 
-        /* copy_ace_info tests */
-        cmocka_unit_test(test_copy_ace_info_invalid_ace),
-        cmocka_unit_test(test_copy_ace_info_invalid_sid),
-        cmocka_unit_test(test_copy_ace_info_no_information_from_account_or_sid),
-        cmocka_unit_test(test_copy_ace_info_success),
-        cmocka_unit_test(test_copy_ace_info_insufficient_size),
-
         /* w_get_file_permissions tests */
         cmocka_unit_test(test_w_get_file_permissions_GetFileSecurity_error_on_size),
         cmocka_unit_test(test_w_get_file_permissions_GetFileSecurity_error),
+        cmocka_unit_test(test_w_get_file_permissions_create_cjson_error),
         cmocka_unit_test(test_w_get_file_permissions_GetSecurityDescriptorDacl_error),
         cmocka_unit_test(test_w_get_file_permissions_no_dacl),
         cmocka_unit_test(test_w_get_file_permissions_GetAclInformation_error),
         cmocka_unit_test(test_w_get_file_permissions_GetAce_error),
         cmocka_unit_test(test_w_get_file_permissions_success),
-        cmocka_unit_test(test_w_get_file_permissions_copy_ace_info_error),
+        cmocka_unit_test(test_w_get_file_permissions_process_ace_info_error),
 
         /* w_get_file_attrs tests */
         cmocka_unit_test(test_w_get_file_attrs_error),
@@ -3912,6 +4854,15 @@ int main(int argc, char *argv[]) {
         /* get_registry_mtime tests */
         cmocka_unit_test(test_get_registry_mtime_RegQueryInfoKeyA_fails),
         cmocka_unit_test(test_get_registry_mtime_success),
+
+        /* expand_wildcard_register */
+        cmocka_unit_test(test_get_subkey),
+        cmocka_unit_test(test_w_is_still_a_wildcard),
+        cmocka_unit_test(test_w_list_all_keys_subkey_notnull),
+        cmocka_unit_test(test_w_list_all_keys_subkey_null),
+        cmocka_unit_test(test_w_switch_root_key),
+        cmocka_unit_test(test_expand_wildcard_registers_star_only),
+        cmocka_unit_test(test_expand_wildcard_registers_invalid_path),
 #endif
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

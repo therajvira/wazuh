@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
 
@@ -26,12 +26,17 @@ class Status(Enum):
     S_ALL = 'all'
 
 
-def add_detail(detail, value, details):
+def add_detail(detail: str, value: str, details: dict):
     """Add a rule detail (i.e. category, noalert, etc.).
 
-    :param detail: Detail name.
-    :param value: Detail value.
-    :param details: Details dict.
+    Parameters
+    ----------
+    detail : str
+        Detail name.
+    value : str
+        Detail value.
+    details : dict
+        Details dict.
     """
     if detail in details:
         # If it was an element, we create a list.
@@ -44,7 +49,24 @@ def add_detail(detail, value, details):
         details[detail] = value
 
 
-def check_status(status):
+def check_status(status: str) -> str:
+    """Check status is a value of the Status enumeration.
+
+    Parameters
+    ----------
+    status: str
+        Status to check.
+
+    Raises
+    ------
+    WazuhError(1202)
+        If the status is not one of the enumeration.
+
+    Returns
+    -------
+    str
+        Status.
+    """
     if status is None:
         return Status.S_ALL.value
     elif status in [Status.S_ALL.value, Status.S_ENABLED.value, Status.S_DISABLED.value]:
@@ -53,7 +75,18 @@ def check_status(status):
         raise WazuhError(1202)
 
 
-def set_groups(groups, general_groups, rule):
+def set_groups(groups: list, general_groups: list, rule: dict):
+    """Add specific and general groups to a specific rule.
+
+    Parameters
+    ----------
+    groups : list
+        Groups to add to the rule.
+    general_groups : list
+        General groups to add to the rule.
+    rule : dict
+        Rule to be updated.
+    """
     groups.extend(general_groups)
     for g in groups:
         for req in RULE_REQUIREMENTS:
@@ -66,10 +99,40 @@ def set_groups(groups, general_groups, rule):
             rule['groups'].append(g) if g != '' else None
 
 
-def load_rules_from_file(rule_filename, rule_relative_path, rule_status):
+def load_rules_from_file(rule_filename: str, rule_relative_path: str, rule_status: str) -> list:
+    """Load rules given its file name.
+
+    Parameters
+    ----------
+    rule_filename : str
+        Name of the rule file.
+    rule_relative_path : str
+        Relative path to the rule file.
+    rule_status : str
+        Rule status.
+
+    Raises
+    ------
+    WazuhError(1201)
+        Error reading rule files.
+    WazuhError(1207)
+        Error reading rule files, wrong permissions.
+
+    Returns
+    -------
+    list
+        List of rules.
+    """
     try:
         rules = list()
-        root = load_wazuh_xml(os.path.join(common.wazuh_path, rule_relative_path, rule_filename))
+        root = load_wazuh_xml(os.path.join(common.WAZUH_PATH, rule_relative_path, rule_filename))
+
+        # Get variables in dict format {varname: value} (will only be used for id and level for now)
+        variables = {}
+        for vari in root.findall('var'):
+            name = "$" + vari.attrib.get('name')
+            value = vari.text
+            variables[name] = value
 
         for xml_group in list(root):
             if xml_group.tag.lower() == "group":
@@ -78,10 +141,15 @@ def load_rules_from_file(rule_filename, rule_relative_path, rule_status):
                     # New rule
                     if xml_rule.tag.lower() == "rule":
                         groups = list()
+
+                        # Replace values of id and level if variables exist
+                        id_value = int(variables.get(xml_rule.attrib['id'], xml_rule.attrib['id']))
+                        level_value = int(variables.get(xml_rule.attrib['level'], xml_rule.attrib['level']))
+
                         rule = {'filename': rule_filename, 'relative_dirname': rule_relative_path,
-                                'id': int(xml_rule.attrib['id']), 'level': int(xml_rule.attrib['level']),
-                                'status': rule_status, 'details': dict(), 'pci_dss': list(), 'gpg13': list(),
-                                'gdpr': list(), 'hipaa': list(), 'nist_800_53': list(), 'tsc': list(), 'mitre': list(),
+                                'id': id_value, 'level': level_value, 'status': rule_status,
+                                'details': dict(), 'pci_dss': list(), 'gpg13': list(), 'gdpr': list(),
+                                'hipaa': list(), 'nist_800_53': list(), 'tsc': list(), 'mitre': list(),
                                 'groups': list(), 'description': ''}
                         for k in xml_rule.attrib:
                             if k != 'id' and k != 'level':
@@ -145,7 +213,7 @@ def _remove_files(tmp_data, parameters):
 def item_format(data, all_items, exclude_filenames):
     for item in glob(all_items):
         item_name = os.path.basename(item)
-        item_dir = os.path.relpath(os.path.dirname(item), start=common.wazuh_path)
+        item_dir = os.path.relpath(os.path.dirname(item), start=common.WAZUH_PATH)
         item_status = Status.S_DISABLED.value if item_name in exclude_filenames else Status.S_ENABLED.value
         data.append({'filename': item_name, 'relative_dirname': item_dir, 'status': item_status})
 
@@ -153,7 +221,7 @@ def item_format(data, all_items, exclude_filenames):
 def _create_rule_decoder_dir_dict(ruleset_conf, tag, exclude_filenames, data):
     items = ruleset_conf[tag] if type(ruleset_conf[tag]) is list else [ruleset_conf[tag]]
     for item_dir in items:
-        all_rules = f"{common.wazuh_path}/{item_dir}/*.xml"
+        all_rules = f"{common.WAZUH_PATH}/{item_dir}/*.xml"
         item_format(data, all_rules, exclude_filenames)
 
 
@@ -164,7 +232,7 @@ def _create_dict(ruleset_conf, tag, exclude_filenames, data):
     for item in items:
         item_name = os.path.basename(item)
         full_dir = os.path.dirname(item)
-        item_dir = os.path.relpath(full_dir if full_dir else common.ruleset_rules_path, start=common.wazuh_path)
+        item_dir = os.path.relpath(full_dir if full_dir else common.RULES_PATH, start=common.WAZUH_PATH)
         exclude_filenames.append(item_name) if tag == 'rule_exclude' or tag == 'decoder_exclude' else \
             data.append({'filename': item_name, 'relative_dirname': item_dir, 'status': item_status})
 

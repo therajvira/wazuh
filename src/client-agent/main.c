@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -142,17 +142,22 @@ int main(int argc, char **argv)
 
     /* Read config */
     if (ClientConf(cfg) < 0) {
-        merror_exit(CLIENT_ERROR);
+        mlerror_exit(LOGLEVEL_ERROR, CLIENT_ERROR);
     }
 
     if (!(agt->server && agt->server[0].rip)) {
         merror(AG_INV_IP);
-        merror_exit(CLIENT_ERROR);
+        mlerror_exit(LOGLEVEL_ERROR, CLIENT_ERROR);
     }
 
     if (!Validate_Address(agt->server)){
         merror(AG_INV_MNGIP, agt->server[0].rip);
-        merror_exit(CLIENT_ERROR);
+        mlerror_exit(LOGLEVEL_ERROR, CLIENT_ERROR);
+    }
+
+    if (!Validate_IPv6_Link_Local_Interface(agt->server)){
+        merror(AG_INV_INT);
+        mlerror_exit(LOGLEVEL_ERROR, CLIENT_ERROR);
     }
 
     if (agt->notify_time == 0) {

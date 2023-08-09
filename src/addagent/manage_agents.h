@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -8,9 +8,16 @@
  * Foundation.
  */
 
+#ifndef MANAGE_AGENTS_H
+#define MANAGE_AGENTS_H
+
 #include "shared.h"
 #include "sec.h"
-#include "external/cJSON/cJSON.h"
+#include <cJSON.h>
+
+#ifndef ARGV0
+#define ARGV0 "manage_agents"
+#endif
 
 /** Prototypes **/
 
@@ -40,14 +47,11 @@ int OS_IsValidID(const char *id);
 int IDExist(const char *id, int discard_removed);
 int NameExist(const char *u_name);
 char *IPExist(const char *u_ip);
-char *getFullnameById(const char *id);
+char *getNameById(const char *id);
 int OS_AddNewAgent(keystore *keys, const char *id, const char *name, const char *ip, const char *key);
 int OS_RemoveAgent(const char *id);
-double OS_AgentAntiquity(const char *name, const char *ip);
-double OS_AgentAntiquity_ID(const char *id);
 void OS_AddAgentTimestamp(const char *id, const char *name, const char *ip, time_t now);
 void OS_RemoveAgentTimestamp(const char *id);
-void OS_RemoveAgentGroup(const char *id);
 void FormatID(char *id);
 
 /* Print available agents */
@@ -126,7 +130,6 @@ extern char shost[];
                         "the key (or '\\q' to quit): "
 #define EXTRACT_MSG     "\nAgent key information for '%s' is: \n%s\n"
 
-
 /* Common errors */
 #define ERROR_KEYS      "Unable to handle keys file. Exiting.\n"
 #define EXTRACT_ERROR   "Unable to extract agent key.\n"
@@ -148,3 +151,5 @@ extern char shost[];
 #define BANNER_CLIENT   "   (I)mport key from the server (I).\n" \
                         "   (Q)uit.\n" \
                         "Choose your action: I or Q: "
+
+#endif

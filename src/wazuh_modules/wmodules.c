@@ -1,6 +1,6 @@
 /*
  * Wazuh Module Manager
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * April 27, 2016.
  *
  * This program is free software; you can redistribute it
@@ -13,9 +13,11 @@
 #include "os_crypto/md5/md5_op.h"
 #include "os_crypto/sha1/sha1_op.h"
 #include "os_crypto/sha256/sha256_op.h"
+#include <sys/types.h>
 
 wmodule *wmodules = NULL;   // Config: linked list of all modules.
 int wm_task_nice = 0;       // Nice value for tasks.
+static gid_t wm_gid;               // Group ID.
 int wm_max_eps;             // Maximum events per second sent by OpenScap and CIS-CAT Wazuh Module
 int wm_kill_timeout;        // Time for a process to quit before killing it
 int wm_debug_level;
@@ -44,6 +46,16 @@ static const void *default_modules[] = {
 static int wm_initialize_default_modules(wmodule **wmodules);
 
 // Read XML configuration and internal options
+
+gid_t wm_getGroupID(void)
+{
+    return wm_gid;
+}
+
+void wm_setGroupID(const gid_t gid)
+{
+    wm_gid = gid;
+}
 
 int wm_config() {
 
@@ -296,19 +308,76 @@ cJSON *getModulesConfig(void) {
 int modulesSync(char* args) {
     int ret = -1;
     wmodule *cur_module = NULL;
-    for (cur_module = wmodules; cur_module; cur_module = cur_module->next) {
-        if (strstr(args, cur_module->context->name)) {
-            ret = 0;
-            if (strstr(args, "dbsync") && cur_module->context->sync != NULL) {
-                ret = cur_module->context->sync(args);
+    int retry = 0;
+
+    do {
+        if (retry > 0) {
+            usleep(retry * WM_MAX_WAIT);
+            mdebug1("WModules is not ready. Retry %d", retry);
+        }
+
+        for (cur_module = wmodules; cur_module; cur_module = cur_module->next) {
+            if (strstr(args, cur_module->context->name)) {
+                ret = 0;
+                if (strstr(args, "dbsync") && cur_module->context->sync != NULL) {
+                    ret = cur_module->context->sync(args);
+                }
+                break;
             }
+        }
+
+        ++retry;
+
+        if (retry > WM_MAX_ATTEMPTS) {
             break;
         }
-    }
+    } while (ret != 0);
+
     if (ret) {
-        merror("At modulesSync(): Unable to sync module: (%d)", ret);
+        merror("At modulesSync(): Unable to sync module '%s': (%d)", cur_module ? cur_module->tag : "",  ret);
     }
     return ret;
+}
+
+// Find a module
+
+wmodule * wm_find_module(const char * name) {
+    for (wmodule * module = wmodules; module != NULL; module = module->next) {
+        if (strcmp(module->context->name, name) == 0) {
+            return module;
+        }
+    }
+
+    return NULL;
+}
+
+// Run a query in a module
+
+size_t wm_module_query(char * query, char ** output) {
+    // vulnerability-detector run_now
+
+    char * module_name = query;
+    char * args = strchr(query, ' ');
+
+    if (args == NULL) {
+        os_strdup("err {\"error\":1,\"message\":\"Module query needs arguments\"}", *output);
+        return strlen(*output);
+    }
+
+    *args++ = '\0';
+
+    wmodule * module = wm_find_module(module_name);
+    if (module == NULL) {
+        os_strdup("err {\"error\":2,\"message\":\"Module not found or not configured\"}", *output);
+        return strlen(*output);
+    }
+
+    if (module->context->query == NULL) {
+        os_strdup("err {\"error\":3,\"message\":\"This module does not support queries\"}", *output);
+        return strlen(*output);
+    }
+
+    return module->context->query(module->data, args, output);
 }
 
 cJSON *getModulesInternalOptions(void) {
@@ -338,6 +407,25 @@ int wm_sendmsg(int usec, int queue, const char *message, const char *locmsg, cha
 #endif
 
     if (SendMSG(queue, message, locmsg, loc) < 0) {
+        merror("At wm_sendmsg(): Unable to send message to queue: (%s)", strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
+// Send message to a queue waiting for a specific delay
+int wm_sendmsg_ex(int usec, int queue, const char *message, const char *locmsg, char loc, bool (*fn_prd)()) {
+
+#ifdef WIN32
+    int msec = usec / 1000;
+    Sleep(msec);
+#else
+    struct timeval timeout = {0, usec};
+    select(0, NULL, NULL, NULL, &timeout);
+#endif
+
+    if (SendMSGPredicated(queue, message, locmsg, loc, fn_prd) < 0) {
         merror("At wm_sendmsg(): Unable to send message to queue: (%s)", strerror(errno));
         return -1;
     }

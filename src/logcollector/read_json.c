@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021 Wazuh Inc.
+/* Copyright (C) 2015 Wazuh Inc.
  * All right reserved.
  *
  * This program is free software; you can redistribute it
@@ -95,6 +95,12 @@ void *read_json(logreader *lf, int *rc, int drop_it) {
             continue;
         }
 #endif
+
+        /* Check ignore and restrict log regex, if configured. */
+        if (check_ignore_and_restrict(lf->regex_ignore, lf->regex_restrict, str)) {
+            continue;
+        }
+
         const char *jsonErrPtr;
         if (obj = cJSON_ParseWithOpts(str, &jsonErrPtr, 0), obj && cJSON_IsObject(obj)) {
           for (i = 0; lf->labels && lf->labels[i].key; i++) {

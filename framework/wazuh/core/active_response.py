@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is free software; you can redistribute it and/or modify it under the terms of GPLv2
 import json
@@ -113,6 +113,8 @@ def send_ar_message(agent_id: str = '', wq: WazuhQueue = None, command: str = ''
     ------
     WazuhError(1707)
         If the agent with ID agent_id is not active.
+    WazuhError(1750)
+        If active response is disabled in the specified agent.
     """
     # Agent basic information
     agent_info = Agent(agent_id).get_basic_information()
@@ -125,7 +127,7 @@ def send_ar_message(agent_id: str = '', wq: WazuhQueue = None, command: str = ''
     agent_version = agent_info['version']
 
     # Check if AR is enabled
-    agent_conf = Agent(agent_id).getconfig('com', 'active-response', agent_version)
+    agent_conf = Agent(agent_id).get_config('com', 'active-response', agent_version)
     if agent_conf['active-response']['disabled'] == 'yes':
         raise WazuhError(1750)
 
@@ -147,7 +149,7 @@ def get_commands() -> list:
         List with the available commands.
     """
     commands = list()
-    with open(common.ar_conf_path) as f:
+    with open(common.AR_CONF) as f:
         for line in f:
             cmd = line.split(" - ")[0]
             commands.append(cmd)

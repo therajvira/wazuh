@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
 
@@ -8,7 +8,7 @@ from wazuh.rbac.decorators import expose_resources
 
 
 @expose_resources(actions=['logtest:run'], resources=['*:*:*'])
-def run_logtest(token=None, event=None, log_format=None, location=None):
+def run_logtest(token: str = None, event: str = None, log_format: str = None, location: str = None) -> dict:
     """Get the logtest output after sending a JSON to its socket.
 
     Parameters
@@ -39,7 +39,7 @@ def run_logtest(token=None, event=None, log_format=None, location=None):
 
     response = send_logtest_msg(command='log_processing', parameters=local_vars)
     if response['error'] != 0:
-        raise WazuhError(code=7000, extra_message=response.get('message', 'Could not parse error message'))
+        raise WazuhError(7000, extra_message=response.get('message', 'Could not parse error message'))
 
     return response
 
@@ -63,6 +63,6 @@ def end_logtest_session(token: str = None):
 
     response = send_logtest_msg(command='remove_session', parameters={'token': token})
     if response['error'] != 0:
-        raise WazuhError(code=7000, extra_message=response.get('message', 'Could not parse error message'))
+        raise WazuhError(7000, extra_message=response.get('message', 'Could not parse error message'))
 
     return response

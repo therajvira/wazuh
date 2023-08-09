@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -9,7 +9,7 @@
 #ifndef ATOMIC_WRAPPERS
 #define ATOMIC_WRAPPERS
 
-#include "headers/atomic.h"
+#include "../../../../headers/atomic.h"
 
 int __wrap_atomic_int_get(atomic_int_t *atomic);
 

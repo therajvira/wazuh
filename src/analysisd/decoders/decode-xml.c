@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -811,8 +811,16 @@ int ReadDecodeXML(const char *file, OSDecoderNode **decoderlist_pn,
         }
 
         /* Add osdecoder to the list */
-        if (!OS_AddOSDecoder(pi, decoderlist_pn, decoderlist_nopn, log_msg)) {
+
+        int r;
+
+        if ((r = OS_AddOSDecoder(pi, decoderlist_pn, decoderlist_nopn, log_msg)) < 1) {
             smerror(log_msg, DECODER_ERROR);
+
+            if (r == -1) {
+                pi = NULL;
+            }
+
             goto cleanup;
         }
 
@@ -877,7 +885,7 @@ char *_loadmemory(char *at, char *str, OSList* log_msg)
         size_t strsize = 0;
         if ((strsize = strlen(str)) < OS_SIZE_1024) {
             os_calloc(strsize + 1, sizeof(char), at);
-            strncpy(at, str, strsize);
+            memcpy(at, str, strsize);
             return (at);
         } else {
             smerror(log_msg, SIZE_ERROR, str);
@@ -893,13 +901,12 @@ char *_loadmemory(char *at, char *str, OSList* log_msg)
             smerror(log_msg, SIZE_ERROR, str);
             return (NULL);
         }
-        at = (char *) realloc(at, (finalsize + 1) * sizeof(char));
+        at = (char *) realloc(at, finalsize * sizeof(char));
         if (at == NULL) {
             merror(MEM_ERROR, errno, strerror(errno));
             return (NULL);
         }
-        strncat(at, str, strsize);
-        at[finalsize - 1] = '\0';
+        strcat(at, str);
 
         return (at);
     }

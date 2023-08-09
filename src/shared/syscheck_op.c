@@ -1,6 +1,6 @@
 /*
  * Shared functions for Syscheck events decoding
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -36,6 +36,17 @@ extern void mock_assert(const int result, const char* const expression,
 #include "unit_tests/wrappers/windows/winreg_wrappers.h"
 
 #endif
+#endif
+
+#ifdef WIN32
+/**
+ * @brief Retrieves the permissions of a specific file (Windows)
+ *
+ * @param [out] ace_json cJSON with the mask to process
+ * @param [in] mask Mask with the permissions
+ * @param [in] ace_type string "allowed" or "denied" depends on ace type
+ */
+static void make_mask_readable (cJSON *ace_json, int mask, char *ace_type);
 #endif
 
 char *escape_syscheck_field(char *field) {
@@ -683,7 +694,6 @@ char *get_file_user(const char *path, char **sid) {
 
 char *get_user(const char *path, char **sid, HANDLE hndl, SE_OBJECT_TYPE object_type) {
     DWORD dwRtnCode = 0;
-    DWORD dwSecurityInfoErrorCode = 0;
     PSID pSidOwner = NULL;
     BOOL bRtnBool = TRUE;
     char AcctName[BUFFER_LEN];
@@ -711,10 +721,6 @@ char *get_user(const char *path, char **sid, HANDLE hndl, SE_OBJECT_TYPE object_
                                 NULL,                       // SACL
                                 &pSD);                      // Security descriptor
 
-    if (dwRtnCode != ERROR_SUCCESS) {
-        dwSecurityInfoErrorCode = GetLastError();
-    }
-
     if (!ConvertSidToStringSid(pSidOwner, &local_sid)) {
         os_strdup("", *sid);
         mdebug1("The user's SID could not be extracted.");
@@ -723,9 +729,8 @@ char *get_user(const char *path, char **sid, HANDLE hndl, SE_OBJECT_TYPE object_
         LocalFree(local_sid);
     }
 
-    // Check GetLastError for GetSecurityInfo error condition.
     if (dwRtnCode != ERROR_SUCCESS) {
-        merror("GetSecurityInfo error = %lu", dwSecurityInfoErrorCode);
+        merror("GetSecurityInfo error code = (%lu), '%s'", dwRtnCode, win_strerror(dwRtnCode));
         *AcctName = '\0';
         goto end;
     }
@@ -749,7 +754,17 @@ char *get_user(const char *path, char **sid, HANDLE hndl, SE_OBJECT_TYPE object_
             mdebug1("Account owner not found for '%s'", path);
         }
         else {
-            merror("Error in LookupAccountSid.");
+            LPSTR messageBuffer = NULL;
+            LPSTR end;
+
+            FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                          NULL, dwErrorCode, 0, (LPTSTR) &messageBuffer, 0, NULL);
+            if (end = strchr(messageBuffer, '\r'), end) {
+                *end = '\0';
+            }
+
+            mwarn(FIM_REGISTRY_ACC_SID, "user", dwErrorCode, messageBuffer);
+            LocalFree(messageBuffer);
         }
 
         *AcctName = '\0';
@@ -765,133 +780,209 @@ end:
     return result;
 }
 
-int w_get_file_permissions(const char *file_path, char *permissions, int perm_size) {
-    int retval = 0;
-    int error;
-    unsigned int i;
-    SECURITY_DESCRIPTOR *s_desc = NULL;
-    ACL *f_acl = NULL;
-    void *f_ace;
-    int has_dacl, default_dacl;
-    unsigned long size = 0;
-    ACL_SIZE_INFORMATION acl_size;
-    char *perm_it = permissions;
 
-    *permissions = '\0';
+/**
+ * @brief Retrieves the permissions of a specific file (Windows)
+ *
+ * @param [out] acl_json cJSON to write the permissions
+ * @param [in] sid The user ID associated to the user
+ * @param [in] account_name The account name associated to the sid
+ * @param [in] ace_type int with 0 if "allowed" ace, 1 if "denied" ace
+ * @param [in] mask Mask with the permissions
+ */
+static void add_ace_to_json(cJSON *acl_json, char *sid, char *account_name, const char *ace_type, int mask) {
+    cJSON *ace_json = NULL;
+    cJSON *mask_json = NULL;
 
-    if (!GetFileSecurity(file_path, DACL_SECURITY_INFORMATION, 0, 0, &size)) {
-        // We must have this error at this point
-        if (error = GetLastError(), error != ERROR_INSUFFICIENT_BUFFER) {
-            return GetLastError();
+    ace_json = cJSON_GetObjectItem(acl_json, sid);
+    if (ace_json == NULL) {
+        ace_json = cJSON_CreateObject();
+        if (ace_json == NULL) {
+            mwarn(FIM_CJSON_ERROR_CREATE_ITEM);
+            return;
         }
+        cJSON_AddStringToObject(ace_json, "name", account_name);
+        cJSON_AddItemToObject(acl_json, sid, ace_json);
     }
 
-    if (os_calloc(size, 1, s_desc), !s_desc) {
-        return GetLastError();
+    mask_json = cJSON_GetObjectItem(ace_json, ace_type);
+    if (mask_json == NULL) {
+        cJSON_AddNumberToObject(ace_json, ace_type, mask);
+        return;
     }
 
-    if (!GetFileSecurity(file_path, DACL_SECURITY_INFORMATION, s_desc, size, &size)) {
-        retval = GetLastError();
-        goto end;
-    }
+    cJSON_SetNumberValue(mask_json, (mask_json->valueint | mask));
 
-    if (!GetSecurityDescriptorDacl(s_desc, &has_dacl, &f_acl, &default_dacl)) {
-        mdebug1("The DACL of the file could not be obtained.");
-        retval = GetLastError();
-        goto end;
-    }
-
-    if (!has_dacl || !f_acl) {
-        mdebug1("'%s' has no DACL, so no permits can be extracted.", file_path);
-        goto end;
-    }
-
-    if (!GetAclInformation(f_acl, &acl_size, sizeof(acl_size), AclSizeInformation)) {
-        mdebug1("No information could be obtained from the ACL.");
-        retval = GetLastError();
-        goto end;
-    }
-
-    for (i = 0; i < acl_size.AceCount; i++) {
-        int written;
-
-        if (!GetAce(f_acl, i, &f_ace)) {
-            mdebug1("ACE number %d could not be obtained.", i);
-            retval = -2;
-            *permissions = '\0';
-            goto end;
-        }
-        written = copy_ace_info(f_ace, perm_it, perm_size);
-        if (written > 0) {
-            perm_it += written;
-            perm_size -= written;
-            if (perm_size > 0) {
-                continue;
-            }
-        }
-        mdebug1("The parameters of ACE number %d from '%s' could not be extracted. %d bytes remaining.", i, file_path, perm_size);
-    }
-
-end:
-    free(s_desc);
-    return retval;
+    return;
 }
 
-int copy_ace_info(void *ace, char *perm, int perm_size) {
+
+/**
+ * @brief Retrieves the permissions of a specific file (Windows)
+ *
+ * @param [in] ace ACE structure
+ * @param [out] acl_json cJSON to write the permissions
+ * @return 0 on success, the error code on failure, -2 if ACE could not be obtained
+ */
+static int process_ace_info(void *ace, cJSON *acl_json) {
     SID *sid;
     char *sid_str = NULL;
     char *account_name = NULL;
     char *domain_name = NULL;
     int mask;
     int ace_type;
-    int written = 0;
     int error;
 
-	if (((ACCESS_ALLOWED_ACE *)ace)->Header.AceType == ACCESS_ALLOWED_ACE_TYPE) {
-		ACCESS_ALLOWED_ACE *allowed_ace = (ACCESS_ALLOWED_ACE *)ace;
-		sid = (SID *)&allowed_ace->SidStart;
-		mask = allowed_ace->Mask;
-		ace_type = 0;
-	} else if (((ACCESS_DENIED_ACE *)ace)->Header.AceType == ACCESS_DENIED_ACE_TYPE) {
-		ACCESS_DENIED_ACE *denied_ace = (ACCESS_DENIED_ACE *)ace;
-		sid = (SID *)&denied_ace->SidStart;
-		mask = denied_ace->Mask;
-		ace_type = 1;
-	} else {
+    if (((ACCESS_ALLOWED_ACE *)ace)->Header.AceType == ACCESS_ALLOWED_ACE_TYPE) {
+        ACCESS_ALLOWED_ACE *allowed_ace = (ACCESS_ALLOWED_ACE *)ace;
+        sid = (SID *)&allowed_ace->SidStart;
+        mask = allowed_ace->Mask;
+        ace_type = 0;
+    } else if (((ACCESS_DENIED_ACE *)ace)->Header.AceType == ACCESS_DENIED_ACE_TYPE) {
+        ACCESS_DENIED_ACE *denied_ace = (ACCESS_DENIED_ACE *)ace;
+        sid = (SID *)&denied_ace->SidStart;
+        mask = denied_ace->Mask;
+        ace_type = 1;
+    } else {
         mdebug2("Invalid ACE type.");
-        return 0;
+        return 1;
     }
-
 
     if (!IsValidSid(sid)) {
         mdebug2("Invalid SID found in ACE.");
-		return 0;
-	}
-
+        return 1;
+    }
 
     if (error = w_get_account_info(sid, &account_name, &domain_name), error) {
         mdebug2("No information could be extracted from the account linked to the SID. Error: %d.", error);
-        if (!ConvertSidToStringSid(sid, &sid_str)) {
-            mdebug2("Could not extract the SID.");
+    }
+
+    if (!ConvertSidToStringSid(sid, &sid_str)) {
+        mdebug2("Could not extract the SID.");
+        os_free(account_name);
+        os_free(domain_name);
+        return 1;
+    }
+
+    add_ace_to_json(acl_json, sid_str, account_name, ace_type ? "denied" : "allowed", mask);
+
+    LocalFree(sid_str);
+    os_free(account_name);
+    os_free(domain_name);
+
+    return 0;
+}
+
+/**
+ * @brief Translates an ACL permissions to JSON.
+ *
+ * @param [in] pSecurityDescriptor A security descriptor to be translated.
+ * @param [out] acl_json A pointer to a cJSON object where information will be stored.
+ * @retval 0 on success.
+ * @retval -1 if the cJSON object could not be initialized.
+ * @retval -2 if no DACL is retrieved.
+ * @retval An error code retrieved from `GetLastError` otherwise.
+ */
+static int get_win_permissions(PSECURITY_DESCRIPTOR pSecurityDescriptor, cJSON **output_acl) {
+    ACL_SIZE_INFORMATION aclsizeinfo;
+    ACCESS_ALLOWED_ACE *pAce = NULL;
+    PACL pDacl = NULL;
+    BOOL fDaclPresent = FALSE;
+    BOOL fDaclDefaulted = TRUE;
+    BOOL bRtnBool = TRUE;
+    DWORD dwErrorCode = 0;
+    DWORD cAce;
+    cJSON *acl_json = cJSON_CreateObject();
+
+    if (acl_json == NULL) {
+        mwarn(FIM_CJSON_ERROR_CREATE_ITEM);
+        return -1;
+    }
+
+    // Retrieve a pointer to the DACL in the security descriptor.
+    bRtnBool = GetSecurityDescriptorDacl(pSecurityDescriptor,   // Structure that contains the DACL
+                                         &fDaclPresent,         // Indicates the presence of a DACL
+                                         &pDacl,                // Pointer to ACL
+                                         &fDaclDefaulted);      // Flag set to the value of the SE_DACL_DEFAULTED flag
+
+    if (bRtnBool == FALSE) {
+        dwErrorCode = GetLastError();
+        mdebug2("GetSecurityDescriptorDacl failed. GetLastError returned: %ld", dwErrorCode);
+
+        cJSON_Delete(acl_json);
+        return dwErrorCode;
+    }
+
+    // Check whether no DACL or a NULL DACL was retrieved from the security descriptor buffer.
+    if (fDaclPresent == FALSE || pDacl == NULL) {
+        mdebug2("No DACL was found (all access is denied), or a NULL DACL (unrestricted access) was found.");
+
+        cJSON_Delete(acl_json);
+        return -2;
+    }
+
+    // Retrieve the ACL_SIZE_INFORMATION structure to find the number of ACEs in the DACL.
+    bRtnBool = GetAclInformation(pDacl,                 // Pointer to an ACL
+                                 &aclsizeinfo,          // Pointer to a buffer to receive the requested information
+                                 sizeof(aclsizeinfo),   // The size, in bytes, of the buffer
+                                 AclSizeInformation);   // Fill the buffer with an ACL_SIZE_INFORMATION structure
+
+    if (bRtnBool == FALSE) {
+        dwErrorCode = GetLastError();
+        mdebug2("GetAclInformation failed. GetLastError returned: %ld", dwErrorCode);
+
+        cJSON_Delete(acl_json);
+        return dwErrorCode;
+    }
+
+    // Loop through the ACEs to get the information.
+    for (cAce = 0; cAce < aclsizeinfo.AceCount; cAce++) {
+        // Get ACE info
+        if (GetAce(pDacl, cAce, (LPVOID*)&pAce) == FALSE) {
+            mdebug2("GetAce failed. GetLastError returned: %ld", GetLastError());
+            continue;
+        }
+        if (process_ace_info(pAce, acl_json)) {
+            mdebug1("ACE number %lu could not be processed.", cAce);
+        }
+    }
+
+    *output_acl = acl_json;
+
+    return 0;
+}
+
+
+int w_get_file_permissions(const char *file_path, cJSON **output_acl) {
+    int retval = 0;
+    SECURITY_DESCRIPTOR *s_desc = NULL;
+    unsigned long size = 0;
+
+    if (!GetFileSecurity(file_path, DACL_SECURITY_INFORMATION, 0, 0, &size)) {
+        retval = GetLastError();
+
+        // We must have this error at this point
+        if (retval != ERROR_INSUFFICIENT_BUFFER) {
             goto end;
         }
     }
 
-    written = snprintf(NULL, 0, "|%s,%d,%d", sid_str ? sid_str : account_name, ace_type, mask);
+    os_calloc(size, 1, s_desc);
 
-    if (written > 0 && written + 1 < perm_size) {
-        written = snprintf(perm, perm_size, "|%s,%d,%d", sid_str ? sid_str : account_name, ace_type, mask);
-    } else {
-        written = 0;
+    if (!GetFileSecurity(file_path, DACL_SECURITY_INFORMATION, s_desc, size, &size)) {
+        retval = GetLastError();
+        goto end;
+    }
+
+    retval = get_win_permissions(s_desc, output_acl);
+
+    if (retval != 0) {
+        goto end;
     }
 
 end:
-    if (sid_str) {
-        LocalFree(sid_str);
-    }
-    free(account_name);
-    free(domain_name);
-    return written;
+    free(s_desc);
+    return retval;
 }
 
 int w_get_account_info(SID *sid, char **account_name, char **account_domain) {
@@ -911,8 +1002,6 @@ int w_get_account_info(SID *sid, char **account_name, char **account_domain) {
     os_calloc(a_domain_size, sizeof(char), *account_domain);
 
     if (error = LookupAccountSid(0, sid, *account_name, &a_name_size, *account_domain, &a_domain_size, &snu), !error) {
-        os_free(*account_name);
-        os_free(*account_domain);
         return GetLastError();
     }
 
@@ -948,7 +1037,6 @@ char *get_group(__attribute__((unused)) int gid) {
 
 char *get_registry_group(char **sid, HANDLE hndl) {
     DWORD dwRtnCode = 0;
-    DWORD dwSecurityInfoErrorCode = 0;
     PSID pSidGroup = NULL;
     BOOL bRtnBool = TRUE;
     char GrpName[BUFFER_LEN];
@@ -970,20 +1058,18 @@ char *get_registry_group(char **sid, HANDLE hndl) {
                                 NULL,                       // SACL
                                 &pSD);                      // Security descriptor
 
-    if (dwRtnCode != ERROR_SUCCESS) {
-        dwSecurityInfoErrorCode = GetLastError();
-        merror("GetSecurityInfo error = %lu", dwSecurityInfoErrorCode);
-        *GrpName = '\0';
-        os_strdup("", *sid);
-        goto end;
-    }
-
     if (!ConvertSidToStringSid(pSidGroup, &local_sid)) {
         os_strdup("", *sid);
         mdebug1("The user's SID could not be extracted.");
     } else {
         os_strdup(local_sid, *sid);
         LocalFree(local_sid);
+    }
+
+    if (dwRtnCode != ERROR_SUCCESS) {
+        merror("GetSecurityInfo error code = (%lu), '%s'", dwRtnCode, win_strerror(dwRtnCode));
+        *GrpName = '\0';
+        goto end;
     }
 
     // Second call to LookupAccountSid to get the account name.
@@ -1004,12 +1090,21 @@ char *get_registry_group(char **sid, HANDLE hndl) {
         DWORD dwErrorCode = 0;
 
         dwErrorCode = GetLastError();
-
         if (dwErrorCode == ERROR_NONE_MAPPED) {
             mdebug1("Group not found for registry key");
         }
         else {
-            merror("Error in LookupAccountSid.");
+            LPSTR messageBuffer = NULL;
+            LPSTR end;
+
+            FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                          NULL, dwErrorCode, 0, (LPTSTR) &messageBuffer, 0, NULL);
+            if (end = strchr(messageBuffer, '\r'), end) {
+                *end = '\0';
+            }
+
+            mwarn(FIM_REGISTRY_ACC_SID, "group", dwErrorCode, messageBuffer);
+            LocalFree(messageBuffer);
         }
 
         *GrpName = '\0';
@@ -1025,34 +1120,22 @@ end:
     return result;
 }
 
-DWORD get_registry_permissions(HKEY hndl, char *perm_key) {
+DWORD get_registry_permissions(HKEY hndl, cJSON **output_acl) {
     PSECURITY_DESCRIPTOR pSecurityDescriptor;
-    ACL_SIZE_INFORMATION aclsizeinfo;
-    ACCESS_ALLOWED_ACE *pAce = NULL;
-    PACL pDacl = NULL;
-    DWORD cAce;
     DWORD dwRtnCode = 0;
-    DWORD dwErrorCode = 0;
     DWORD lpcbSecurityDescriptor = 0;
-    BOOL bRtnBool = TRUE;
-    BOOL fDaclPresent = FALSE;
-    BOOL fDaclDefaulted = TRUE;
-    int written;
-    int perm_size = OS_SIZE_6144;
-    char *permissions = perm_key;
 
-    if (RegGetKeySecurity(hndl, DACL_SECURITY_INFORMATION, NULL, &lpcbSecurityDescriptor) !=
-        ERROR_INSUFFICIENT_BUFFER) {
+    dwRtnCode = RegGetKeySecurity(hndl, DACL_SECURITY_INFORMATION, NULL, &lpcbSecurityDescriptor);
 
-        dwErrorCode = GetLastError();
-        return dwErrorCode;
+    if (dwRtnCode != ERROR_INSUFFICIENT_BUFFER) {
+        return dwRtnCode;
     }
 
     os_calloc(lpcbSecurityDescriptor, 1, pSecurityDescriptor);
 
     // Get the security information.
     dwRtnCode = RegGetKeySecurity(hndl,                         // Handle to an open key
-                                  DACL_SECURITY_INFORMATION,    // Requeste DACL security information
+                                  DACL_SECURITY_INFORMATION,    // Request DACL security information
                                   pSecurityDescriptor,          // Pointer that receives the DACL information
                                   &lpcbSecurityDescriptor);     // Pointer that specifies the size, in bytes
 
@@ -1061,57 +1144,11 @@ DWORD get_registry_permissions(HKEY hndl, char *perm_key) {
         return dwRtnCode;
     }
 
-    // Retrieve a pointer to the DACL in the security descriptor.
-    bRtnBool = GetSecurityDescriptorDacl(pSecurityDescriptor,   // Structure that contains the DACL
-                                         &fDaclPresent,         // Indicates the presence of a DACL
-                                         &pDacl,                // Pointer to ACL
-                                         &fDaclDefaulted);      // Flag set to the value of the SE_DACL_DEFAULTED flag
+    dwRtnCode = get_win_permissions(pSecurityDescriptor, output_acl);
 
-    if (bRtnBool == FALSE) {
-        dwErrorCode = GetLastError();
-        mdebug2("GetSecurityDescriptorDacl failed. GetLastError returned: %ld", dwErrorCode);
+    if (dwRtnCode != 0) {
         os_free(pSecurityDescriptor);
-        return dwErrorCode;
-    }
-
-    // Check whether no DACL or a NULL DACL was retrieved from the security descriptor buffer.
-    if (fDaclPresent == FALSE || pDacl == NULL) {
-        mdebug2("No DACL was found (all access is denied), or a NULL DACL (unrestricted access) was found.");
-        os_free(pSecurityDescriptor);
-        return -1;
-    }
-
-    // Retrieve the ACL_SIZE_INFORMATION structure to find the number of ACEs in the DACL.
-    bRtnBool = GetAclInformation(pDacl,                 // Pointer to an ACL
-                                 &aclsizeinfo,          // Pointer to a buffer to receive the requested information
-                                 sizeof(aclsizeinfo),   // The size, in bytes, of the buffer
-                                 AclSizeInformation);   // Fill the buffer with an ACL_SIZE_INFORMATION structure
-
-    if (bRtnBool == FALSE) {
-        dwErrorCode = GetLastError();
-        mdebug2("GetAclInformation failed. GetLastError returned: %ld", dwErrorCode);
-        os_free(pSecurityDescriptor);
-        return dwErrorCode;
-    }
-
-    // Loop through the ACEs to get the information.
-    for (cAce = 0; cAce < aclsizeinfo.AceCount; cAce++) {
-        // Get ACE info
-        if (GetAce(pDacl, cAce, (LPVOID*)&pAce) == FALSE) {
-            mdebug2("GetAce failed. GetLastError returned: %ld", GetLastError());
-            continue;
-        }
-
-        written = copy_ace_info(pAce, permissions, perm_size);
-
-        if (written > 0) {
-            permissions += written;
-            perm_size -= written;
-
-            if (perm_size > 0) {
-                continue;
-            }
-        }
+        return dwRtnCode;
     }
 
     os_free(pSecurityDescriptor);
@@ -1138,6 +1175,357 @@ void ag_send_syscheck(char * message) {
     char * response = NULL;
     syscom_dispatch(message, &response);
     free(response);
+}
+
+HKEY w_switch_root_key(char* str_rootkey) {
+    if (!strcmp(str_rootkey, STR_HKEY_CLASSES_ROOT)) {
+        return HKEY_CLASSES_ROOT;
+    }
+    else if (!strcmp(str_rootkey, STR_HKEY_CURRENT_CONFIG)) {
+        return HKEY_CURRENT_CONFIG;
+    }
+    else if (!strcmp(str_rootkey, STR_HKEY_CURRENT_USER)) {
+        return HKEY_CURRENT_USER;
+    }
+    else if (!strcmp(str_rootkey, STR_HKEY_LOCAL_MACHINE)) {
+        return HKEY_LOCAL_MACHINE;
+    }
+    else if (!strcmp(str_rootkey, STR_HKEY_USERS)) {
+        return HKEY_USERS;
+    }
+    else {
+        mdebug1("Invalid value of root Handle to Registry Key.");
+        return NULL;
+    }
+}
+
+void expand_wildcard_registers(char* entry, char** paths) {
+    reg_path_struct** aux_vector;
+    reg_path_struct** current_position;
+    os_calloc(OS_SIZE_8192, sizeof(reg_path_struct*), aux_vector);
+
+    reg_path_struct* first_e;
+    os_calloc(1, sizeof(reg_path_struct), first_e);
+
+    first_e->path           = strdup(entry);
+    first_e->has_wildcard   = check_wildcard(entry);
+    first_e->checked        = 0;
+    *aux_vector             = first_e;
+    current_position        = aux_vector; //Save the current pointer for future iteration
+
+    // ----- Begin expansion path section -----
+    // New algorithm form proposal
+
+    while (w_is_still_a_wildcard(current_position)) {
+        char* pos_qk = strchr((*current_position)->path, '?');
+        char* pos_sr = strchr((*current_position)->path, '*');
+        if (pos_qk != NULL && pos_sr != NULL) {
+            if (pos_qk < pos_sr) {
+                w_expand_by_wildcard(current_position, '?');
+            } else {
+                w_expand_by_wildcard(current_position, '*');
+            }
+        } else if (pos_sr != NULL) {
+            w_expand_by_wildcard(current_position, '*');
+        } else if (pos_qk != NULL) {
+            w_expand_by_wildcard(current_position, '?');
+        }
+        current_position++;
+    }
+
+    // ----- End expansion path section -----
+
+    current_position = aux_vector;
+    while (*current_position != NULL) {
+        if (!(*current_position)->has_wildcard && (*current_position)->checked) {
+            os_strdup((*current_position)->path, *paths);
+            os_free((*current_position)->path);
+            os_free(*current_position);
+            paths++;
+        } else {
+            os_free((*current_position)->path);
+            os_free(*current_position);
+        }
+        current_position++;
+    }
+
+    //Release memory before leaves function
+    os_free(*current_position);
+    os_free(aux_vector);
+}
+
+char* get_subkey(char* key) {
+    char* remaining_key = NULL;
+    char* subkey        = NULL;
+
+    os_strdup(strchr(key, '\\') + 1, remaining_key);
+    os_calloc(OS_SIZE_128, sizeof(char), subkey);
+
+    char* aux_token;
+
+    aux_token = strtok(remaining_key, "\\");
+    while (aux_token !=NULL && !(strchr(aux_token, '?') || strchr(aux_token, '*'))) {
+        strcat(subkey, aux_token);
+        aux_token = strtok(NULL, "\\");
+        strcat(subkey, "\\");
+    }
+    int path_len = strlen(subkey) - 1;
+    os_free(remaining_key);
+    if (path_len > 0) {
+        if (subkey[path_len] == '\\') {
+            subkey[path_len] = '\0';
+        }
+        return subkey;
+    } else {
+        os_free(subkey);
+        return strdup("");
+    }
+}
+
+int w_is_still_a_wildcard(reg_path_struct **array_struct) {
+    while (*array_struct) {
+        if ((*array_struct)->has_wildcard && !(*array_struct)->checked) {
+            return 1;
+        }
+        array_struct++;
+    }
+    return 0;
+}
+
+char** w_list_all_keys(HKEY root_key, char* str_subkey) {
+    HKEY keyhandle;
+    char** key_list = NULL;
+    if (RegOpenKeyEx(root_key, str_subkey, 0, KEY_READ | KEY_WOW64_64KEY, &keyhandle) == ERROR_SUCCESS) {
+        TCHAR    achKey[OS_SIZE_256];
+        DWORD    cbName;
+        TCHAR    achClass[OS_SIZE_256] = TEXT("");
+        DWORD    cchClassName = OS_SIZE_256;
+        DWORD    cSubKeys = 0;
+        DWORD    cbMaxSubKey;
+        DWORD    cchMaxClass;
+        DWORD    cValues;
+        DWORD    cchMaxValue;
+        DWORD    cbMaxValueData;
+        DWORD    cbSecurityDescriptor;
+        FILETIME ftLastWriteTime;
+
+        DWORD i, retCode;
+
+        // Get the class name and the value count.
+        retCode = RegQueryInfoKey(
+            keyhandle,               // key handle
+            achClass,                // buffer for class name
+            &cchClassName,           // size of class string
+            NULL,                    // reserved
+            &cSubKeys,               // number of subkeys
+            &cbMaxSubKey,            // longest subkey size
+            &cchMaxClass,            // longest class string
+            &cValues,                // number of values for this key
+            &cchMaxValue,            // longest value name
+            &cbMaxValueData,         // longest value data
+            &cbSecurityDescriptor,   // security descriptor
+            &ftLastWriteTime);       // last write time
+
+        if (retCode == ERROR_SUCCESS) {
+            if (cSubKeys) {
+            os_calloc(cSubKeys + 1, sizeof(char*), key_list);
+            for (i = 0; i < cSubKeys; i++) {
+                cbName = OS_SIZE_256;
+                retCode = RegEnumKeyEx(keyhandle, i,
+                    achKey,
+                    &cbName,
+                    NULL,
+                    NULL,
+                    NULL,
+                    &ftLastWriteTime);
+                if (retCode == ERROR_SUCCESS) {
+                    os_strdup(achKey, *(key_list + i));
+                    }
+                }
+                *(key_list + i) = NULL;
+            }
+        }
+    }
+    RegCloseKey(keyhandle);
+    return key_list;
+}
+
+void w_expand_by_wildcard(reg_path_struct **array_struct, char wildcard_chr) {
+    // ----- Begin setup variables section -----
+    char* wildcard_str          = NULL;
+    os_calloc(2, sizeof(char), wildcard_str);
+    wildcard_str[0]             = wildcard_chr;
+    wildcard_str[1]             = '\0';
+
+    char** first_position       = NULL;
+
+    char* matcher               = NULL; //Only used when wildcard is ?.
+
+    //Create a copy of the path to be able to modify it.
+    char* aux_path              = NULL;
+    os_strdup((*array_struct)->path, aux_path);
+
+    //Take the first part of the wildcard, splitting by wildcard. Clean any chars after a slash bar.
+    char* first_part            = strtok(aux_path, wildcard_str);
+    for (int letter = strlen(first_part) - 1; letter >= 0; letter--) {
+        if (first_part[letter] != '\\') {
+            first_part[letter] = '\0';
+        }
+        else {
+            break;
+        }
+    }
+
+    if (wildcard_chr == '?') {
+        //Usar strtok_r
+        char* temp          = NULL;
+        char* aux_matcher   = NULL;
+        os_strdup((*array_struct)->path, temp);
+
+        //Search through all tokens until you find the one that has the wildcard
+        aux_matcher = strtok(temp, "\\");
+        while (!strchr(aux_matcher, '?')) {
+            aux_matcher = strtok(NULL, "\\");
+        }
+        os_strdup(aux_matcher,matcher);
+        os_free(temp);
+    }
+
+    //Take the remainder part of the path.
+    char* second_part       = NULL;
+    if ((*array_struct)->path != NULL) {
+        second_part         = strchr(strchr((*array_struct)->path, wildcard_chr), '\\');
+    }
+
+    //Duplicate key part
+    char* temp = NULL;
+    os_strdup(first_part,temp);
+
+    char* str_root_key          = NULL;
+    //Obtain the subkey. If it's empty, it's a NULL value.
+    char* subkey                = get_subkey((*array_struct)->path);
+
+    os_strdup(strtok(temp, "\\"), str_root_key);
+    os_free(temp);
+
+    HKEY root_key               = w_switch_root_key(str_root_key);
+
+    // ----- End setup variables section -----
+
+    (*array_struct)->checked    = 1; //Mark path as checked.
+
+    //Get first empty position of the vector.
+    int first_empty             = 0;
+    while (array_struct[first_empty] != NULL) {
+        first_empty++;
+    }
+    //----------------------------------------
+
+    //There is two possibles branches to take depending of the wildcard.
+    if (wildcard_chr=='?') {
+        if (root_key != NULL && matcher != NULL) {
+            //Get all keys from Windows API.
+            char** query_keys = w_list_all_keys(root_key, subkey);
+            first_position = query_keys;
+            if (query_keys) {
+                //Itarate over string vector.
+                while (*query_keys != NULL) {
+                    //Use Windows API and check wildcar coincidences.
+                    if (PathMatchSpecA(*query_keys, matcher)) {
+                        // ----- Begin final path variable section -----
+
+                        char* full_path = NULL;
+                        os_calloc(OS_SIZE_256, sizeof(char), full_path);
+
+                        //Copy first part.
+                        strcpy(full_path, first_part);
+
+                        //Add key result.
+                        strcat(full_path, *query_keys);
+
+                        //Copy second part.
+                        second_part != NULL ? strcat(full_path, second_part) : strcat(full_path,"\0");
+
+                        // ----- End final path variable section -----
+
+                        //Create new struct and add it to vector.
+                        reg_path_struct* new_struct = NULL;
+                        os_calloc(1, sizeof(reg_path_struct), new_struct);
+
+                        int path_length             = strlen(full_path);
+                        if(full_path[path_length - 1] == '\\'){
+                            full_path[path_length - 1] = '\0';
+                        }
+
+                        new_struct->path            = full_path;
+                        new_struct->has_wildcard    = (check_wildcard(full_path)) && !(check_wildcard(*query_keys)) ? 1 : 0;
+                        new_struct->checked         = 1 & !new_struct->has_wildcard;
+                        array_struct[first_empty]   = new_struct;
+
+                        //Increment pointers.
+                        first_empty++;
+                    }
+                    //Increment pointers.
+                    query_keys++;
+                    }
+                }
+            //Release memory before leaves function.
+            os_free(matcher);
+        }
+    } else {
+        if (root_key != NULL) {
+            //Get all keys from Windows API.
+            char** query_keys = w_list_all_keys(root_key, subkey);
+            first_position    = query_keys;
+            if (query_keys) {
+                //Itarate over string vector.
+                while (*query_keys != NULL) {
+
+                    // ----- Begin final path variable section -----
+
+                    char* full_path = NULL;
+                    os_calloc(OS_SIZE_256, sizeof(char), full_path);
+
+                    //Copy first part.
+                    strcpy(full_path, first_part);
+
+                    //Add key result.
+                    strcat(full_path, *query_keys);
+
+                    //Copy second part.
+                    second_part != NULL ? strcat(full_path, second_part) : strcat(full_path, "\0");
+
+                    // ----- End final path variable section -----
+
+                    //Create new struct and add it to vector.
+                    reg_path_struct* new_struct = NULL;
+                    os_calloc(1, sizeof(reg_path_struct), new_struct);
+
+                    int path_length             = strlen(full_path);
+                    if(full_path[path_length - 1] == '\\') {
+                        full_path[path_length - 1] = '\0';
+                    }
+
+                    new_struct->path            = full_path;
+                    new_struct->has_wildcard    = (check_wildcard(full_path)) && !(check_wildcard(*query_keys)) ? 1 : 0;
+                    new_struct->checked         = 1 & !new_struct->has_wildcard;
+                    array_struct[first_empty]   = new_struct;
+
+                    //Increment pointers.
+                    first_empty++;
+                    query_keys++;
+                }
+            }
+        }
+    }
+
+    //Release memory after leaves function. Common variables
+    os_free(wildcard_str);
+    os_free(aux_path);
+    os_free(str_root_key);
+    os_free(subkey);
+    free_strarray(first_position);
+    os_free(matcher);
 }
 
 #endif /* # else (ifndef WIN32) */
@@ -1167,6 +1555,84 @@ void decode_win_attributes(char *str, unsigned int attrs) {
                     attrs & FILE_ATTRIBUTE_VIRTUAL ? "VIRTUAL, " : "");
     if (size > 2) {
         str[size - 2] = '\0';
+    }
+}
+
+void make_mask_readable (cJSON *ace_json, int mask, char *ace_type) {
+    int i;
+    int perm_bits[] = {
+        GENERIC_READ,
+        GENERIC_WRITE,
+        GENERIC_EXECUTE,
+        GENERIC_ALL,
+        DELETE,
+        READ_CONTROL,
+        WRITE_DAC,
+        WRITE_OWNER,
+        SYNCHRONIZE,
+        FILE_READ_DATA,
+        FILE_WRITE_DATA,
+        FILE_APPEND_DATA,
+        FILE_READ_EA,
+        FILE_WRITE_EA,
+        FILE_EXECUTE,
+        FILE_READ_ATTRIBUTES,
+        FILE_WRITE_ATTRIBUTES,
+        0
+    };
+
+    static const char * const perm_strings[] = {
+        "generic_read",
+        "generic_write",
+        "generic_execute",
+        "generic_all",
+        "delete",
+        "read_control",
+        "write_dac",
+        "write_owner",
+        "synchronize",
+        "read_data",
+        "write_data",
+        "append_data",
+        "read_ea",
+        "write_ea",
+        "execute",
+        "read_attributes",
+        "write_attributes",
+        NULL
+    };
+
+    cJSON *perm_array = cJSON_CreateArray();
+    if (perm_array == NULL) {
+        mwarn(FIM_CJSON_ERROR_CREATE_ITEM);
+        return;
+    }
+
+    for (i = 0; perm_bits[i]; i++) {
+        if (mask & perm_bits[i]) {
+            cJSON_AddItemToArray(perm_array, cJSON_CreateString(perm_strings[i]));
+        }
+    }
+
+    cJSON_ReplaceItemInObject(ace_json, ace_type, perm_array);
+}
+
+void decode_win_acl_json (cJSON *acl_json) {
+    cJSON *json_object = NULL;
+    cJSON *allowed_item = NULL;
+    cJSON *denied_item = NULL;
+
+    assert(acl_json != NULL);
+
+    cJSON_ArrayForEach(json_object, acl_json) {
+        allowed_item = cJSON_GetObjectItem(json_object, "allowed");
+        if (allowed_item) {
+            make_mask_readable(json_object, allowed_item->valueint, "allowed");
+        }
+        denied_item = cJSON_GetObjectItem(json_object, "denied");
+        if (denied_item) {
+            make_mask_readable(json_object, denied_item->valueint, "denied");
+        }
     }
 }
 
@@ -1291,6 +1757,74 @@ error:
     return NULL;
 }
 
+static bool compare_win_aces(const cJSON * const ace1, const cJSON * const ace2) {
+    cJSON *ace1_helper, *ace2_helper;
+
+    assert(ace1 != NULL && ace2 != NULL);
+
+    ace1_helper = cJSON_GetObjectItem(ace1, "allowed");
+    ace2_helper = cJSON_GetObjectItem(ace2, "allowed");
+
+    if (ace1_helper == NULL) {
+        if (ace2_helper != NULL) {
+            return false;
+        }
+        // Both ace helpers are NULL, we consider them to be equal
+    } else if (ace2_helper == NULL) {
+        return false;
+    } else if (cJSON_Compare(ace1_helper, ace2_helper, true) == false) {
+        return false;
+    }
+
+    ace1_helper = cJSON_GetObjectItem(ace1, "denied");
+    ace2_helper = cJSON_GetObjectItem(ace2, "denied");
+
+    if (ace1_helper == NULL) {
+        if (ace2_helper != NULL) {
+            return false;
+        }
+        // Both ace helpers are NULL, we consider them to be equal
+    } else if (ace2_helper == NULL) {
+        return false;
+    } else if (cJSON_Compare(ace1_helper, ace2_helper, true) == false) {
+        return false;
+    }
+
+    return true;
+}
+
+bool compare_win_permissions(const cJSON * const acl1, const cJSON * const acl2) {
+    cJSON *ace1;
+    cJSON *ace2;
+
+    if (acl1 == NULL) {
+        return acl2 == NULL;
+    }
+
+    if (acl2 == NULL) {
+        return false;
+    }
+
+    if (cJSON_GetArraySize(acl1) != cJSON_GetArraySize(acl2)) {
+        return false;
+    }
+
+    cJSON_ArrayForEach(ace1, acl1) {
+        ace2 = cJSON_GetObjectItem(acl2, ace1->string);
+
+        if (ace2 == NULL) {
+            return false;
+        }
+
+        if (compare_win_aces(ace1, ace2) == false) {
+            return false;
+        }
+    }
+
+    // If we get here, both ACLs are identical
+    return true;
+}
+
 cJSON *attrs_to_json(const char *attributes) {
     cJSON *attrs_array;
 
@@ -1344,7 +1878,8 @@ cJSON *win_perm_to_json(char *perms) {
         char *username = perm_node;
         perm_node = strchr(perm_node, '(');
         if (!perm_node) {
-            goto error;
+            mdebug1("Uncontrolled condition when parsing the username from '%s'. Skipping permission.", username);
+            continue;
         }
         *(perm_node++) = '\0';
         {
@@ -1358,7 +1893,8 @@ cJSON *win_perm_to_json(char *perms) {
         char *perm_type = perm_node;
         perm_node = strchr(perm_node, ')');
         if (!perm_node) {
-            goto error;
+            mdebug1("Uncontrolled condition when parsing the permission type from '%s'. Skipping permission.", perm_type);
+            continue;
         }
         *(perm_node++) = '\0';
 
@@ -1436,6 +1972,12 @@ cJSON *win_perm_to_json(char *perms) {
     }
 
     free(perms_cpy);
+    if(cJSON_GetArraySize(perms_json) == 0)
+    {
+        cJSON_Delete(perms_json);
+        return NULL;
+    }
+
     return perms_json;
 error:
     mdebug1("Uncontrolled condition when parsing a Windows permission from '%s'.", perms);

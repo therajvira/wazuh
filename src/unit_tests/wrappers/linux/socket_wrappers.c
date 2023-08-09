@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -13,6 +13,7 @@
 #include <setjmp.h>
 #include <cmocka.h>
 #include <string.h>
+#include <stdlib.h>
 #include "../common.h"
 
 #define BUFFERSIZE 1024
@@ -47,7 +48,8 @@ int __wrap_connect(__attribute__((unused))int __fd, __attribute__((unused))__CON
     return mock();
 }
 
-int __wrap_accept(__attribute__((unused))int __fd, __attribute__((unused))__SOCKADDR_ARG __addr, __attribute__((unused))socklen_t *__restrict __addr_len) {
+int __wrap_accept(__attribute__((unused))int __fd, struct sockaddr * __addr, __attribute__((unused))socklen_t *__restrict __addr_len) {
+    __addr->sa_family = mock();
     return mock();
 }
 
@@ -55,7 +57,12 @@ ssize_t __wrap_send(__attribute__((unused))int __fd, __attribute__((unused))cons
     return mock();
 }
 
-int __wrap_recv(__attribute__((unused))int __fd, __attribute__((unused))void *__buf, __attribute__((unused))size_t __n, __attribute__((unused))int __flags) {
+ssize_t __wrap_sendto(__attribute__((unused)) int __fd, __attribute__((unused)) const void *__buf, __attribute__((unused)) size_t __n, __attribute__((unused)) int __flags,
+                      __attribute__((unused)) __CONST_SOCKADDR_ARG __addr, __attribute__((unused))socklen_t __len){
+    return mock();
+}
+
+ssize_t __wrap_recv(__attribute__((unused))int __fd, __attribute__((unused))void *__buf, __attribute__((unused))size_t __n, __attribute__((unused))int __flags) {
 
     if(__fd == -1) {
         return mock();
@@ -74,13 +81,16 @@ int __wrap_recv(__attribute__((unused))int __fd, __attribute__((unused))void *__
         char text[BUFFERSIZE];
         strcpy(text, "err --------");
         void *buffertext = &text;
+        // Set the payload buffer size to simulate the cluster message format
+        size_t payload_size = 9;
+        *(uint32_t *)(__buf+4) = wnet_order_big(payload_size);
         memcpy((char*)__buf+8, (char*)buffertext, 12);
     }
 
     return mock();
 }
 
-int __wrap_recvfrom(__attribute__((unused))int __fd, __attribute__((unused))void *__restrict __buf, __attribute__((unused))size_t __n, __attribute__((unused))int __flags, __attribute__((unused))__SOCKADDR_ARG __addr, __attribute__((unused))socklen_t *__restrict __addr_len) {
+ssize_t __wrap_recvfrom(__attribute__((unused))int __fd, __attribute__((unused))void *__restrict __buf, __attribute__((unused))size_t __n, __attribute__((unused))int __flags, __attribute__((unused))__SOCKADDR_ARG __addr, __attribute__((unused))socklen_t *__restrict __addr_len) {
 
     if(__fd != -1) {
         char text[BUFFERSIZE];
@@ -106,6 +116,14 @@ int __wrap_fcntl(int __fd, int __cmd, ...) {
     return mock();
 }
 
-struct hostent *__wrap_gethostbyname(__attribute__((unused))const char *__name) {
-    return mock_type(struct hostent *);
+int __wrap_getaddrinfo(const char *node, __attribute__((unused))const char *service, __attribute__((unused))const struct addrinfo *hints, struct addrinfo **res) {
+    struct addrinfo* addr;
+    check_expected(node);
+
+    addr = mock_type(struct addrinfo*);
+    if (addr != NULL) {
+        *res = calloc(1, sizeof(struct addrinfo));
+        memcpy(*res, addr, sizeof(struct addrinfo));
+    }
+    return mock();
 }

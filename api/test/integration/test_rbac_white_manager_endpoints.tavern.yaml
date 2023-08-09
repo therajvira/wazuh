@@ -1,9 +1,6 @@
 ---
 test_name: GET /manager/configuration
 
-marks:
-  - rbac_tests
-
 stages:
 
   - name: Request manager configuration (Denied)
@@ -87,6 +84,21 @@ stages:
     request:
       verify: False
       url: "{protocol:s}://{host:s}:{port:d}/manager/logs/summary"
+      method: GET
+      headers:
+        Authorization: "Bearer {test_login_token}"
+    response:
+      <<: *permission_denied
+
+---
+test_name: GET /manager/daemons/stats
+
+stages:
+
+  - name: Request daemons statistics (Denied)
+    request:
+      verify: False
+      url: "{protocol:s}://{host:s}:{port:d}/manager/daemons/stats"
       method: GET
       headers:
         Authorization: "Bearer {test_login_token}"

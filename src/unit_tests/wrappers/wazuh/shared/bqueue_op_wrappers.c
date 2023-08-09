@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -24,7 +24,9 @@ int __wrap_bqueue_push(bqueue_t * queue, const void * data, size_t length, unsig
 size_t __wrap_bqueue_peek(bqueue_t * queue, char * buffer, size_t length, unsigned flags) {
     check_expected_ptr(queue);
     check_expected(flags);
-    memcpy(buffer, mock_type(char *), length);
+    if (mock()) {
+        memcpy(buffer, mock_type(char *), length);
+    }
     return mock();
 }
 

@@ -1,29 +1,5 @@
 <group name="qa,test">
 
-<!-- May 27 14:49:04 testUser ow_test[13244]: overwrite and list test -->
-<!-- testing overwrite and list -->
-  <rule id="99900" level="5">
-    <match>overwrite and list test</match>
-    <description>Testing overwrite and list</description>
-  </rule>
-
-  <rule id="99900" level="7" overwrite="yes">
-    <match>overwrite and list test</match>
-    <list field="program_name" lookup="match_key">etc/lists/black_list</list>
-    <description>Successfully</description>
-  </rule>
-
-<!-- testing overwrite and field -->
-  <rule id="99901" level="3">
-    <field name="example">TEST1</field>
-    <description>Testing overwrite and field</description>
-  </rule>
-
-  <rule id="99901" level="6" overwrite="yes">
-    <field name="example">TEST2</field>
-    <description>Successfully</description>
-  </rule>
-
 <!-- Trigger alerts which depend on same_fields . Also it tests if_matched_sid -->
 <!-- Dec 25 20:45:02 MyHost test_same_fields[12345]: User 'admin' logged from '192.168.1.100' 5 this is the same_fields test -->
 <!-- Dec 25 20:45:02 MyHost test_same_fields[12345]: User 'admin' logged from '192.168.1.100' 5 this is the same_fields test -->
@@ -486,6 +462,61 @@
   <decoded_as>test_noalert</decoded_as>
   <field name="noalert">0</field>
   <description>No-alerting disabled.</description>
+</rule>
+
+<!-- Trigger parent rule, do not crash -->
+<!-- Sep  5 13:14:00 User test_wrong_ifsid[12345]:Test -->
+
+<rule id="999275" level="3">
+  <decoded_as>test_wrong_ifsid</decoded_as>
+  <description>Wrong ifsid test.</description>
+</rule>
+
+<rule id="999276" level="3">
+  <if_sid>999275|1</if_sid>
+  <description>Wrong ifsid test.</description>
+</rule>
+
+<!-- Check that no memmory leak appears in nested if_matched_sid -->
+<!-- device="SFW" date=2000-12-01 time=17:19:06 timezone="+01" device_name="XXXX" device_id=1234567 log_id=010101010101 log_type="Firewall" log_component="Firewall Rule" log_subtype="Denied" status="Deny"' -->
+
+<rule id="999280" level="3">
+  <if_sid>70021</if_sid>
+  <field name="device_id">^1234567$</field>
+  <description>Traffic Denied</description>
+  <options>no_full_log</options>
+</rule>
+
+<rule id="999281" level="5" timeframe="3600">
+  <if_matched_sid>999280</if_matched_sid>
+  <description>Traffic Denied (SID level-1)</description>
+</rule>
+
+<rule id="999282" level="7" timeframe="3600">
+  <if_matched_sid>999281</if_matched_sid>
+  <description>Traffic Denied (SID level-2)</description>
+</rule>
+
+<!-- Check that no memmory leak appears in nested if_matched_group -->
+<!-- device="SFW" date=2000-12-01 time=17:19:06 timezone="+01" device_name="XXXX" device_id=12345678 log_id=010101010101 log_type="Firewall" log_component="Firewall Rule" log_subtype="Denied" status="Deny"' -->
+
+<rule id="999283" level="3">
+  <if_sid>70021</if_sid>
+  <field name="device_id">^12345678$</field>
+  <description>Traffic Denied</description>
+  <options>no_full_log</options>
+  <group>test_if_group_1,</group>
+</rule>
+
+<rule id="999284" level="5" timeframe="3600">
+  <if_matched_group>test_if_group_1</if_matched_group>
+  <description>Traffic Denied (group level-1)</description>
+  <group>test_if_group_2,</group>
+</rule>
+
+<rule id="999285" level="7" timeframe="3600">
+  <if_matched_group>test_if_group_2</if_matched_group>
+  <description>Traffic Denied (group level-2)</description>
 </rule>
 
 </group>

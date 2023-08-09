@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -14,8 +14,8 @@
 #include <stdio.h>
 
 #include "wrappers/common.h"
-#include "syscheckd/syscheck.h"
-#include "syscheckd/whodata/syscheck_audit.h"
+#include "../../../syscheckd/include/syscheck.h"
+#include "../../../syscheckd/src/whodata/syscheck_audit.h"
 
 #include "wrappers/externals/procpc/readproc_wrappers.h"
 #include "wrappers/libc/stdio_wrappers.h"
@@ -29,7 +29,7 @@
 #include "wrappers/wazuh/syscheckd/audit_parse_wrappers.h"
 #include "wrappers/wazuh/syscheckd/audit_rule_handling_wrappers.h"
 
-#include "external/procps/readproc.h"
+#include "../../../external/procps/readproc.h"
 
 extern atomic_int_t audit_health_check_creation;
 extern atomic_int_t hc_thread_active;
@@ -125,6 +125,14 @@ static int teardown_syscheck_dir_links(void **state) {
         syscheck.directories = NULL;
     }
 
+    return 0;
+}
+
+static int teardown_rules_to_realtime(void **state) {
+    OSHash_Free(syscheck.realtime->dirtb);
+    free(syscheck.realtime);
+    syscheck.realtime = NULL;
+    teardown_syscheck_dir_links(state);
     return 0;
 }
 
@@ -1483,9 +1491,9 @@ int main(void) {
         cmocka_unit_test_setup_teardown(test_audit_read_events_select_success_recv_success_no_endline, test_audit_read_events_setup, test_audit_read_events_teardown),
         cmocka_unit_test_setup_teardown(test_audit_read_events_select_success_recv_success_no_id, test_audit_read_events_setup, test_audit_read_events_teardown),
         cmocka_unit_test_setup_teardown(test_audit_read_events_select_success_recv_success_too_long, test_audit_read_events_setup, test_audit_read_events_teardown),
-        cmocka_unit_test_setup_teardown(test_audit_rules_to_realtime, setup_syscheck_dir_links, teardown_syscheck_dir_links),
-        cmocka_unit_test_setup_teardown(test_audit_rules_to_realtime_first_search_audit_rule_fail, setup_syscheck_dir_links, teardown_syscheck_dir_links),
-        cmocka_unit_test_setup_teardown(test_audit_rules_to_realtime_second_search_audit_rule_fail, setup_syscheck_dir_links, teardown_syscheck_dir_links),
+        cmocka_unit_test_setup_teardown(test_audit_rules_to_realtime, setup_syscheck_dir_links, teardown_rules_to_realtime),
+        cmocka_unit_test_setup_teardown(test_audit_rules_to_realtime_first_search_audit_rule_fail, setup_syscheck_dir_links, teardown_rules_to_realtime),
+        cmocka_unit_test_setup_teardown(test_audit_rules_to_realtime_second_search_audit_rule_fail, setup_syscheck_dir_links, teardown_rules_to_realtime),
         cmocka_unit_test_setup_teardown(test_audit_create_rules_file, setup_syscheck_dir_links, teardown_syscheck_dir_links),
         cmocka_unit_test_setup_teardown(test_audit_create_rules_file_fopen_fail, setup_syscheck_dir_links, teardown_syscheck_dir_links),
         cmocka_unit_test_setup_teardown(test_audit_create_rules_file_fclose_fail, setup_syscheck_dir_links, teardown_syscheck_dir_links),

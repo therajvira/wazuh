@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -14,9 +14,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "remoted/remoted.h"
-#include "headers/shared.h"
-#include "os_net/os_net.h"
+#include "../../remoted/remoted.h"
+#include "../../headers/shared.h"
+#include "../../os_net/os_net.h"
 
 
 /* Forward declarations */
@@ -79,7 +79,7 @@ int main(void) {
         cmocka_unit_test(test_w_get_pri_header_len_no_pri),
         cmocka_unit_test(test_w_get_pri_header_len_w_pri),
         cmocka_unit_test(test_w_get_pri_header_len_not_end),
- 
+
     };
 
     return cmocka_run_group_tests(tests, group_setup, group_teardown);

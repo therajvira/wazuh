@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -11,7 +11,7 @@
 #ifndef OS_REGEX_WRAPPERS_H
 #define OS_REGEX_WRAPPERS_H
 
-#include "os_regex/os_regex.h"
+#include "../os_regex/os_regex.h"
 
 int __wrap_OSRegex_Compile(const char *pattern, OSRegex *reg, int flags);
 

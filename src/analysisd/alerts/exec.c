@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -21,7 +21,14 @@
 #include "labels.h"
 #include "exec.h"
 
-static const char *get_ip(const Eventinfo *lf);
+#ifdef WAZUH_UNIT_TESTING
+// Remove STATIC qualifier from tests
+#define STATIC
+#else
+#define STATIC static
+#endif
+
+STATIC const char *get_ip(const Eventinfo *lf);
 int conn_error_sent = 0;
 
 void OS_Exec(int *execq, int *arq, int *sock, const Eventinfo *lf, const active_response *ar) {
@@ -70,7 +77,7 @@ void OS_Exec(int *execq, int *arq, int *sock, const Eventinfo *lf, const active_
             goto cleanup;
         }
 
-        getActiveResponseInJSON(lf, ar, ar->ar_cmd->extra_args, exec_msg);
+        getActiveResponseInJSON(lf, ar, ar->ar_cmd->extra_args, exec_msg, false);
         send_exec_msg(execq, EXECQUEUE, exec_msg);
     }
 
@@ -111,7 +118,11 @@ void OS_Exec(int *execq, int *arq, int *sock, const Eventinfo *lf, const active_
                     json_agt_info = wdb_get_agent_info(id_array[i], sock);
                     if (!json_agt_info) {
                         merror("Failed to get agent '%d' information from Wazuh DB.", id_array[i]);
-                        labels_free(agt_labels);
+
+                        if (agt_labels != Config.labels) {
+                            labels_free(agt_labels);
+                        }
+
                         continue;
                     }
 
@@ -121,7 +132,11 @@ void OS_Exec(int *execq, int *arq, int *sock, const Eventinfo *lf, const active_
                         agt_version = json_agt_version->valuestring;
                     } else {
                         mdebug2("Failed to get agent '%d' version.", id_array[i]);
-                        labels_free(agt_labels);
+
+                        if (agt_labels != Config.labels) {
+                            labels_free(agt_labels);
+                        }
+
                         cJSON_Delete(json_agt_info);
                         continue;
                     }
@@ -132,20 +147,29 @@ void OS_Exec(int *execq, int *arq, int *sock, const Eventinfo *lf, const active_
                 strtok_r(agt_version, "v", &save_ptr);
                 char *major = strtok_r(NULL, ".", &save_ptr);
                 char *minor = strtok_r(NULL, ".", &save_ptr);
-                if (!major || !minor) {
+                char *patch = strtok_r(NULL, ".", &save_ptr);
+                if (!major || !minor || !patch) {
                     merror("Unable to read agent version.");
-                    labels_free(agt_labels);
+
+                    if (agt_labels != Config.labels) {
+                        labels_free(agt_labels);
+                    }
+
                     cJSON_Delete(json_agt_info);
                     continue;
                 } else {
                     if (atoi(major) < 4 || (atoi(major) == 4 && atoi(minor) < 2)) {
                         getActiveResponseInString(lf, ar, ip, user, filename, extra_args, msg);
                     } else {
-                        getActiveResponseInJSON(lf, ar, ar->ar_cmd->extra_args, msg);
+                        bool escape = atoi(major) == 4 && atoi(minor) == 2 && atoi(patch) < 5;
+                        getActiveResponseInJSON(lf, ar, ar->ar_cmd->extra_args, msg, escape);
                     }
                 }
 
-                labels_free(agt_labels);
+                if (agt_labels != Config.labels) {
+                    labels_free(agt_labels);
+                }
+
                 cJSON_Delete(json_agt_info);
 
                 get_exec_msg(ar, c_agent_id, msg, exec_msg);
@@ -184,7 +208,11 @@ void OS_Exec(int *execq, int *arq, int *sock, const Eventinfo *lf, const active_
                 json_agt_info = wdb_get_agent_info(agt_id, sock);
                 if (!json_agt_info) {
                     merror("Failed to get agent '%d' information from Wazuh DB.", agt_id);
-                    labels_free(agt_labels);
+
+                    if (agt_labels != Config.labels) {
+                        labels_free(agt_labels);
+                    }
+
                     goto cleanup;
                 }
 
@@ -194,7 +222,11 @@ void OS_Exec(int *execq, int *arq, int *sock, const Eventinfo *lf, const active_
                     agt_version = json_agt_version->valuestring;
                 } else {
                     mdebug2("Failed to get agent '%d' version.", agt_id);
-                    labels_free(agt_labels);
+
+                    if (agt_labels != Config.labels) {
+                        labels_free(agt_labels);
+                    }
+
                     cJSON_Delete(json_agt_info);
                     goto cleanup;
                 }
@@ -205,20 +237,29 @@ void OS_Exec(int *execq, int *arq, int *sock, const Eventinfo *lf, const active_
             strtok_r(agt_version, "v", &save_ptr);
             char *major = strtok_r(NULL, ".", &save_ptr);
             char *minor = strtok_r(NULL, ".", &save_ptr);
-            if (!major || !minor) {
+            char *patch = strtok_r(NULL, ".", &save_ptr);
+            if (!major || !minor || !patch) {
                 merror("Unable to read agent version.");
-                labels_free(agt_labels);
+
+                if (agt_labels != Config.labels) {
+                    labels_free(agt_labels);
+                }
+
                 cJSON_Delete(json_agt_info);
                 goto cleanup;
             } else {
                 if (atoi(major) < 4 || (atoi(major) == 4 && atoi(minor) < 2)) {
                     getActiveResponseInString(lf, ar, ip, user, filename, extra_args, msg);
                 } else {
-                    getActiveResponseInJSON(lf, ar, ar->ar_cmd->extra_args, msg);
+                    bool escape = atoi(major) == 4 && atoi(minor) == 2 && atoi(patch) < 5;
+                    getActiveResponseInJSON(lf, ar, ar->ar_cmd->extra_args, msg, escape);
                 }
             }
 
-            labels_free(agt_labels);
+            if (agt_labels != Config.labels) {
+                labels_free(agt_labels);
+            }
+
             cJSON_Delete(json_agt_info);
 
             get_exec_msg(ar, c_agent_id, msg, exec_msg);
@@ -243,7 +284,7 @@ void OS_Exec(int *execq, int *arq, int *sock, const Eventinfo *lf, const active_
  * @param[in] lf Event information.
  * @return const char* on success or NULL on failure.
  */
-static const char* get_ip(const Eventinfo *lf)
+STATIC const char* get_ip(const Eventinfo *lf)
 {
     const char *ip;
 

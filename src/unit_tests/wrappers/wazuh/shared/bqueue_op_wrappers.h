@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -11,8 +11,8 @@
 #ifndef BQUEUE_OP_WRAPPERS_H
 #define BQUEUE_OP_WRAPPERS_H
 
-#include "headers/shared.h"
-#include "headers/bqueue_op.h"
+#include "../../../../headers/shared.h"
+#include "../../../../headers/bqueue_op.h"
 
 int __wrap_bqueue_push(bqueue_t * queue, const void * data, size_t length, unsigned flags);
 

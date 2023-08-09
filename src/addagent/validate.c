@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -8,9 +8,12 @@
  * Foundation
  */
 
+#include "cJSON.h"
 #include "manage_agents.h"
 #include "os_crypto/md5/md5_op.h"
-#include "os_crypto/sha256/sha256_op.h"
+#include "os_err.h"
+#include "wazuh_db/wdb.h"
+#include <time.h>
 #ifndef CLIENT
 #include "wazuh_db/helpers/wdb_global_helpers.h"
 #include "wazuhdb_op.h"
@@ -39,11 +42,11 @@ int OS_AddNewAgent(keystore *keys, const char *id, const char *name, const char 
     os_md5 md2;
     char str1[STR_SIZE + 1];
     char str2[STR_SIZE + 1];
-    char _id[9] = { '\0' };
+    char _id[12] = { '\0' };
     char buffer[KEYSIZE] = { '\0' };
 
     if (!id) {
-        snprintf(_id, 9, "%03d", ++keys->id_counter);
+        snprintf(_id,sizeof(_id), "%03d", ++keys->id_counter);
         id = _id;
     }
     else {
@@ -72,7 +75,7 @@ int OS_RemoveAgent(const char *u_id) {
     FILE *fp;
     File file;
     int id_exist;
-    char *full_name;
+    char *name;
     long fp_seek;
     size_t fp_read;
     char *buffer;
@@ -151,27 +154,27 @@ int OS_RemoveAgent(const char *u_id) {
 
     fwrite(buffer, sizeof(char), fp_read, file.fp);
     fclose(file.fp);
-    full_name = getFullnameById(u_id);
+    name = getNameById(u_id);
 
     if (OS_MoveFile(file.name, KEYS_FILE) < 0) {
         free(file.name);
         free(buffer);
-        free(full_name);
+        free(name);
         return 0;
     }
 
     free(file.name);
     free(buffer);
 
-    if (full_name) {
-        delete_agentinfo(u_id, full_name);
-        free(full_name);
+    if (name) {
+        delete_diff(name);
+        free(name);
     }
 
     // Remove DB from wazuh-db
     int sock = -1;
     int error;
-    snprintf(wdbquery, OS_SIZE_128, "agent %s remove", u_id);
+    snprintf(wdbquery, OS_SIZE_128, "wazuhdb remove %s", u_id);
     os_calloc(OS_SIZE_6144, sizeof(char), wdboutput);
     if (error = wdbc_query_ex(&sock, wdbquery, wdboutput, OS_SIZE_6144), !error) {
         mdebug1("DB from agent %s was deleted '%s'", u_id, wdboutput);
@@ -190,12 +193,10 @@ int OS_RemoveAgent(const char *u_id) {
     /* Remove counter for ID */
     OS_RemoveCounter(u_id);
     OS_RemoveAgentTimestamp(u_id);
-    OS_RemoveAgentGroup(u_id);
     return 1;
 }
 
 #endif
-
 
 int OS_IsValidID(const char *id)
 {
@@ -223,8 +224,8 @@ int OS_IsValidID(const char *id)
     return (1);
 }
 
-/* Get full agent name (name + IP) of ID */
-char *getFullnameById(const char *id)
+/* Get agent name of ID */
+char *getNameById(const char *id)
 {
     FILE *fp;
     char line_read[FILE_SIZE + 1];
@@ -242,7 +243,6 @@ char *getFullnameById(const char *id)
 
     while (fgets(line_read, FILE_SIZE - 1, fp) != NULL) {
         char *name;
-        char *ip;
         char *tmp_str;
 
         if (line_read[0] == '#') {
@@ -264,28 +264,18 @@ char *getFullnameById(const char *id)
                 continue;
             }
 
-            ip = strchr(name, ' ');
-            if (ip) {
-                *ip = '\0';
-                ip++;
+            /* Clean up name */
+            tmp_str = strchr(name, ' ');
+            if (tmp_str) {
+                char *final_str;
+                *tmp_str = '\0';
 
-                /* Clean up IP */
-                tmp_str = strchr(ip, ' ');
-                if (tmp_str) {
-                    char *final_str;
-                    *tmp_str = '\0';
-                    tmp_str = strchr(ip, '/');
-                    if (tmp_str) {
-                        *tmp_str = '\0';
-                    }
+                /* If we reached here, we found the name */
+                os_calloc(1, FILE_SIZE, final_str);
+                snprintf(final_str, FILE_SIZE - 1, "%s", name);
 
-                    /* If we reached here, we found the IP and name */
-                    os_calloc(1, FILE_SIZE, final_str);
-                    snprintf(final_str, FILE_SIZE - 1, "%s-%s", name, ip);
-
-                    fclose(fp);
-                    return (final_str);
-                }
+                fclose(fp);
+                return (final_str);
             }
         }
     }
@@ -486,45 +476,6 @@ char *IPExist(const char *u_ip)
     return NULL;
 }
 
-#ifndef CLIENT
-
-double OS_AgentAntiquity_ID(const char *id) {
-    char *name = getFullnameById(id);
-    char *ip;
-    double ret = -1;
-
-    if (!name) {
-        return -1;
-    }
-
-    if ((ip = strchr(name, '-'))) {
-        *(ip++) = 0;
-        ret = OS_AgentAntiquity(name, ip);
-    }
-
-    free(name);
-    return ret;
-}
-
-/**
- * @brief Returns the number of seconds since last agent connection
- *
- * @param name The name of the agent
- * @param ip The IP address of the agent (unused). Kept only for compatibility
- * @retval On success, it returns the difference between the current time and the last keepalive
- * @retval -1 On error: invalid DB query syntax or result
- */
-double OS_AgentAntiquity(const char *name, const char *ip){
-    time_t output = 0;
-
-    output = wdb_get_agent_keepalive(name, ip, NULL);
-
-    return output == OS_INVALID ? OS_INVALID : difftime(time(NULL), output);
-}
-
- /* !CLIENT */
- #endif
-
 /* Print available agents */
 int print_agents(int print_status, int active_only, int inactive_only, int csv_output, cJSON *json_output)
 {
@@ -712,37 +663,6 @@ void OS_RemoveAgentTimestamp(const char *id)
     fclose(file.fp);
     OS_MoveFile(file.name, TIMESTAMP_FILE);
     free(file.name);
-}
-
-void OS_RemoveAgentGroup(const char *id)
-{
-    char group_file[OS_FLSIZE + 1];
-    snprintf(group_file, OS_FLSIZE, "%s/%s", GROUPS_DIR, id);
-
-    FILE *fp;
-    char group[OS_SIZE_65536 + 1] = {0};
-    fp = fopen(group_file,"r");
-
-    if(!fp){
-        mdebug1("At OS_RemoveAgentGroup(): Could not open file '%s'",group_file);
-    } else {
-        if(fgets(group, OS_SIZE_65536, fp)!=NULL ) {
-            fclose(fp);
-            fp = NULL;
-            unlink(group_file);
-
-            char *endl = strchr(group, '\n');
-
-            if (endl) {
-                *endl = '\0';
-            }
-
-        }
-
-        if(fp){
-            fclose(fp);
-        }
-    }
 }
 
 void FormatID(char *id) {

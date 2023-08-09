@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
 
@@ -12,13 +12,16 @@ from api.configuration import default_security_configuration
 from api.encoder import dumps, prettify
 from api.models.base_model_ import Body
 from api.models.configuration_model import SecurityConfigurationModel
-from api.models.security_model import CreateUserModel, UpdateUserModel, RoleModel, PolicyModel, RuleModel
+from api.models.security_model import (CreateUserModel, PolicyModel, RoleModel,
+                                       RuleModel, UpdateUserModel)
 from api.models.security_token_response_model import TokenResponseModel
-from api.util import remove_nones_to_dict, raise_if_exc, parse_api_param
+from api.util import (deprecate_endpoint, parse_api_param, raise_if_exc,
+                      remove_nones_to_dict)
 from wazuh import security
 from wazuh.core.cluster.control import get_system_nodes
 from wazuh.core.cluster.dapi.dapi import DistributedAPI
-from wazuh.core.exception import WazuhPermissionError, WazuhException
+from wazuh.core.common import WAZUH_VERSION
+from wazuh.core.exception import WazuhException, WazuhPermissionError
 from wazuh.core.results import AffectedItemsWazuhResult, WazuhResult
 from wazuh.core.security import revoke_tokens
 from wazuh.rbac import preprocessor
@@ -27,9 +30,47 @@ logger = logging.getLogger('wazuh-api')
 auth_re = re.compile(r'basic (.*)', re.IGNORECASE)
 
 
+@deprecate_endpoint(link=f'https://documentation.wazuh.com/{WAZUH_VERSION}/user-manual/api/reference.html#'
+                         f'operation/api.controllers.security_controller.login_user')
+async def deprecated_login_user(user: str, raw: bool = False) -> web.Response:
+    """User/password authentication to get an access token.
+    This method should be called to get an API token. This token will expire at some time.
+
+    Parameters
+    ----------
+    user : str
+        Name of the user who wants to be authenticated.
+    raw : bool, optional
+        Respond in raw format. Default `False`
+
+    Returns
+    -------
+    web.Response
+        Raw or JSON response with the generated access token.
+    """
+    f_kwargs = {'user_id': user}
+
+    dapi = DistributedAPI(f=preprocessor.get_permissions,
+                          f_kwargs=remove_nones_to_dict(f_kwargs),
+                          request_type='local_master',
+                          is_async=False,
+                          logger=logger
+                          )
+    data = raise_if_exc(await dapi.distribute_function())
+
+    token = None
+    try:
+        token = generate_token(user_id=user, data=data.dikt)
+    except WazuhException as e:
+        raise_if_exc(e)
+
+    return web.Response(text=token, content_type='text/plain', status=200) if raw \
+        else web.json_response(data=WazuhResult({'data': TokenResponseModel(token=token)}), status=200, dumps=dumps)
+
+
 async def login_user(user: str, raw: bool = False) -> web.Response:
     """User/password authentication to get an access token.
-    This method should be called to get an API token. This token will expire at some time. # noqa: E501
+    This method should be called to get an API token. This token will expire at some time.
 
     Parameters
     ----------
@@ -65,7 +106,8 @@ async def login_user(user: str, raw: bool = False) -> web.Response:
 
 async def run_as_login(request, user: str, raw: bool = False) -> web.Response:
     """User/password authentication to get an access token.
-    This method should be called to get an API token using an authorization context body. This token will expire at some time. # noqa: E501
+    This method should be called to get an API token using an authorization context body. This token will expire at
+    some time.
 
     Parameters
     ----------
@@ -80,7 +122,8 @@ async def run_as_login(request, user: str, raw: bool = False) -> web.Response:
     web.Response
         Raw or JSON response with the generated access token.
     """
-    f_kwargs = {'user_id': user, 'auth_context': await request.json()}
+    auth_context = await request.json()
+    f_kwargs = {'user_id': user, 'auth_context': auth_context}
 
     dapi = DistributedAPI(f=preprocessor.get_permissions,
                           f_kwargs=remove_nones_to_dict(f_kwargs),
@@ -92,7 +135,7 @@ async def run_as_login(request, user: str, raw: bool = False) -> web.Response:
 
     token = None
     try:
-        token = generate_token(user_id=user, data=data.dikt, run_as=True)
+        token = generate_token(user_id=user, data=data.dikt, auth_context=auth_context)
     except WazuhException as e:
         raise_if_exc(e)
 
@@ -100,20 +143,21 @@ async def run_as_login(request, user: str, raw: bool = False) -> web.Response:
         else web.json_response(data=WazuhResult({'data': TokenResponseModel(token=token)}), status=200, dumps=dumps)
 
 
-async def get_user_me(request, pretty=False, wait_for_complete=False):
-    """Returns information from all system roles.
+async def get_user_me(request, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
+    """Returns information about the current user.
 
     Parameters
     ----------
     request : connexion.request
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Users information
+    web.Response
+        API response with the user information.
     """
     f_kwargs = {'token': request['token_info']}
     dapi = DistributedAPI(f=security.get_user_me,
@@ -130,20 +174,21 @@ async def get_user_me(request, pretty=False, wait_for_complete=False):
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def get_user_me_policies(request, pretty=False, wait_for_complete=False):
+async def get_user_me_policies(request, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
     """Return processed RBAC policies and rbac_mode for the current user.
 
     Parameters
     ----------
     request : connexion.request
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Users information
+    web.Response
+        API response with the user RBAC policies and mode.
     """
     data = WazuhResult({'data': request['token_info']['rbac_policies'],
                         'message': "Current user processed policies information was returned"})
@@ -151,19 +196,21 @@ async def get_user_me_policies(request, pretty=False, wait_for_complete=False):
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def logout_user(request, pretty=False, wait_for_complete=False):
+async def logout_user(request, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
     """Invalidate all current user's tokens.
 
     Parameters
     ----------
+    request : connexion.request
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Status
+    web.Response
+        API response.
     """
 
     dapi = DistributedAPI(f=security.revoke_current_user_tokens,
@@ -178,34 +225,36 @@ async def logout_user(request, pretty=False, wait_for_complete=False):
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def get_users(request, user_ids: list = None, pretty=False, wait_for_complete=False,
-                    offset=0, limit=None, search=None, select=None, sort=None):
-    """Returns information from all system roles.
+async def get_users(request, user_ids: list = None, pretty: bool = False, wait_for_complete: bool = False,
+                    offset: int = 0, limit: int = None, search: str = None, select: str = None,
+                    sort: str = None) -> web.Response:
+    """Returns information from all system users.
 
     Parameters
     ----------
     request : connexion.request
     user_ids : list, optional
-        List of users to be obtained
+        List of users to be obtained.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
     offset : int, optional
-        First item to return
+        First item to return.
     limit : int, optional
-        Maximum number of items to return
+        Maximum number of items to return.
     search : str
-        Looks for elements with the specified string
+        Looks for elements with the specified string.
     select : str
-        Select which fields to return (separated by comma)
+        Select which fields to return (separated by comma).
     sort : str, optional
         Sorts the collection by a field or fields (separated by comma). Use +/- at the beginning to list in
-        ascending or descending order
+        ascending or descending order.
 
     Returns
     -------
-    Users information
+    web.Response
+        API response with the users information.
     """
     f_kwargs = {'user_ids': user_ids, 'offset': offset, 'limit': limit, 'select': select,
                 'sort_by': parse_api_param(sort, 'sort')['fields'] if sort is not None else ['id'],
@@ -226,24 +275,26 @@ async def get_users(request, user_ids: list = None, pretty=False, wait_for_compl
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def edit_run_as(request, user_id: str, allow_run_as: bool, pretty=False, wait_for_complete=False):
-    """Modify the specified user' allow_run_as flag.
+async def edit_run_as(request, user_id: str, allow_run_as: bool, pretty: bool = False,
+                      wait_for_complete: bool = False) -> web.Response:
+    """Modify the specified user's allow_run_as flag.
 
     Parameters
     ----------
     request : connexion.request
     user_id : str
-        User ID of the user to be updated
+        User ID of the user to be updated.
     allow_run_as : bool
-        Enable or disable authorization context login method for the specified user
+        Enable or disable authorization context login method for the specified user.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    User data
+    web.Response
+        API response.
     """
     f_kwargs = {'user_id': user_id, 'allow_run_as': allow_run_as}
 
@@ -261,20 +312,21 @@ async def edit_run_as(request, user_id: str, allow_run_as: bool, pretty=False, w
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def create_user(request, pretty=False, wait_for_complete=False):
+async def create_user(request, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
     """Create a new user.
 
     Parameters
     ----------
     request : connexion.request
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    User data
+    web.Response
+        API response.
     """
     Body.validate_content_type(request, expected_content_type='application/json')
     f_kwargs = await CreateUserModel.get_kwargs(request)
@@ -292,25 +344,27 @@ async def create_user(request, pretty=False, wait_for_complete=False):
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def update_user(request, user_id: str, pretty=False, wait_for_complete=False):
+async def update_user(request, user_id: str, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
     """Modify an existent user.
 
     Parameters
     ----------
     request : connexion.request
     user_id : str
-        User ID of the user to be updated
+        User ID of the user to be updated.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    User data
+    web.Response
+        API response.
     """
     Body.validate_content_type(request, expected_content_type='application/json')
-    f_kwargs = await UpdateUserModel.get_kwargs(request, additional_kwargs={'user_id': user_id})
+    f_kwargs = await UpdateUserModel.get_kwargs(request, additional_kwargs={'user_id': user_id,
+                                                                            'current_user': request.get("user")})
 
     dapi = DistributedAPI(f=security.update_user,
                           f_kwargs=remove_nones_to_dict(f_kwargs),
@@ -325,22 +379,24 @@ async def update_user(request, user_id: str, pretty=False, wait_for_complete=Fal
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def delete_users(request, user_ids: list = None, pretty=False, wait_for_complete=False):
+async def delete_users(request, user_ids: list = None, pretty: bool = False,
+                       wait_for_complete: bool = False) -> web.Response:
     """Delete an existent list of users.
 
     Parameters
     ----------
     request : connexion.request
     user_ids : list, optional
-        IDs of the users to be removed
+        IDs of the users to be removed.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Result of the operation
+    web.Response
+        API response.
     """
     if 'all' in user_ids:
         user_ids = None
@@ -361,33 +417,35 @@ async def delete_users(request, user_ids: list = None, pretty=False, wait_for_co
 
 
 async def get_roles(request, role_ids: list = None, pretty: bool = False, wait_for_complete: bool = False,
-                    offset: int = 0, limit: int = None, search: str = None, select: str = None, sort: str = None):
-    """
+                    offset: int = 0, limit: int = None, search: str = None, select: str = None,
+                    sort: str = None) -> web.Response:
+    """Get information about the security roles in the system.
 
     Parameters
     ----------
     request : connexion.request
     role_ids : list, optional
-        List of roles ids to be obtained
+        List of roles ids to be obtained.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
     offset : int, optional
-        First item to return
+        First item to return.
     limit : int, optional
-        Maximum number of items to return
+        Maximum number of items to return.
     search : str, optional
-        Looks for elements with the specified string
+        Looks for elements with the specified string.
     select : str
-        Select which fields to return (separated by comma)
+        Select which fields to return (separated by comma).
     sort : str, optional
         Sorts the collection by a field or fields (separated by comma). Use +/- at the beginning to list in
-        ascending or descending order
+        ascending or descending order.
 
     Returns
     -------
-    Roles information
+    web.Response
+        API response with the roles information.
     """
     f_kwargs = {'role_ids': role_ids, 'offset': offset, 'limit': limit, 'select': select,
                 'sort_by': parse_api_param(sort, 'sort')['fields'] if sort is not None else ['id'],
@@ -409,20 +467,21 @@ async def get_roles(request, role_ids: list = None, pretty: bool = False, wait_f
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def add_role(request, pretty: bool = False, wait_for_complete: bool = False):
-    """Add one specified role.
+async def add_role(request, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
+    """Add a specified role.
 
     Parameters
     ----------
     request : request.connexion
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Role information
+    web.Response
+        API response.
     """
     # Get body parameters
     Body.validate_content_type(request, expected_content_type='application/json')
@@ -441,22 +500,24 @@ async def add_role(request, pretty: bool = False, wait_for_complete: bool = Fals
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def remove_roles(request, role_ids: list = None, pretty: bool = False, wait_for_complete: bool = False):
+async def remove_roles(request, role_ids: list = None, pretty: bool = False,
+                       wait_for_complete: bool = False) -> web.Response:
     """Removes a list of roles in the system.
 
     Parameters
     ----------
     request : connexion.request
     role_ids : list, optional
-        List of roles ids to be deleted
+        List of roles ids to be deleted.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Two list with deleted roles and not deleted roles
+    web.Response
+        API response composed of two lists: one contains the deleted roles and the other the non-deleted roles.
     """
     if 'all' in role_ids:
         role_ids = None
@@ -475,22 +536,23 @@ async def remove_roles(request, role_ids: list = None, pretty: bool = False, wai
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def update_role(request, role_id: int, pretty: bool = False, wait_for_complete: bool = False):
-    """Update the information of one specified role.
+async def update_role(request, role_id: int, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
+    """Update the information of a specified role.
 
     Parameters
     ----------
     request : connexion.request
     role_id : int
-        Specific role id in the system to be updated
+        Specific role id in the system to be updated.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Role information updated
+    web.Response
+        API response.
     """
     # Get body parameters
     Body.validate_content_type(request, expected_content_type='application/json')
@@ -510,33 +572,35 @@ async def update_role(request, role_id: int, pretty: bool = False, wait_for_comp
 
 
 async def get_rules(request, rule_ids: list = None, pretty: bool = False, wait_for_complete: bool = False,
-                    offset: int = 0, limit: int = None, search: str = None, select: str = None, sort: str = None):
+                    offset: int = 0, limit: int = None, search: str = None, select: str = None,
+                    sort: str = None) -> web.Response:
     """Get information about the security rules in the system.
 
     Parameters
     ----------
     request : connexion.request
     rule_ids : list, optional
-        List of rule ids to be obtained
+        List of rule ids to be obtained.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
     offset : int, optional
-        First item to return
+        First item to return.
     limit : int, optional
-        Maximum number of items to return
+        Maximum number of items to return.
     search : str, optional
-        Looks for elements with the specified string
+        Looks for elements with the specified string.
     select : str
-        Select which fields to return (separated by comma)
+        Select which fields to return (separated by comma).
     sort : str, optional
         Sorts the collection by a field or fields (separated by comma). Use +/- at the beginning to list in
-        ascending or descending order
+        ascending or descending order.
 
     Returns
     -------
-    Rules information
+    web.Response
+        API response.
     """
     f_kwargs = {'rule_ids': rule_ids, 'offset': offset, 'limit': limit, 'select': select,
                 'sort_by': parse_api_param(sort, 'sort')['fields'] if sort is not None else ['id'],
@@ -558,20 +622,21 @@ async def get_rules(request, rule_ids: list = None, pretty: bool = False, wait_f
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def add_rule(request, pretty: bool = False, wait_for_complete: bool = False):
-    """Add one specified rule.
+async def add_rule(request, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
+    """Add a specified rule.
 
     Parameters
     ----------
     request : request.connexion
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Rule information
+    web.Response
+        API response.
     """
     # Get body parameters
     Body.validate_content_type(request, expected_content_type='application/json')
@@ -590,22 +655,23 @@ async def add_rule(request, pretty: bool = False, wait_for_complete: bool = Fals
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def update_rule(request, rule_id: int, pretty: bool = False, wait_for_complete: bool = False):
-    """Update the information of one specified rule.
+async def update_rule(request, rule_id: int, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
+    """Update the information of a specified rule.
 
     Parameters
     ----------
     request : connexion.request
     rule_id : int
-        Specific rule id in the system to be updated
+        Specific rule id in the system to be updated.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Rule information updated
+    web.Response
+        API response.
     """
     # Get body parameters
     Body.validate_content_type(request, expected_content_type='application/json')
@@ -624,22 +690,24 @@ async def update_rule(request, rule_id: int, pretty: bool = False, wait_for_comp
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def remove_rules(request, rule_ids: list = None, pretty: bool = False, wait_for_complete: bool = False):
+async def remove_rules(request, rule_ids: list = None, pretty: bool = False,
+                       wait_for_complete: bool = False) -> web.Response:
     """Remove a list of rules from the system.
 
     Parameters
     ----------
     request : connexion.request
     rule_ids : list, optional
-        List of rule ids to be deleted
+        List of rule ids to be deleted.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Two lists with deleted rules and failed ones.
+    web.Response
+        API response composed of two lists: one contains the deleted rules and the other the non-deleted rules.
     """
     if 'all' in rule_ids:
         rule_ids = None
@@ -659,33 +727,35 @@ async def remove_rules(request, rule_ids: list = None, pretty: bool = False, wai
 
 
 async def get_policies(request, policy_ids: list = None, pretty: bool = False, wait_for_complete: bool = False,
-                       offset: int = 0, limit: int = None, search: str = None, select: str = None, sort: str = None):
+                       offset: int = 0, limit: int = None, search: str = None, select: str = None,
+                       sort: str = None) -> web.Response:
     """Returns information from all system policies.
 
     Parameters
     ----------
     request : connexion.request
     policy_ids : list, optional
-        List of policies
+        List of policies.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
     offset : int, optional
-        First item to return
+        First item to return.
     limit : int, optional
-        Maximum number of items to return
+        Maximum number of items to return.
     search : str, optional
-        Looks for elements with the specified string
+        Looks for elements with the specified string.
     select : str
-        Select which fields to return (separated by comma)
+        Select which fields to return (separated by comma).
     sort : str, optional
         Sorts the collection by a field or fields (separated by comma). Use +/- at the beginning to list in
-        ascending or descending order
+        ascending or descending order.
 
     Returns
     -------
-    Policies information
+    web.Response
+        API response with the policies information.
     """
     f_kwargs = {'policy_ids': policy_ids, 'offset': offset, 'limit': limit, 'select': select,
                 'sort_by': parse_api_param(sort, 'sort')['fields'] if sort is not None else ['id'],
@@ -707,20 +777,21 @@ async def get_policies(request, policy_ids: list = None, pretty: bool = False, w
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def add_policy(request, pretty: bool = False, wait_for_complete: bool = False):
-    """Add one specified policy.
+async def add_policy(request, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
+    """Add a specified policy.
 
     Parameters
     ----------
     request : connexion.request
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Policy information
+    web.Response
+        API response.
     """
     # Get body parameters
     Body.validate_content_type(request, expected_content_type='application/json')
@@ -739,22 +810,24 @@ async def add_policy(request, pretty: bool = False, wait_for_complete: bool = Fa
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def remove_policies(request, policy_ids: list = None, pretty: bool = False, wait_for_complete: bool = False):
+async def remove_policies(request, policy_ids: list = None, pretty: bool = False,
+                          wait_for_complete: bool = False) -> web.Response:
     """Removes a list of roles in the system.
 
     Parameters
     ----------
     request : connexion.request
     policy_ids : list, optional
-        List of policies ids to be deleted
+        List of policies ids to be deleted.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Two list with deleted roles and not deleted roles
+    web.Response
+        API response composed of two lists: one contains the deleted policies and the other the non-deleted policies.
     """
     if 'all' in policy_ids:
         policy_ids = None
@@ -773,8 +846,8 @@ async def remove_policies(request, policy_ids: list = None, pretty: bool = False
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def update_policy(request, policy_id: int, pretty: bool = False, wait_for_complete: bool = False):
-    """Update the information of one specified policy.
+async def update_policy(request, policy_id: int, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
+    """Update the information of a specified policy.
 
     Parameters
     ----------
@@ -788,7 +861,8 @@ async def update_policy(request, policy_id: int, pretty: bool = False, wait_for_
 
     Returns
     -------
-    Policy information updated
+    web.Response
+        API response.
     """
     # Get body parameters
     Body.validate_content_type(request, expected_content_type='application/json')
@@ -808,27 +882,27 @@ async def update_policy(request, policy_id: int, pretty: bool = False, wait_for_
 
 
 async def set_user_role(request, user_id: str, role_ids: list, position: int = None,
-                        pretty: bool = False, wait_for_complete: bool = False):
-    """Add a list of roles to one specified user.
+                        pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
+    """Add a list of roles to a specified user.
 
     Parameters
     ----------
     request : connexion.request
     user_id : str
-        User ID
-    role_ids : list of int
-        List of role ids
+        User ID.
+    role_ids : list
+        List of role ids.
     position : int, optional
-        Position where the new role will be inserted
+        Position where the new role will be inserted.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Dict
-        User-Role information
+    web.Response
+        API response.
     """
     f_kwargs = {'user_id': user_id, 'role_ids': role_ids, 'position': position}
     dapi = DistributedAPI(f=security.set_user_role,
@@ -845,24 +919,25 @@ async def set_user_role(request, user_id: str, role_ids: list, position: int = N
 
 
 async def remove_user_role(request, user_id: str, role_ids: list, pretty: bool = False,
-                           wait_for_complete: bool = False):
-    """Delete a list of roles of one specified user.
+                           wait_for_complete: bool = False) -> web.Response:
+    """Delete a list of roles of a specified user.
 
     Parameters
     ----------
     request : connexion.request
     user_id : str
-        User ID
+        User ID.
     role_ids : list
-        List of roles ids
+        List of roles ids.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete: bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Result of the operation
+    web.Response
+        API response.
     """
     if 'all' in role_ids:
         role_ids = None
@@ -881,26 +956,28 @@ async def remove_user_role(request, user_id: str, role_ids: list, pretty: bool =
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def set_role_policy(request, role_id, policy_ids, position=None, pretty=False, wait_for_complete=False):
-    """Add a list of policies to one specified role.
+async def set_role_policy(request, role_id: int, policy_ids: list, position: int = None, pretty: bool = False,
+                          wait_for_complete: bool = False) -> web.Response:
+    """Add a list of policies to a specified role.
 
     Parameters
     ----------
+    request : connexion.request
     role_id : int
-        Role ID
-    policy_ids : list of int
-        List of policy IDs
+        Role ID.
+    policy_ids : list
+        List of policy IDs.
     position : int
-        Position where the new role will be inserted
+        Position where the new role will be inserted.
     pretty : bool
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    dict
-        Role information
+    web.Response
+        API response.
     """
     f_kwargs = {'role_id': role_id, 'policy_ids': policy_ids, 'position': position}
 
@@ -918,23 +995,25 @@ async def set_role_policy(request, role_id, policy_ids, position=None, pretty=Fa
 
 
 async def remove_role_policy(request, role_id: int, policy_ids: list, pretty: bool = False,
-                             wait_for_complete: bool = False):
-    """Delete a list of policies of one specified role.
+                             wait_for_complete: bool = False) -> web.Response:
+    """Delete a list of policies of a specified role.
 
     Parameters
     ----------
     request : request.connexion
     role_id : int
+        Role ID.
     policy_ids : list
-        List of policy ids
+        List of policy ids.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Role information
+    web.Response
+        API response.
     """
     if 'all' in policy_ids:
         policy_ids = None
@@ -953,24 +1032,26 @@ async def remove_role_policy(request, role_id: int, policy_ids: list, pretty: bo
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def set_role_rule(request, role_id, rule_ids, pretty=False, wait_for_complete=False):
-    """Add a list of rules to one specified role.
+async def set_role_rule(request, role_id: int, rule_ids: list, pretty: bool = False,
+                        wait_for_complete: bool = False) -> web.Response:
+    """Add a list of rules to a specified role.
 
     Parameters
     ----------
+    request : request.connexion
     role_id : int
-        Role ID
-    rule_ids : list of int
-        List of rule IDs
+        Role ID.
+    rule_ids : list
+        List of rule IDs.
     pretty : bool
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    dict
-        Role information
+    web.Response
+        API response.
     """
     f_kwargs = {'role_id': role_id, 'rule_ids': rule_ids,
                 'run_as': {'user': request['token_info']['sub'], 'run_as': request['token_info']['run_as']}}
@@ -989,23 +1070,25 @@ async def set_role_rule(request, role_id, rule_ids, pretty=False, wait_for_compl
 
 
 async def remove_role_rule(request, role_id: int, rule_ids: list, pretty: bool = False,
-                           wait_for_complete: bool = False):
-    """Delete a list of rules of one specified role.
+                           wait_for_complete: bool = False) -> web.Response:
+    """Delete a list of rules of a specified role.
 
     Parameters
     ----------
     request : request.connexion
     role_id : int
+        Role ID.
     rule_ids : list
-        List of rule ids
+        List of rule ids.
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool, optional
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    Role information
+    web.Response
+        API response.
     """
     if 'all' in rule_ids:
         rule_ids = None
@@ -1024,7 +1107,7 @@ async def remove_role_rule(request, role_id: int, rule_ids: list, pretty: bool =
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def get_rbac_resources(resource: str = None, pretty: bool = False):
+async def get_rbac_resources(resource: str = None, pretty: bool = False) -> web.Response:
     """Gets all the current defined resources for RBAC.
 
     Parameters
@@ -1032,12 +1115,12 @@ async def get_rbac_resources(resource: str = None, pretty: bool = False):
     resource : str, optional
         Show the information of the specified resource. Ex: agent:id
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
 
     Returns
     -------
-    dict
-        RBAC resources
+    web.Response
+        API response with the RBAC resources.
     """
     f_kwargs = {'resource': resource}
 
@@ -1053,20 +1136,20 @@ async def get_rbac_resources(resource: str = None, pretty: bool = False):
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def get_rbac_actions(pretty: bool = False, endpoint: str = None):
+async def get_rbac_actions(pretty: bool = False, endpoint: str = None) -> web.Response:
     """Gets all the current defined actions for RBAC.
 
     Parameters
     ----------
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
     endpoint : str, optional
         Show actions and resources for the specified endpoint. Ex: GET /agents
 
     Returns
     -------
-    dict
-        RBAC actions
+    web.Response
+        API response with the RBAC actions.
     """
     f_kwargs = {'endpoint': endpoint}
 
@@ -1082,18 +1165,19 @@ async def get_rbac_actions(pretty: bool = False, endpoint: str = None):
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def revoke_all_tokens(request, pretty: bool = False):
-    """Revoke all tokens
+async def revoke_all_tokens(request, pretty: bool = False) -> web.Response:
+    """Revoke all tokens.
 
     Parameters
     ----------
+    request : request.connexion
     pretty : bool, optional
-        Show results in human-readable format
+        Show results in human-readable format.
 
     Returns
     -------
-    dict
-        Status message
+    web.Response
+        API response.
     """
     f_kwargs = {}
 
@@ -1118,16 +1202,21 @@ async def revoke_all_tokens(request, pretty: bool = False):
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def get_security_config(request, pretty=False, wait_for_complete=False):
+async def get_security_config(request, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
     """Get active security configuration.
 
-    :param pretty: Show results in human-readable format
-    :param wait_for_complete: Disable timeout response
+    Parameters
+    ----------
+    request : request.connexion
+    pretty : bool, optional
+        Show results in human-readable format.
+    wait_for_complete : bool, optional
+        Disable timeout response.
 
     Returns
     -------
-    dict
-        Security configuration
+    web.Response
+        API response.
     """
     f_kwargs = {}
 
@@ -1161,21 +1250,21 @@ async def security_revoke_tokens():
     raise_if_exc(await dapi.distribute_function())
 
 
-async def put_security_config(request, pretty=False, wait_for_complete=False):
+async def put_security_config(request, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
     """Update current security configuration with the given one
 
     Parameters
     ----------
-    request
+    request : request.connexion
     pretty : bool
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    dict:
-        Status message
+    web.Response
+        API response.
     """
     Body.validate_content_type(request, expected_content_type='application/json')
     f_kwargs = {'updated_config': await SecurityConfigurationModel.get_kwargs(request)}
@@ -1194,21 +1283,21 @@ async def put_security_config(request, pretty=False, wait_for_complete=False):
     return web.json_response(data=data, status=200, dumps=prettify if pretty else dumps)
 
 
-async def delete_security_config(request, pretty=False, wait_for_complete=False):
-    """Restore default security configuration
+async def delete_security_config(request, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
+    """Restore default security configuration.
 
     Parameters
     ----------
-    request
+    request : request.connexion
     pretty : bool
-        Show results in human-readable format
+        Show results in human-readable format.
     wait_for_complete : bool
-        Disable timeout response
+        Disable timeout response.
 
     Returns
     -------
-    dict:
-        Status message
+    web.Response
+        API response.
     """
     f_kwargs = {"updated_config": await SecurityConfigurationModel.get_kwargs(default_security_configuration)}
 

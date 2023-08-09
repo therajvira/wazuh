@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for Azure
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * September, 2018.
  *
  * This program is free software; you can redistribute it
@@ -9,7 +9,6 @@
  * Foundation.
  */
 
-#ifndef CLIENT
 #ifndef WM_AZURE
 #define WM_AZURE
 
@@ -54,6 +53,7 @@ typedef struct wm_azure_container_t {
     char * blobs;           // Blobs
     char * content_type;    // Content type (plain | inline | file)
     char * time_offset;     // Offset to look for logs (minutes, hours, days)
+    char * path;          // Prefix to search into
     unsigned int timeout;   // Timeout for a single container
     struct wm_azure_container_t *next;
 } wm_azure_container_t;
@@ -81,5 +81,4 @@ extern const wm_context WM_AZURE_CONTEXT;   // Context
 // Parse XML configuration
 int wm_azure_read(const OS_XML *xml, xml_node **nodes, wmodule *module);
 
-#endif
 #endif

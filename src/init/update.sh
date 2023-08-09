@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Shell script update functions for Wazuh
 # Author: Daniel B. Cid <daniel.cid@gmail.com>
 
@@ -415,6 +415,11 @@ UpdateStopOSSEC()
     # Deleting plain-text rootcheck information if exists (it was migrated to Wazuh DB in v4.1)
     if [ -d "$PREINSTALLEDDIR/queue/rootcheck" ]; then
         rm -rf $PREINSTALLEDDIR/queue/rootcheck > /dev/null 2>&1
+    fi
+
+    # Deleting groups backup folder if exists
+    if [ -d "$PREINSTALLEDDIR/backup/groups" ]; then
+        rm -rf $PREINSTALLEDDIR/backup/groups > /dev/null 2>&1
     fi
 }
 

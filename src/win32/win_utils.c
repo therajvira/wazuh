@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -17,6 +17,11 @@
 #include "sysInfo.h"
 #include "sym_load.h"
 #include "../os_net/os_net.h"
+#include "dll_load_notify.h"
+
+#ifdef WAZUH_UNIT_TESTING
+#include "unit_tests/wrappers/windows/libc/kernel32_wrappers.h"
+#endif
 
 HANDLE hMutex;
 int win_debug_level;
@@ -29,12 +34,19 @@ sysinfo_free_result_func sysinfo_free_result_ptr = NULL;
 int Start_win32_Syscheck();
 
 /* syscheck main thread */
+#ifdef WIN32
+DWORD WINAPI skthread(__attribute__((unused)) LPVOID arg)
+#else
 void *skthread()
+#endif
 {
 
     Start_win32_Syscheck();
-
+#ifdef WIN32
+    return 0;
+#else
     return (NULL);
+#endif
 }
 
 void stop_wmodules()
@@ -50,11 +62,14 @@ void stop_wmodules()
 /* Locally start (after service/win init) */
 int local_start()
 {
-    int rc;
+    // This must be always the first instruction
+    enable_dll_verification();
+
     char *cfg = OSSECCONF;
     WSADATA wsaData;
     DWORD  threadID;
     DWORD  threadID2;
+
     win_debug_level = getDefine_Int("windows", "debug", 0, 2);
 
     /* Get debug level */
@@ -86,15 +101,24 @@ int local_start()
         merror_exit("WSAStartup() failed");
     }
 
+    /* Initialize error logging for shared modulesd */
+    dbsync_initialize(loggingErrorFunction);
+    rsync_initialize(loggingErrorFunction);
+
     /* Read agent config */
     mdebug1("Reading agent configuration.");
     if (ClientConf(cfg) < 0) {
-        merror_exit(CLIENT_ERROR);
+        mlerror_exit(LOGLEVEL_ERROR, CLIENT_ERROR);
     }
 
     if (!Validate_Address(agt->server)){
         merror(AG_INV_MNGIP, agt->server[0].rip);
-        merror_exit(CLIENT_ERROR);
+        mlerror_exit(LOGLEVEL_ERROR, CLIENT_ERROR);
+    }
+
+    if (!Validate_IPv6_Link_Local_Interface(agt->server)){
+        merror(AG_INV_INT);
+        mlerror_exit(LOGLEVEL_ERROR, CLIENT_ERROR);
     }
 
     if (agt->notify_time == 0) {
@@ -113,17 +137,6 @@ int local_start()
                w_seconds_to_time_value(agt->force_reconnect_interval), w_seconds_to_time_unit(agt->force_reconnect_interval, TRUE));
     }
 
-    // Resolve hostnames
-    rc = 0;
-    while (rc < agt->server_count) {
-        if (OS_IsValidIP(agt->server[rc].rip, NULL) != 1) {
-            mdebug2("Resolving server hostname: %s", agt->server[rc].rip);
-            resolve_hostname(&agt->server[rc].rip, 5);
-            mdebug2("Server hostname resolved: %s", agt->server[rc].rip);
-        }
-        rc++;
-    }
-
     /* Read logcollector config file */
     mdebug1("Reading logcollector configuration.");
 
@@ -131,7 +144,7 @@ int local_start()
     w_msg_hash_queues_init();
 
     if (LogCollectorConfig(cfg) < 0) {
-        merror_exit(CONFIG_ERROR, cfg);
+        mlerror_exit(LOGLEVEL_ERROR, CONFIG_ERROR, cfg);
     }
 
     if(agt->enrollment_cfg && agt->enrollment_cfg->enabled) {
@@ -176,7 +189,7 @@ int local_start()
     }
 
     /* Read execd config */
-    if (!WinExecd_Start()) {
+    if (!WinExecdStart()) {
         agt->execdq = -1;
     }
 
@@ -195,7 +208,7 @@ int local_start()
         buffer_init();
         w_create_thread(NULL,
                          0,
-                         (LPTHREAD_START_ROUTINE)dispatch_buffer,
+                         dispatch_buffer,
                          NULL,
                          0,
                          (LPDWORD)&threadID);
@@ -207,7 +220,7 @@ int local_start()
     w_agentd_state_init();
     w_create_thread(NULL,
                      0,
-                     (LPTHREAD_START_ROUTINE)state_main,
+                     state_main,
                      NULL,
                      0,
                      (LPDWORD)&threadID);
@@ -224,7 +237,7 @@ int local_start()
     /* Start syscheck thread */
     w_create_thread(NULL,
                      0,
-                     (LPTHREAD_START_ROUTINE)skthread,
+                     skthread,
                      NULL,
                      0,
                      (LPDWORD)&threadID);
@@ -234,7 +247,7 @@ int local_start()
     if (rotate_log) {
         w_create_thread(NULL,
                         0,
-                        (LPTHREAD_START_ROUTINE)w_rotate_log_thread,
+                        w_rotate_log_thread,
                         NULL,
                         0,
                         (LPDWORD)&threadID);
@@ -251,7 +264,7 @@ int local_start()
     /* Start receiver thread */
     w_create_thread(NULL,
                      0,
-                     (LPTHREAD_START_ROUTINE)receiver_thread,
+                     receiver_thread,
                      NULL,
                      0,
                      (LPDWORD)&threadID2);
@@ -259,20 +272,24 @@ int local_start()
     /* Start request receiver thread */
     w_create_thread(NULL,
                      0,
-                     (LPTHREAD_START_ROUTINE)req_receiver,
+                     req_receiver,
                      NULL,
                      0,
                      (LPDWORD)&threadID2);
 
     // Read wodle configuration and start modules
 
-    if (!wm_config() && !wm_check()) {
+    if (wm_config() < 0) {
+        mlerror_exit(LOGLEVEL_ERROR, CONFIG_ERROR, cfg);
+    }
+
+    if (!wm_check()) {
         wmodule * cur_module;
 
         for (cur_module = wmodules; cur_module; cur_module = cur_module->next) {
             w_create_thread(NULL,
                             0,
-                            (LPTHREAD_START_ROUTINE)cur_module->context->start,
+                            cur_module->context->start,
                             cur_module->data,
                             0,
                             (LPDWORD)&threadID2);
@@ -293,16 +310,14 @@ int local_start()
     return (0);
 }
 
-/* SendMSG for Windows */
-int SendMSG(__attribute__((unused)) int queue, const char *message, const char *locmsg, char loc)
+/* SendMSGAction for Windows */
+int SendMSGAction(__attribute__((unused)) int queue, const char *message, const char *locmsg, char loc)
 {
-    const char *pl;
+    char loc_buff[OS_SIZE_8192 + 1] = {0};
     char tmpstr[OS_MAXSTR + 2];
     DWORD dwWaitResult;
     int retval = -1;
     tmpstr[OS_MAXSTR + 1] = '\0';
-
-    os_wait();
 
     /* Using a mutex to synchronize the writes */
     while (1) {
@@ -327,16 +342,12 @@ int SendMSG(__attribute__((unused)) int queue, const char *message, const char *
         }
     }   /* end - while for mutex... */
 
-    /* locmsg cannot have the C:, as we use it as delimiter */
-    pl = strchr(locmsg, ':');
-    if (pl) {
-        /* Set pl after the ":" if it exists */
-        pl++;
-    } else {
-        pl = locmsg;
+    if (OS_INVALID == wstr_escape(loc_buff, sizeof(loc_buff), (char *) locmsg, '|', ':')) {
+        merror(FORMAT_ERROR);
+        return retval;
     }
 
-    snprintf(tmpstr, OS_MAXSTR, "%c:%s:%s", loc, pl, message);
+    snprintf(tmpstr, OS_MAXSTR, "%c:%s:%s", loc, loc_buff, message);
 
     /* Send events to the manager across the buffer */
     if (!agt->buffer){
@@ -355,6 +366,29 @@ int SendMSG(__attribute__((unused)) int queue, const char *message, const char *
     return retval;
 }
 
+/* SendMSG for Windows */
+int SendMSG(__attribute__((unused)) int queue, const char *message, const char *locmsg, char loc) {
+    os_wait();
+    return SendMSGAction(queue, message, locmsg, loc);
+}
+
+/* SendMSGPredicated for Windows */
+int SendMSGPredicated(__attribute__((unused)) int queue, const char *message, const char *locmsg, char loc, bool (*fn_ptr)()) {
+    os_wait_predicate(fn_ptr);
+    return SendMSGAction(queue, message, locmsg, loc);
+}
+
+/* StartMQ for Windows */
+int StartMQWithSpecificOwnerAndPerms(__attribute__((unused)) const char *path
+                                     ,__attribute__((unused)) short int type
+                                     ,__attribute__((unused)) short int n_tries
+                                     ,__attribute__((unused)) uid_t uid
+                                     ,__attribute__((unused)) gid_t gid
+                                     ,__attribute__((unused)) mode_t perm)
+{
+    return (0);
+}
+
 /* StartMQ for Windows */
 int StartMQ(__attribute__((unused)) const char *path, __attribute__((unused)) short int type, __attribute__((unused)) short int n_tries)
 {
@@ -367,7 +401,7 @@ int MQReconnectPredicated(__attribute__((unused)) const char *path, __attribute_
     return (0);
 }
 
-char *get_agent_ip()
+char *get_agent_ip_legacy_win32()
 {
     char agent_ip[IPSIZE + 1] = { '\0' };
     cJSON *object;
@@ -386,17 +420,34 @@ char *get_agent_ip()
                         }
                         cJSON *gateway = cJSON_GetObjectItem(element, "gateway");
                         if(gateway && cJSON_GetStringValue(gateway) && 0 != strcmp(gateway->valuestring, " ")) {
-                            const cJSON *ipv4 = cJSON_GetObjectItem(element, "IPv4");
-                            if (!ipv4) {
-                                continue;
+
+                            const char * primaryIpType = NULL;
+                            const char * secondaryIpType = NULL;
+
+                            if (strchr(gateway->valuestring, ':') != NULL) {
+                                // Assume gateway is IPv6. IPv6 IP will be prioritary
+                                primaryIpType = "IPv6";
+                                secondaryIpType = "IPv4";
+                            } else {
+                                // Assume gateway is IPv4. IPv4 IP will be prioritary
+                                primaryIpType = "IPv4";
+                                secondaryIpType = "IPv6";
                             }
-                            const int size_proto_interfaces = cJSON_GetArraySize(ipv4);
-                            for (int j = 0; j < size_proto_interfaces; ++j) {
-                                const cJSON *element_ipv4 = cJSON_GetArrayItem(ipv4, j);
-                                if(!element_ipv4) {
+
+                            const cJSON * ip = cJSON_GetObjectItem(element, primaryIpType);
+                            if (!ip) {
+                                ip = cJSON_GetObjectItem(element, secondaryIpType);
+                                if (!ip) {
                                     continue;
                                 }
-                                cJSON *address = cJSON_GetObjectItem(element_ipv4, "address");
+                            }
+                            const int size_proto_interfaces = cJSON_GetArraySize(ip);
+                            for (int j = 0; j < size_proto_interfaces; ++j) {
+                                const cJSON *element_ip = cJSON_GetArrayItem(ip, j);
+                                if(!element_ip) {
+                                    continue;
+                                }
+                                cJSON *address = cJSON_GetObjectItem(element_ip, "address");
                                 if (address && cJSON_GetStringValue(address))
                                 {
                                     strncpy(agent_ip, address->valuestring, IPSIZE);
@@ -415,6 +466,10 @@ char *get_agent_ip()
         else {
             merror("Unable to get system network information. Error code: %d.", error_code);
         }
+    }
+
+    if (strchr(agent_ip, ':') != NULL) {
+        OS_ExpandIPv6(agent_ip, IPSIZE);
     }
 
     return strdup(agent_ip);

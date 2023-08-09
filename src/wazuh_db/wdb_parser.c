@@ -1,6 +1,6 @@
 /*
  * Wazuh Database Daemon
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * January 16, 2018.
  *
  * This program is free software; you can redistribute it
@@ -9,186 +9,196 @@
  * Foundation.
  */
 
+#include "wazuhdb_op.h"
 #include "wdb.h"
 #include "wdb_agents.h"
 #include "external/cJSON/cJSON.h"
+#include "wdb_state.h"
 
-const char* SYSCOLLECTOR_LEGACY_CHECKSUM_VALUE = "legacy";
-
-static struct column_list const TABLE_HOTFIXES[] = {
-    { .value = {FIELD_INTEGER, 1, true, false, "scan_id" }, .next = &TABLE_HOTFIXES[1] },
-    { .value = {FIELD_TEXT, 2, false, false, "scan_time" }, .next = &TABLE_HOTFIXES[2] },
-    { .value = {FIELD_TEXT, 3, false, true, "hotfix" }, .next = &TABLE_HOTFIXES[3] },
-    { .value = {FIELD_TEXT, 4, false, false, "checksum" }, .next = NULL },
+#define HOTFIXES_FIELD_COUNT 3
+static struct column_list const TABLE_HOTFIXES[HOTFIXES_FIELD_COUNT+1] = {
+    { .value = {FIELD_INTEGER, 1, true, false, NULL, "scan_id", {.integer = 0}, true}, .next = &TABLE_HOTFIXES[1] },
+    { .value = {FIELD_TEXT, 2, false, false, NULL,"scan_time", {.text = ""}, true}, .next = &TABLE_HOTFIXES[2] },
+    { .value = {FIELD_TEXT, 3, false, true, NULL,"hotfix", {.text = ""}, true}, .next = &TABLE_HOTFIXES[3] },
+    { .value = {FIELD_TEXT, 4, false, false, NULL,"checksum", {.text = ""}, false}, .next = NULL },
 };
 
-static struct column_list const TABLE_PROCESSES[] = {
-    { .value = { FIELD_INTEGER, 1,true,false, "scan_id" }, .next = &TABLE_PROCESSES[1] },
-    { .value = { FIELD_TEXT, 2,false,false, "scan_time" }, .next = &TABLE_PROCESSES[2] },
-    { .value = { FIELD_TEXT, 3,false,true, "pid" }, .next = &TABLE_PROCESSES[3] },
-    { .value = { FIELD_TEXT, 4,false,false,"name" }, .next = &TABLE_PROCESSES[4] },
-    { .value = { FIELD_TEXT, 5,false,false,"state" }, .next = &TABLE_PROCESSES[5] },
-    { .value = { FIELD_INTEGER, 6,false,false,"ppid" }, .next = &TABLE_PROCESSES[6] },
-    { .value = { FIELD_INTEGER, 7,false,false,"utime" }, .next = &TABLE_PROCESSES[7] },
-    { .value = { FIELD_INTEGER, 8,false,false,"stime" }, .next = &TABLE_PROCESSES[8] },
-    { .value = { FIELD_TEXT, 9,false,false,"cmd" }, .next = &TABLE_PROCESSES[9] },
-    { .value = { FIELD_TEXT, 10,false,false,"argvs" }, .next = &TABLE_PROCESSES[10] },
-    { .value = { FIELD_TEXT, 11,false,false,"euser" }, .next = &TABLE_PROCESSES[11] },
-    { .value = { FIELD_TEXT, 12,false,false,"ruser" }, .next = &TABLE_PROCESSES[12] },
-    { .value = { FIELD_TEXT, 13,false,false,"suser" }, .next = &TABLE_PROCESSES[13] },
-    { .value = { FIELD_TEXT, 14,false,false,"egroup" }, .next = &TABLE_PROCESSES[14] },
-    { .value = { FIELD_TEXT, 15,false,false,"rgroup" }, .next = &TABLE_PROCESSES[15] },
-    { .value = { FIELD_TEXT, 16,false,false,"sgroup" }, .next = &TABLE_PROCESSES[16] },
-    { .value = { FIELD_TEXT, 17,false,false,"fgroup" }, .next = &TABLE_PROCESSES[17] },
-    { .value = { FIELD_INTEGER, 18,false,false,"priority" }, .next = &TABLE_PROCESSES[18] },
-    { .value = { FIELD_INTEGER, 19,false,false,"nice" }, .next = &TABLE_PROCESSES[19] },
-    { .value = { FIELD_INTEGER, 20,false,false,"size" }, .next = &TABLE_PROCESSES[20] },
-    { .value = { FIELD_INTEGER, 21,false,false,"vm_size" }, .next = &TABLE_PROCESSES[21] },
-    { .value = { FIELD_INTEGER, 22,false,false,"resident" }, .next = &TABLE_PROCESSES[22] },
-    { .value = { FIELD_INTEGER, 23,false,false,"share" }, .next = &TABLE_PROCESSES[23] },
-    { .value = { FIELD_INTEGER, 24,false,false,"start_time" }, .next = &TABLE_PROCESSES[24] },
-    { .value = { FIELD_INTEGER, 25,false,false,"pgrp" }, .next = &TABLE_PROCESSES[25] },
-    { .value = { FIELD_INTEGER, 26,false,false,"session" }, .next = &TABLE_PROCESSES[26] },
-    { .value = { FIELD_INTEGER, 27,false,false,"nlwp" }, .next = &TABLE_PROCESSES[27] },
-    { .value = { FIELD_INTEGER, 28,false,false,"tgid" }, .next = &TABLE_PROCESSES[28] },
-    { .value = { FIELD_INTEGER, 29,false,false,"tty" }, .next = &TABLE_PROCESSES[29] },
-    { .value = { FIELD_INTEGER, 30,false,false,"processor"}, .next = &TABLE_PROCESSES[30] },
-    { .value = { FIELD_TEXT, 31, false, false, "checksum" }, .next = NULL }
+#define PROCESSES_FIELD_COUNT 30
+static struct column_list const TABLE_PROCESSES[PROCESSES_FIELD_COUNT+1] = {
+    { .value = { FIELD_INTEGER, 1, true, false, NULL, "scan_id", {.integer = 0}, true}, .next = &TABLE_PROCESSES[1] },
+    { .value = { FIELD_TEXT, 2, false, false, NULL,"scan_time", {.text = ""}, true}, .next = &TABLE_PROCESSES[2] },
+    { .value = { FIELD_TEXT, 3, false, true, NULL, "pid", {.text = ""}, true}, .next = &TABLE_PROCESSES[3] },
+    { .value = { FIELD_TEXT, 4, false, false, NULL, "name", {.text = ""}, true}, .next = &TABLE_PROCESSES[4] },
+    { .value = { FIELD_TEXT, 5, false, false, NULL, "state", {.text = ""}, true}, .next = &TABLE_PROCESSES[5] },
+    { .value = { FIELD_INTEGER, 6, false, false, NULL, "ppid", {.integer = 0}, true}, .next = &TABLE_PROCESSES[6] },
+    { .value = { FIELD_INTEGER, 7, false, false, NULL, "utime", {.integer = 0}, true}, .next = &TABLE_PROCESSES[7] },
+    { .value = { FIELD_INTEGER, 8, false, false, NULL, "stime", {.integer = 0}, true}, .next = &TABLE_PROCESSES[8] },
+    { .value = { FIELD_TEXT, 9, false, false, NULL, "cmd", {.text = ""}, true}, .next = &TABLE_PROCESSES[9] },
+    { .value = { FIELD_TEXT, 10, false, false, NULL, "argvs", {.text = ""}, true}, .next = &TABLE_PROCESSES[10] },
+    { .value = { FIELD_TEXT, 11, false, false, NULL, "euser", {.text = ""}, true}, .next = &TABLE_PROCESSES[11] },
+    { .value = { FIELD_TEXT, 12, false, false, NULL, "ruser", {.text = ""}, true}, .next = &TABLE_PROCESSES[12] },
+    { .value = { FIELD_TEXT, 13, false, false, NULL, "suser", {.text = ""}, true}, .next = &TABLE_PROCESSES[13] },
+    { .value = { FIELD_TEXT, 14, false, false, NULL, "egroup", {.text = ""}, true}, .next = &TABLE_PROCESSES[14] },
+    { .value = { FIELD_TEXT, 15, false, false, NULL, "rgroup", {.text = ""}, true}, .next = &TABLE_PROCESSES[15] },
+    { .value = { FIELD_TEXT, 16, false, false, NULL, "sgroup", {.text = ""}, true}, .next = &TABLE_PROCESSES[16] },
+    { .value = { FIELD_TEXT, 17, false, false, NULL, "fgroup", {.text = ""}, true}, .next = &TABLE_PROCESSES[17] },
+    { .value = { FIELD_INTEGER, 18, false, false, NULL, "priority", {.integer = 0}, true}, .next = &TABLE_PROCESSES[18] },
+    { .value = { FIELD_INTEGER, 19, false, false, NULL, "nice", {.integer = 0}, true}, .next = &TABLE_PROCESSES[19] },
+    { .value = { FIELD_INTEGER, 20, false, false, NULL, "size", {.integer = 0}, true}, .next = &TABLE_PROCESSES[20] },
+    { .value = { FIELD_INTEGER, 21, false, false, NULL, "vm_size", {.integer = 0}, true}, .next = &TABLE_PROCESSES[21] },
+    { .value = { FIELD_INTEGER, 22, false, false, NULL, "resident", {.integer = 0}, true}, .next = &TABLE_PROCESSES[22] },
+    { .value = { FIELD_INTEGER, 23, false, false, NULL, "share", {.integer = 0}, true}, .next = &TABLE_PROCESSES[23] },
+    { .value = { FIELD_INTEGER_LONG, 24, false, false, NULL, "start_time", {.integer_long = 0LL}, true}, .next = &TABLE_PROCESSES[24] },
+    { .value = { FIELD_INTEGER, 25, false, false, NULL, "pgrp", {.integer = 0}, true}, .next = &TABLE_PROCESSES[25] },
+    { .value = { FIELD_INTEGER, 26, false, false, NULL, "session", {.integer = 0}, true}, .next = &TABLE_PROCESSES[26] },
+    { .value = { FIELD_INTEGER, 27, false, false, NULL, "nlwp", {.integer = 0}, true}, .next = &TABLE_PROCESSES[27] },
+    { .value = { FIELD_INTEGER, 28, false, false, NULL, "tgid", {.integer = 0}, true}, .next = &TABLE_PROCESSES[28] },
+    { .value = { FIELD_INTEGER, 29, false, false, NULL, "tty", {.integer = 0}, true}, .next = &TABLE_PROCESSES[29] },
+    { .value = { FIELD_INTEGER, 30, false, false, NULL, "processor", {.integer = 0}, true}, .next = &TABLE_PROCESSES[30] },
+    { .value = { FIELD_TEXT, 31, false, false, NULL, "checksum", {.text = ""}, false}, .next = NULL }
 };
 
-static struct column_list const TABLE_NETIFACE[] = {
-    { .value = { FIELD_INTEGER, 1, true, false, "scan_id" }, .next = &TABLE_NETIFACE[1] } ,
-    { .value = { FIELD_TEXT, 2, false, false, "scan_time" }, .next = &TABLE_NETIFACE[2] } ,
-    { .value = { FIELD_TEXT, 3, false, true, "name" }, .next = &TABLE_NETIFACE[3] } ,
-    { .value = { FIELD_TEXT, 4, false, false, "adapter" }, .next = &TABLE_NETIFACE[4] } ,
-    { .value = { FIELD_TEXT, 5, false, false, "type" }, .next = &TABLE_NETIFACE[5] } ,
-    { .value = { FIELD_TEXT, 6, false, false, "state" }, .next = &TABLE_NETIFACE[6] } ,
-    { .value = { FIELD_INTEGER, 7, false, false, "mtu" }, .next = &TABLE_NETIFACE[7] } ,
-    { .value = { FIELD_TEXT, 8, false, false, "mac" }, .next = &TABLE_NETIFACE[8] } ,
-    { .value = { FIELD_INTEGER, 9, false, false, "tx_packets" }, .next = &TABLE_NETIFACE[9] } ,
-    { .value = { FIELD_INTEGER, 10, false, false, "rx_packets" }, .next = &TABLE_NETIFACE[10] } ,
-    { .value = { FIELD_INTEGER, 11, false, false, "tx_bytes" }, .next = &TABLE_NETIFACE[11] } ,
-    { .value = { FIELD_INTEGER, 12, false, false, "rx_bytes" }, .next = &TABLE_NETIFACE[12] } ,
-    { .value = { FIELD_INTEGER, 13, false, false, "tx_errors" }, .next = &TABLE_NETIFACE[13] } ,
-    { .value = { FIELD_INTEGER, 14, false, false, "rx_errors" }, .next = &TABLE_NETIFACE[14] } ,
-    { .value = { FIELD_INTEGER, 15, false, false, "tx_dropped" }, .next = &TABLE_NETIFACE[15] } ,
-    { .value = { FIELD_INTEGER, 16, false, false, "rx_dropped" }, .next = &TABLE_NETIFACE[16] } ,
-    { .value = { FIELD_TEXT, 17, false, false, "checksum" }, .next = &TABLE_NETIFACE[17] } ,
-    { .value = { FIELD_TEXT, 18, false, false, "item_id" }, .next = NULL }
+#define NETIFACE_FIELD_COUNT 17
+static struct column_list const TABLE_NETIFACE[NETIFACE_FIELD_COUNT+1] = {
+    { .value = { FIELD_INTEGER, 1, true, false, NULL, "scan_id", {.integer = 0}, true}, .next = &TABLE_NETIFACE[1] },
+    { .value = { FIELD_TEXT, 2, false, false, NULL, "scan_time", {.text = ""}, true}, .next = &TABLE_NETIFACE[2] },
+    { .value = { FIELD_TEXT, 3, false, true, NULL, "name", {.text = ""}, true}, .next = &TABLE_NETIFACE[3] },
+    { .value = { FIELD_TEXT, 4, false, false, NULL, "adapter", {.text = ""}, true}, .next = &TABLE_NETIFACE[4] },
+    { .value = { FIELD_TEXT, 5, false, false, NULL, "type", {.text = ""}, true}, .next = &TABLE_NETIFACE[5] },
+    { .value = { FIELD_TEXT, 6, false, false, NULL, "state", {.text = ""}, true}, .next = &TABLE_NETIFACE[6] },
+    { .value = { FIELD_INTEGER, 7, false, false, NULL, "mtu", {.integer = 0}, true}, .next = &TABLE_NETIFACE[7] },
+    { .value = { FIELD_TEXT, 8, false, false, NULL, "mac", {.text = ""}, true}, .next = &TABLE_NETIFACE[8] },
+    { .value = { FIELD_INTEGER, 9, false, false, NULL, "tx_packets", {.integer = 0}, true}, .next = &TABLE_NETIFACE[9] },
+    { .value = { FIELD_INTEGER, 10, false, false, NULL, "rx_packets", {.integer = 0}, true}, .next = &TABLE_NETIFACE[10] },
+    { .value = { FIELD_INTEGER, 11, false, false, NULL, "tx_bytes", {.integer = 0}, true}, .next = &TABLE_NETIFACE[11] },
+    { .value = { FIELD_INTEGER, 12, false, false, NULL, "rx_bytes", {.integer = 0}, true}, .next = &TABLE_NETIFACE[12] },
+    { .value = { FIELD_INTEGER, 13, false, false, NULL, "tx_errors", {.integer = 0}, true}, .next = &TABLE_NETIFACE[13] },
+    { .value = { FIELD_INTEGER, 14, false, false, NULL, "rx_errors", {.integer = 0}, true}, .next = &TABLE_NETIFACE[14] },
+    { .value = { FIELD_INTEGER, 15, false, false, NULL, "tx_dropped", {.integer = 0}, true}, .next = &TABLE_NETIFACE[15] },
+    { .value = { FIELD_INTEGER, 16, false, false, NULL, "rx_dropped", {.integer = 0}, true}, .next = &TABLE_NETIFACE[16] },
+    { .value = { FIELD_TEXT, 17, false, false, NULL, "checksum", {.text = ""}, false}, .next = &TABLE_NETIFACE[17] },
+    { .value = { FIELD_TEXT, 18, false, false, NULL, "item_id", {.text = ""}, true}, .next = NULL }
 };
 
-static struct column_list const TABLE_NETPROTO[] = {
-    { .value = { FIELD_INTEGER,1, true, false, "scan_id" }, .next = &TABLE_NETPROTO[1]},
-    { .value = { FIELD_TEXT,2, false, true, "iface" }, .next = &TABLE_NETPROTO[2]},
-    { .value = { FIELD_TEXT,3, false, true, "type" }, .next = &TABLE_NETPROTO[3]},
-    { .value = { FIELD_TEXT,4, false, false, "gateway" }, .next = &TABLE_NETPROTO[4]},
-    { .value = { FIELD_TEXT,5, false, false, "dhcp" }, .next = &TABLE_NETPROTO[5]},
-    { .value = { FIELD_INTEGER,6, false, false, "metric" }, .next = &TABLE_NETPROTO[6]},
-    { .value = { FIELD_TEXT,7, false, false, "checksum" }, .next = &TABLE_NETPROTO[7]},
-    { .value = { FIELD_TEXT,8, false, false, "item_id" }, .next = NULL }
+#define NETPROTO_FIELD_COUNT 7
+static struct column_list const TABLE_NETPROTO[NETPROTO_FIELD_COUNT+1] = {
+    { .value = { FIELD_INTEGER, 1, true, false, NULL, "scan_id", {.integer = 0}, true}, .next = &TABLE_NETPROTO[1]},
+    { .value = { FIELD_TEXT, 2, false, true, NULL, "iface", {.text = ""}, true}, .next = &TABLE_NETPROTO[2]},
+    { .value = { FIELD_TEXT, 3, false, true, NULL, "type", {.text = ""}, true}, .next = &TABLE_NETPROTO[3]},
+    { .value = { FIELD_TEXT, 4, false, false, NULL, "gateway", {.text = ""}, true}, .next = &TABLE_NETPROTO[4]},
+    { .value = { FIELD_TEXT, 5, false, false, NULL, "dhcp", {.text = ""}, false}, .next = &TABLE_NETPROTO[5]},
+    { .value = { FIELD_INTEGER, 6, false, false, NULL, "metric", {.integer = 0}, true}, .next = &TABLE_NETPROTO[6]},
+    { .value = { FIELD_TEXT, 7, false, false, NULL, "checksum", {.text = ""}, false}, .next = &TABLE_NETPROTO[7]},
+    { .value = { FIELD_TEXT, 8, false, false, NULL, "item_id", {.text = ""}, true}, .next = NULL }
 };
 
-static struct column_list const TABLE_NETADDR[] = {
-    { .value = { FIELD_INTEGER,1, true, false, "scan_id" }, .next = &TABLE_NETADDR[1]},
-    { .value = { FIELD_TEXT,2, false, true, "iface" }, .next = &TABLE_NETADDR[2]},
-    { .value = { FIELD_TEXT,3, false, true, "proto" }, .next = &TABLE_NETADDR[3]},
-    { .value = { FIELD_TEXT,4, false, true, "address" }, .next = &TABLE_NETADDR[4]},
-    { .value = { FIELD_TEXT,5, false, false, "netmask" }, .next = &TABLE_NETADDR[5]},
-    { .value = { FIELD_TEXT,6, false, false, "broadcast" }, .next = &TABLE_NETADDR[6]},
-    { .value = { FIELD_TEXT,7, false, false, "checksum" }, .next = &TABLE_NETADDR[7]},
-    { .value = { FIELD_TEXT,8, false, false, "item_id" }, .next = NULL},
+#define NETADDR_FIELD_COUNT 7
+static struct column_list const TABLE_NETADDR[NETADDR_FIELD_COUNT+1] = {
+    { .value = { FIELD_INTEGER, 1, true, false, NULL, "scan_id", {.integer = 0}, true}, .next = &TABLE_NETADDR[1]},
+    { .value = { FIELD_TEXT, 2, false, true, NULL, "iface", {.text = ""}, true}, .next = &TABLE_NETADDR[2]},
+    { .value = { FIELD_TEXT, 3, false, true, NULL, "proto", {.text = ""}, true}, .next = &TABLE_NETADDR[3]},
+    { .value = { FIELD_TEXT, 4, false, true, NULL, "address", {.text = ""}, true}, .next = &TABLE_NETADDR[4]},
+    { .value = { FIELD_TEXT, 5, false, false, NULL, "netmask", {.text = ""}, true}, .next = &TABLE_NETADDR[5]},
+    { .value = { FIELD_TEXT, 6, false, false, NULL, "broadcast", {.text = ""}, true}, .next = &TABLE_NETADDR[6]},
+    { .value = { FIELD_TEXT, 7, false, false, NULL, "checksum", {.text = ""}, false}, .next = &TABLE_NETADDR[7]},
+    { .value = { FIELD_TEXT, 8, false, false, NULL, "item_id", {.text = ""}, true}, .next = NULL},
 };
 
-static struct column_list const TABLE_PORTS[] = {
-    { .value = { FIELD_INTEGER,1, true, false, "scan_id" }, .next = &TABLE_PORTS[1]},
-    { .value = { FIELD_TEXT,2, false, false, "scan_time" }, .next = &TABLE_PORTS[2]},
-    { .value = { FIELD_TEXT,3, false, true, "protocol" }, .next = &TABLE_PORTS[3]},
-    { .value = { FIELD_TEXT,4, false, true, "local_ip" }, .next = &TABLE_PORTS[4]},
-    { .value = { FIELD_INTEGER,5, false, true, "local_port" }, .next = &TABLE_PORTS[5]},
-    { .value = { FIELD_TEXT,6, false, false, "remote_ip" }, .next = &TABLE_PORTS[6]},
-    { .value = { FIELD_INTEGER,7, false, false, "remote_port" }, .next = &TABLE_PORTS[7]},
-    { .value = { FIELD_INTEGER,8, false, false, "tx_queue" }, .next = &TABLE_PORTS[8]},
-    { .value = { FIELD_INTEGER,9, false, false, "rx_queue" }, .next = &TABLE_PORTS[9]},
-    { .value = { FIELD_INTEGER,10, false, true, "inode" }, .next = &TABLE_PORTS[10]},
-    { .value = { FIELD_TEXT,11, false, false, "state" }, .next = &TABLE_PORTS[11]},
-    { .value = { FIELD_INTEGER,12, false, false, "PID" }, .next = &TABLE_PORTS[12]},
-    { .value = { FIELD_TEXT,13, false, false, "process" }, .next = &TABLE_PORTS[13]},
-    { .value = { FIELD_TEXT,14, false, false, "checksum" }, .next = &TABLE_PORTS[14]},
-    { .value = { FIELD_TEXT,15, false, false, "item_id" }, .next = NULL},
+#define PORTS_FIELD_COUNT 14
+static struct column_list const TABLE_PORTS[PORTS_FIELD_COUNT+1] = {
+    { .value = { FIELD_INTEGER, 1, true, false, NULL, "scan_id", {.integer = 0}, true}, .next = &TABLE_PORTS[1]},
+    { .value = { FIELD_TEXT, 2, false, false, NULL, "scan_time", {.text = ""}, true}, .next = &TABLE_PORTS[2]},
+    { .value = { FIELD_TEXT, 3, false, true, NULL, "protocol", {.text = ""}, true}, .next = &TABLE_PORTS[3]},
+    { .value = { FIELD_TEXT, 4, false, true, NULL, "local_ip", {.text = ""}, true}, .next = &TABLE_PORTS[4]},
+    { .value = { FIELD_INTEGER, 5, false, true, NULL, "local_port", {.integer = 0}, true}, .next = &TABLE_PORTS[5]},
+    { .value = { FIELD_TEXT, 6, false, false, NULL, "remote_ip", {.text = ""}, true}, .next = &TABLE_PORTS[6]},
+    { .value = { FIELD_INTEGER, 7, false, false, NULL, "remote_port", {.integer = 0}, true}, .next = &TABLE_PORTS[7]},
+    { .value = { FIELD_INTEGER, 8, false, false, NULL, "tx_queue", {.integer = 0}, true}, .next = &TABLE_PORTS[8]},
+    { .value = { FIELD_INTEGER, 9, false, false, NULL, "rx_queue", {.integer = 0}, true}, .next = &TABLE_PORTS[9]},
+    { .value = { FIELD_INTEGER_LONG, 10, false, true, NULL, "inode", {.integer_long = 0LL}, true}, .next = &TABLE_PORTS[10]},
+    { .value = { FIELD_TEXT, 11, false, false, NULL, "state", {.text = ""}, true}, .next = &TABLE_PORTS[11]},
+    { .value = { FIELD_INTEGER, 12, false, false, "pid", "PID", {.integer = 0}, true}, .next = &TABLE_PORTS[12]},
+    { .value = { FIELD_TEXT, 13, false, false, NULL, "process", {.text = ""}, true}, .next = &TABLE_PORTS[13]},
+    { .value = { FIELD_TEXT, 14, false, false, NULL, "checksum", {.text = ""}, false}, .next = &TABLE_PORTS[14]},
+    { .value = { FIELD_TEXT, 15, false, false, NULL, "item_id", {.text = ""}, true}, .next = NULL},
 };
 
-static struct column_list const TABLE_PACKAGES[] = {
-    { .value = { FIELD_INTEGER, 1, true, true, "scan_id" }, .next = &TABLE_PACKAGES[1] },
-    { .value = { FIELD_TEXT, 2, false, false, "scan_time" }, .next = &TABLE_PACKAGES[2] },
-    { .value = { FIELD_TEXT, 3, false, false, "format" }, .next = &TABLE_PACKAGES[3] },
-    { .value = { FIELD_TEXT, 4, false, true, "name" }, .next = &TABLE_PACKAGES[4] },
-    { .value = { FIELD_TEXT, 5, false, false, "priority" }, .next = &TABLE_PACKAGES[5] },
-    { .value = { FIELD_TEXT, 6, false, false, "section" }, .next = &TABLE_PACKAGES[6] },
-    { .value = { FIELD_INTEGER, 7, false, false, "size" }, .next = &TABLE_PACKAGES[7] },
-    { .value = { FIELD_TEXT, 8, false, false, "vendor" }, .next = &TABLE_PACKAGES[8] },
-    { .value = { FIELD_TEXT, 9, false, false, "install_time" }, .next = &TABLE_PACKAGES[9] },
-    { .value = { FIELD_TEXT, 10, false, true, "version" }, .next = &TABLE_PACKAGES[10] },
-    { .value = { FIELD_TEXT, 11, false, true, "architecture" }, .next = &TABLE_PACKAGES[11] },
-    { .value = { FIELD_TEXT, 12, false, false, "multiarch" }, .next = &TABLE_PACKAGES[12] },
-    { .value = { FIELD_TEXT, 13, false, false, "source" }, .next = &TABLE_PACKAGES[13] },
-    { .value = { FIELD_TEXT, 14, false, false, "description" }, .next = &TABLE_PACKAGES[14] },
-    { .value = { FIELD_TEXT, 15, false, false, "location" }, .next = &TABLE_PACKAGES[15] },
-    { .value = { FIELD_INTEGER, 16, false, false, "triaged" }, .next = &TABLE_PACKAGES[16] },
-    { .value = { FIELD_TEXT, 17, false, false, "cpe" }, .next = &TABLE_PACKAGES[17] },
-    { .value = { FIELD_TEXT, 18, false, false, "msu_name" }, .next = &TABLE_PACKAGES[18] },
-    { .value = { FIELD_TEXT, 19, false, false, "checksum" }, .next = &TABLE_PACKAGES[19] },
-    { .value = { FIELD_TEXT, 20, false, false, "item_id" }, .next = NULL },
+#define PACKAGES_FIELD_COUNT 19
+static struct column_list const TABLE_PACKAGES[PACKAGES_FIELD_COUNT+1] = {
+    { .value = { FIELD_INTEGER, 1, true, false, NULL, "scan_id", {.integer = 0}, true}, .next = &TABLE_PACKAGES[1] },
+    { .value = { FIELD_TEXT, 2, false, false, NULL, "scan_time", {.text = ""}, true}, .next = &TABLE_PACKAGES[2] },
+    { .value = { FIELD_TEXT, 3, false, false, NULL, "format", {.text = ""}, false}, .next = &TABLE_PACKAGES[3] },
+    { .value = { FIELD_TEXT, 4, false, true, NULL, "name", {.text = ""}, true}, .next = &TABLE_PACKAGES[4] },
+    { .value = { FIELD_TEXT, 5, false, false, NULL, "priority", {.text = ""}, true}, .next = &TABLE_PACKAGES[5] },
+    { .value = { FIELD_TEXT, 6, false, false, "groups", "section", {.text = ""}, true}, .next = &TABLE_PACKAGES[6] },
+    { .value = { FIELD_INTEGER, 7, false, false, NULL, "size", {.integer = 0}, true}, .next = &TABLE_PACKAGES[7] },
+    { .value = { FIELD_TEXT, 8, false, false, NULL, "vendor", {.text = ""}, true}, .next = &TABLE_PACKAGES[8] },
+    { .value = { FIELD_TEXT, 9, false, false, NULL, "install_time", {.text = ""}, true}, .next = &TABLE_PACKAGES[9] },
+    { .value = { FIELD_TEXT, 10, false, true, NULL, "version", {.text = ""}, true}, .next = &TABLE_PACKAGES[10] },
+    { .value = { FIELD_TEXT, 11, false, true, NULL, "architecture", {.text = ""}, true}, .next = &TABLE_PACKAGES[11] },
+    { .value = { FIELD_TEXT, 12, false, false, NULL, "multiarch", {.text = ""}, true}, .next = &TABLE_PACKAGES[12] },
+    { .value = { FIELD_TEXT, 13, false, false, NULL, "source", {.text = ""}, true}, .next = &TABLE_PACKAGES[13] },
+    { .value = { FIELD_TEXT, 14, false, false, NULL, "description", {.text = ""}, true}, .next = &TABLE_PACKAGES[14] },
+    { .value = { FIELD_TEXT, 15, false, false, NULL, "location", {.text = ""}, true}, .next = &TABLE_PACKAGES[15] },
+    { .value = { FIELD_INTEGER, 16, true, false, NULL, "triaged", {.integer = 0}, true}, .next = &TABLE_PACKAGES[16] },
+    { .value = { FIELD_TEXT, 17, true, false, NULL, "cpe", {.text = ""}, true}, .next = &TABLE_PACKAGES[17] },
+    { .value = { FIELD_TEXT, 18, true, false, NULL, "msu_name", {.text = ""}, true}, .next = &TABLE_PACKAGES[18] },
+    { .value = { FIELD_TEXT, 19, false, false, NULL, "checksum", {.text = ""}, false}, .next = &TABLE_PACKAGES[19] },
+    { .value = { FIELD_TEXT, 20, false, false, NULL, "item_id", {.text = ""}, true}, .next = NULL },
 };
 
-static struct column_list const TABLE_OS[] = {
-    { .value = { FIELD_INTEGER, 1, true, false, "scan_id" }, .next = &TABLE_OS[1] },
-    { .value = { FIELD_TEXT, 2, false, false, "scan_time" }, .next = &TABLE_OS[2] },
-    { .value = { FIELD_TEXT, 3, false, false, "hostname" }, .next = &TABLE_OS[3] },
-    { .value = { FIELD_TEXT, 4, false, false, "architecture" }, .next = &TABLE_OS[4] },
-    { .value = { FIELD_TEXT, 5, false, true, "os_name" }, .next = &TABLE_OS[5] },
-    { .value = { FIELD_TEXT, 6, false, false, "os_version" }, .next = &TABLE_OS[6] },
-    { .value = { FIELD_TEXT, 7, false, false, "os_codename" }, .next = &TABLE_OS[7] },
-    { .value = { FIELD_TEXT, 8, false, false, "os_major" }, .next = &TABLE_OS[8] },
-    { .value = { FIELD_TEXT, 9, false, false, "os_minor" }, .next = &TABLE_OS[9] },
-    { .value = { FIELD_TEXT, 10, false, false, "os_patch" }, .next = &TABLE_OS[10] },
-    { .value = { FIELD_TEXT, 11, false, false, "os_build" }, .next = &TABLE_OS[11] },
-    { .value = { FIELD_TEXT, 12, false, false, "os_platform" }, .next = &TABLE_OS[12] },
-    { .value = { FIELD_TEXT, 13, false, false, "sysname" }, .next = &TABLE_OS[13] },
-    { .value = { FIELD_TEXT, 14, false, false, "release" }, .next = &TABLE_OS[14] },
-    { .value = { FIELD_TEXT, 15, false, false, "version" }, .next = &TABLE_OS[15] },
-    { .value = { FIELD_TEXT, 16, false, false, "os_release" }, .next = &TABLE_OS[16] },
-    { .value = { FIELD_TEXT, 17, false, false, "os_display_version" }, .next = &TABLE_OS[17] },
-    { .value = { FIELD_TEXT, 18, false, false, "checksum" }, .next = NULL }
+#define OS_FIELD_COUNT 19
+static struct column_list const TABLE_OS[OS_FIELD_COUNT+1] = {
+    { .value = { FIELD_INTEGER, 1, true, false, NULL, "scan_id", {.integer = 0}, true}, .next = &TABLE_OS[1] },
+    { .value = { FIELD_TEXT, 2, false, false, NULL, "scan_time", {.text = ""}, true}, .next = &TABLE_OS[2] },
+    { .value = { FIELD_TEXT, 3, false, false, NULL, "hostname", {.text = ""}, true}, .next = &TABLE_OS[3] },
+    { .value = { FIELD_TEXT, 4, false, false, NULL, "architecture", {.text = ""}, true}, .next = &TABLE_OS[4] },
+    { .value = { FIELD_TEXT, 5, false, true, NULL, "os_name", {.text = ""}, true}, .next = &TABLE_OS[5] },
+    { .value = { FIELD_TEXT, 6, false, false, NULL, "os_version", {.text = ""}, true}, .next = &TABLE_OS[6] },
+    { .value = { FIELD_TEXT, 7, false, false, NULL, "os_codename", {.text = ""}, true}, .next = &TABLE_OS[7] },
+    { .value = { FIELD_TEXT, 8, false, false, NULL, "os_major", {.text = ""}, true}, .next = &TABLE_OS[8] },
+    { .value = { FIELD_TEXT, 9, false, false, NULL, "os_minor", {.text = ""}, true}, .next = &TABLE_OS[9] },
+    { .value = { FIELD_TEXT, 10, false, false, NULL, "os_patch", {.text = ""}, true}, .next = &TABLE_OS[10] },
+    { .value = { FIELD_TEXT, 11, false, false, NULL, "os_build", {.text = ""}, true}, .next = &TABLE_OS[11] },
+    { .value = { FIELD_TEXT, 12, false, false, NULL, "os_platform", {.text = ""}, true}, .next = &TABLE_OS[12] },
+    { .value = { FIELD_TEXT, 13, false, false, NULL, "sysname", {.text = ""}, true}, .next = &TABLE_OS[13] },
+    { .value = { FIELD_TEXT, 14, false, false, NULL, "release", {.text = ""}, true}, .next = &TABLE_OS[14] },
+    { .value = { FIELD_TEXT, 15, false, false, NULL, "version", {.text = ""}, true}, .next = &TABLE_OS[15] },
+    { .value = { FIELD_TEXT, 16, false, false, NULL, "os_release", {.text = ""}, true}, .next = &TABLE_OS[16] },
+    { .value = { FIELD_TEXT, 17, false, false, NULL, "checksum", {.text = ""}, false}, .next = &TABLE_OS[17] },
+    { .value = { FIELD_TEXT, 18, false, false, NULL, "os_display_version", {.text = ""}, true}, .next = &TABLE_OS[18] },
+    { .value = { FIELD_INTEGER, 19, true, false, NULL, "triaged", {.integer = 0}, true}, .next = &TABLE_OS[19] },
+    { .value = { FIELD_TEXT, 20, true, false, NULL, "reference", {.text = ""}, false}, .next = NULL },
 };
 
-static struct column_list const TABLE_HARDWARE[] = {
-    { .value = { FIELD_INTEGER, 1, true, false, "scan_id" }, .next = &TABLE_HARDWARE[1] },
-    { .value = { FIELD_TEXT, 2, false, false, "scan_time" }, .next = &TABLE_HARDWARE[2] },
-    { .value = { FIELD_TEXT, 3, false, true, "board_serial" }, .next = &TABLE_HARDWARE[3] },
-    { .value = { FIELD_TEXT, 4, false, false, "cpu_name" }, .next = &TABLE_HARDWARE[4] },
-    { .value = { FIELD_INTEGER, 5, false, false, "cpu_cores" }, .next = &TABLE_HARDWARE[5] },
-    { .value = { FIELD_REAL, 6, false, false, "cpu_mhz" }, .next = &TABLE_HARDWARE[6] },
-    { .value = { FIELD_INTEGER, 7, false, false, "ram_total" }, .next = &TABLE_HARDWARE[7] },
-    { .value = { FIELD_INTEGER, 8, false, false, "ram_free" }, .next = &TABLE_HARDWARE[8] },
-    { .value = { FIELD_INTEGER, 9, false, false, "ram_usage" }, .next = &TABLE_HARDWARE[9] },
-    { .value = { FIELD_TEXT, 10, false, false, "checksum" }, .next = NULL }
+#define HARDWARE_FIELD_COUNT 9
+static struct column_list const TABLE_HARDWARE[HARDWARE_FIELD_COUNT+1] = {
+    { .value = { FIELD_INTEGER, 1, true, false, NULL, "scan_id", {.integer = 0}, true}, .next = &TABLE_HARDWARE[1] },
+    { .value = { FIELD_TEXT, 2, false, false, NULL, "scan_time", {.text = ""}, true}, .next = &TABLE_HARDWARE[2] },
+    { .value = { FIELD_TEXT, 3, false, true, NULL, "board_serial", {.text = ""}, true}, .next = &TABLE_HARDWARE[3] },
+    { .value = { FIELD_TEXT, 4, false, false, NULL, "cpu_name", {.text = ""}, true}, .next = &TABLE_HARDWARE[4] },
+    { .value = { FIELD_INTEGER, 5, false, false, NULL, "cpu_cores", {.integer = 0}, true}, .next = &TABLE_HARDWARE[5] },
+    { .value = { FIELD_REAL, 6, false, false, NULL, "cpu_mhz", {.real = 0.0}, true}, .next = &TABLE_HARDWARE[6] },
+    { .value = { FIELD_INTEGER, 7, false, false, NULL, "ram_total", {.integer = 0}, true}, .next = &TABLE_HARDWARE[7] },
+    { .value = { FIELD_INTEGER, 8, false, false, NULL, "ram_free", {.integer = 0}, true}, .next = &TABLE_HARDWARE[8] },
+    { .value = { FIELD_INTEGER, 9, false, false, NULL, "ram_usage", {.integer = 0}, true}, .next = &TABLE_HARDWARE[9] },
+    { .value = { FIELD_TEXT, 10, false, false, NULL, "checksum", {.text = ""}, false}, .next = NULL }
 };
-
-
 
 static struct kv_list const TABLE_MAP[] = {
-    { .current = { "network_iface", "sys_netiface", false, TABLE_NETIFACE }, .next = &TABLE_MAP[1]},
-    { .current = { "network_protocol", "sys_netproto", false, TABLE_NETPROTO }, .next = &TABLE_MAP[2]},
-    { .current = { "network_address", "sys_netaddr", false, TABLE_NETADDR }, .next = &TABLE_MAP[3]},
-    { .current = { "osinfo", "sys_osinfo", false, TABLE_OS }, .next = &TABLE_MAP[4]},
-    { .current = { "hwinfo", "sys_hwinfo", false, TABLE_HARDWARE }, .next = &TABLE_MAP[5]},
-    { .current = { "ports", "sys_ports", false, TABLE_PORTS }, .next = &TABLE_MAP[6]},
-    { .current = { "packages", "sys_programs", false, TABLE_PACKAGES }, .next = &TABLE_MAP[7]},
-    { .current = { "processes", "sys_processes",  false, TABLE_PROCESSES}, .next = NULL},
+    { .current = { "network_iface", "sys_netiface", false, TABLE_NETIFACE, NETIFACE_FIELD_COUNT }, .next = &TABLE_MAP[1]},
+    { .current = { "network_protocol", "sys_netproto", false, TABLE_NETPROTO, NETPROTO_FIELD_COUNT }, .next = &TABLE_MAP[2]},
+    { .current = { "network_address", "sys_netaddr", false, TABLE_NETADDR, NETADDR_FIELD_COUNT }, .next = &TABLE_MAP[3]},
+    { .current = { "osinfo", "sys_osinfo", false, TABLE_OS, OS_FIELD_COUNT }, .next = &TABLE_MAP[4]},
+    { .current = { "hwinfo", "sys_hwinfo", false, TABLE_HARDWARE, HARDWARE_FIELD_COUNT }, .next = &TABLE_MAP[5]},
+    { .current = { "ports", "sys_ports", false, TABLE_PORTS, PORTS_FIELD_COUNT }, .next = &TABLE_MAP[6]},
+    { .current = { "packages", "sys_programs", false, TABLE_PACKAGES, PACKAGES_FIELD_COUNT }, .next = &TABLE_MAP[7]},
+    { .current = { "hotfixes", "sys_hotfixes",  false, TABLE_HOTFIXES, HOTFIXES_FIELD_COUNT }, .next = &TABLE_MAP[8]},
+    { .current = { "processes", "sys_processes",  false, TABLE_PROCESSES, PROCESSES_FIELD_COUNT }, .next = NULL},
 };
 
 
-int wdb_parse(char * input, char * output) {
+int wdb_parse(char * input, char * output, int peer) {
     char * actor;
     char * id;
     char * query;
@@ -197,13 +207,19 @@ int wdb_parse(char * input, char * output) {
     int agent_id = 0;
     char sagent_id[64] = "000";
     wdb_t * wdb;
+    wdb_t * wdb_global;
     cJSON * data;
     char * out;
     int result = 0;
+    struct timeval begin;
+    struct timeval end;
+    struct timeval diff;
+
+    w_inc_queries_total();
 
     if (!input) {
         mdebug1("Empty input query.");
-        return -1;
+        return OS_INVALID;
     }
 
     // Clean string
@@ -215,7 +231,7 @@ int wdb_parse(char * input, char * output) {
         mdebug1("Invalid DB query syntax.");
         mdebug2("DB query: %s", input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", input);
-        return -1;
+        return OS_INVALID;
     }
 
     actor = input;
@@ -224,11 +240,13 @@ int wdb_parse(char * input, char * output) {
     if (strcmp(actor, "agent") == 0) {
         id = next;
 
+        w_inc_agent();
+
         if (next = wstr_chr(id, ' '), !next) {
             mdebug1("Invalid DB query syntax.");
             mdebug2("DB query error near: %s", id);
             snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", id);
-            return -1;
+            return OS_INVALID;
         }
 
         *next++ = '\0';
@@ -237,233 +255,319 @@ int wdb_parse(char * input, char * output) {
         if (agent_id = strtol(id, &next, 10), *next) {
             mdebug1("Invalid agent ID '%s'", id);
             snprintf(output, OS_MAXSTR + 1, "err Invalid agent ID '%.32s'", id);
-            return -1;
+            return OS_INVALID;
         }
 
         snprintf(sagent_id, sizeof(sagent_id), "%03d", agent_id);
 
+        mdebug2("Agent %s query: %s", sagent_id, query);
+
+        // Don't perform this check if it's a manager.
+        if (agent_id != 0) {
+            if (wdb_global = wdb_open_global(), !wdb_global) {
+                mdebug2("Couldn't open DB global: %s/%s.db", WDB2_DIR, WDB_GLOB_NAME);
+                snprintf(output, OS_MAXSTR + 1, "err Couldn't open DB global");
+                return OS_INVALID;
+            } else if (!wdb_global->enabled) {
+                mdebug2("Database disabled: %s/%s.db.", WDB2_DIR, WDB_GLOB_NAME);
+                snprintf(output, OS_MAXSTR + 1, "err DB global disabled.");
+                wdb_leave(wdb_global);
+                return OS_INVALID;
+            }
+
+            if (wdb_global_agent_exists(wdb_global, agent_id) <= 0) {
+                mdebug2("No agent with id %s found.", sagent_id);
+                snprintf(output, OS_MAXSTR + 1, "err Agent not found");
+                wdb_leave(wdb_global);
+                return OS_INVALID;
+            }
+            wdb_leave(wdb_global);
+        }
+
         if (wdb = wdb_open_agent2(agent_id), !wdb) {
             merror("Couldn't open DB for agent '%s'", sagent_id);
             snprintf(output, OS_MAXSTR + 1, "err Couldn't open DB for agent %d", agent_id);
-            return -1;
+            return OS_INVALID;
         }
-
-        mdebug2("Agent %s query: %s", sagent_id, query);
+        // Add the current peer to wdb structure
+        wdb->peer = peer;
 
         if (next = wstr_chr(query, ' '), next) {
             *next++ = '\0';
         }
 
         if (strcmp(query, "syscheck") == 0) {
+            w_inc_agent_syscheck();
             if (!next) {
                 mdebug1("DB(%s) Invalid FIM query syntax.", sagent_id);
                 mdebug2("DB(%s) FIM query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid Syscheck query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_syscheck(wdb, WDB_FIM, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_syscheck_time(diff);
             }
         } else if (strcmp(query, "fim_file") == 0) {
+            w_inc_agent_fim_file();
             if (!next) {
                 mdebug1("DB(%s) Invalid FIM file query syntax.", sagent_id);
                 mdebug2("DB(%s) FIM file query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid Syscheck query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_syscheck(wdb, WDB_FIM_FILE, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_fim_file_time(diff);
             }
         } else if (strcmp(query, "fim_registry") == 0) {
+            w_inc_agent_fim_registry();
             if (!next) {
                 mdebug1("DB(%s) Invalid FIM registry query syntax.", sagent_id);
                 mdebug2("DB(%s) FIM registry query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid Syscheck query syntax, near '%.32s'", query);
+                result = OS_INVALID;
+            } else {
+                gettimeofday(&begin, 0);
+                result = wdb_parse_syscheck(wdb, WDB_FIM_REGISTRY, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_fim_registry_time(diff);
+            }
+        } else if (strcmp(query, "fim_registry_key") == 0) {
+            if (!next) {
+                mdebug1("DB(%s) Invalid FIM registry key query syntax.", sagent_id);
+                mdebug2("DB(%s) FIM registry key query error near: %s", sagent_id, query);
+                snprintf(output, OS_MAXSTR + 1, "err Invalid Syscheck query syntax, near '%.32s'", query);
                 result = -1;
             } else {
-                result = wdb_parse_syscheck(wdb, WDB_FIM_REGISTRY, next, output);
+                result = wdb_parse_syscheck(wdb, WDB_FIM_REGISTRY_KEY, next, output);
+            }
+        } else if (strcmp(query, "fim_registry_value") == 0) {
+            if (!next) {
+                mdebug1("DB(%s) Invalid FIM registry value query syntax.", sagent_id);
+                mdebug2("DB(%s) FIM registry value query error near: %s", sagent_id, query);
+                snprintf(output, OS_MAXSTR + 1, "err Invalid Syscheck query syntax, near '%.32s'", query);
+                result = -1;
+            } else {
+                result = wdb_parse_syscheck(wdb, WDB_FIM_REGISTRY_VALUE, next, output);
             }
         } else if (strcmp(query, "sca") == 0) {
+            w_inc_agent_sca();
             if (!next) {
                 mdebug1("Invalid DB query syntax.");
                 mdebug2("DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_sca(wdb, next, output);
-                if (result < 0){
-                    merror("Unable to update 'sca_check' table for agent '%s'", sagent_id);
-                } else {
-                    result = 0;
-                }
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_sca_time(diff);
             }
         } else if (strcmp(query, "netinfo") == 0) {
+            w_inc_agent_syscollector_deprecated_network_info();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
-                if (wdb_parse_netinfo(wdb, next, output) == 0){
-                    mdebug2("Updated 'sys_netiface' table for agent '%s'", sagent_id);
-                } else {
-                    merror("Unable to update 'sys_netiface' table for agent '%s'", sagent_id);
-                }
+                gettimeofday(&begin, 0);
+                result = wdb_parse_netinfo(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_syscollector_deprecated_network_info_time(diff);
             }
         } else if (strcmp(query, "netproto") == 0) {
+            w_inc_agent_syscollector_deprecated_network_protocol();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
-                if (wdb_parse_netproto(wdb, next, output) == 0){
-                    mdebug2("Updated 'sys_netproto' table for agent '%s'", sagent_id);
-                } else {
-                    merror("Unable to update 'sys_netproto' table for agent '%s'", sagent_id);
-                }
+                gettimeofday(&begin, 0);
+                result = wdb_parse_netproto(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_syscollector_deprecated_network_protocol_time(diff);
             }
         } else if (strcmp(query, "netaddr") == 0) {
+            w_inc_agent_syscollector_deprecated_network_address();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
-                if (wdb_parse_netaddr(wdb, next, output) == 0){
-                    mdebug2("Updated 'sys_netaddr' table for agent '%s'", sagent_id);
-                } else {
-                    merror("Unable to update 'sys_netaddr' table for agent '%s'", sagent_id);
-                }
+                gettimeofday(&begin, 0);
+                result = wdb_parse_netaddr(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_syscollector_deprecated_network_address_time(diff);
             }
         } else if (strcmp(query, "osinfo") == 0) {
+            w_inc_agent_syscollector_deprecated_osinfo();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
-                if (wdb_parse_osinfo(wdb, next, output) == 0){
-                    mdebug2("Updated 'sys_osinfo' table for agent '%s'", sagent_id);
-                } else {
-                    merror("Unable to update 'sys_osinfo' table for agent '%s'", sagent_id);
-                }
+                gettimeofday(&begin, 0);
+                result = wdb_parse_osinfo(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_syscollector_deprecated_osinfo_time(diff);
             }
         } else if (strcmp(query, "hardware") == 0) {
+            w_inc_agent_syscollector_deprecated_hardware();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
-                if (wdb_parse_hardware(wdb, next, output) == 0){
-                    mdebug2("Updated 'sys_hwinfo' table for agent '%s'", sagent_id);
-                } else {
-                    merror("Unable to update 'sys_hwinfo' table for agent '%s'", sagent_id);
-                }
+                gettimeofday(&begin, 0);
+                result = wdb_parse_hardware(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_syscollector_deprecated_hardware_time(diff);
             }
         } else if (strcmp(query, "port") == 0) {
+            w_inc_agent_syscollector_deprecated_ports();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
-                if (wdb_parse_ports(wdb, next, output) == 0){
-                    mdebug2("Updated 'sys_ports' table for agent '%s'", sagent_id);
-                } else {
-                    merror("Unable to update 'sys_ports' table for agent '%s'", sagent_id);
-                }
+                gettimeofday(&begin, 0);
+                result = wdb_parse_ports(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_syscollector_deprecated_ports_time(diff);
             }
         } else if (strcmp(query, "package") == 0) {
+            w_inc_agent_syscollector_deprecated_packages();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
-                if (wdb_parse_packages(wdb, next, output) == 0){
-                    mdebug2("Updated 'sys_programs' table for agent '%s'", sagent_id);
-                } else {
-                    merror("Unable to update 'sys_programs' table for agent '%s'", sagent_id);
-                }
+                gettimeofday(&begin, 0);
+                result = wdb_parse_packages(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_syscollector_deprecated_packages_time(diff);
             }
         } else if (strcmp(query, "hotfix") == 0) {
+            w_inc_agent_syscollector_deprecated_hotfixes();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
-                if (wdb_parse_hotfixes(wdb, next, output) == 0){
-                    mdebug2("Updated 'sys_hotfixes' table for agent '%s'", sagent_id);
-                } else {
-                    merror("Unable to update 'sys_hotfixes' table for agent '%s'", sagent_id);
-                }
+                gettimeofday(&begin, 0);
+                result = wdb_parse_hotfixes(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_syscollector_deprecated_hotfixes_time(diff);
             }
         } else if (strcmp(query, "process") == 0) {
+            w_inc_agent_syscollector_deprecated_process();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
-                if (wdb_parse_processes(wdb, next, output) == 0){
-                    mdebug2("Updated 'sys_processes' table for agent '%s'", sagent_id);
-                } else {
-                    merror("Unable to update 'sys_processes' table for agent '%s'", sagent_id);
-                }
+                gettimeofday(&begin, 0);
+                result = wdb_parse_processes(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_syscollector_deprecated_process_time(diff);
             }
         } else if (strcmp(query, "dbsync") == 0) {
+            w_inc_agent_dbsync();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
-                if (wdb_parse_dbsync(wdb, next, output)){
-                    mdebug2("Updated based on table deltas for agent '%s'", sagent_id);
-                }
+                gettimeofday(&begin, 0);
+                result = wdb_parse_dbsync(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_dbsync_time(diff);
             }
         } else if (strcmp(query, "ciscat") == 0) {
+            w_inc_agent_ciscat();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
-                if (wdb_parse_ciscat(wdb, next, output) == 0){
-                    mdebug2("Updated 'ciscat_results' table for agent '%s'", sagent_id);
-                } else {
-                    merror("Unable to update 'ciscat_results' table for agent '%s'", sagent_id);
-                }
+                gettimeofday(&begin, 0);
+                result = wdb_parse_ciscat(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_ciscat_time(diff);
             }
         } else if (strcmp(query, "rootcheck") == 0) {
+            w_inc_agent_rootcheck();
             if (!next) {
                 mdebug1("DB(%s) Invalid rootcheck query syntax.", sagent_id);
                 mdebug2("DB(%s) rootcheck query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid Rootcheck query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_rootcheck(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_rootcheck_time(diff);
             }
-        } else if (strcmp(query, "vuln_cve") == 0) {
+        } else if (strcmp(query, "vuln_cves") == 0) {
+            w_inc_agent_vul_detector();
             if (!next) {
-                mdebug1("DB(%s) Invalid vuln_cve query syntax.", sagent_id);
-                mdebug2("DB(%s) vuln_cve query error near: %s", sagent_id, query);
-                snprintf(output, OS_MAXSTR + 1, "err Invalid vuln_cve query syntax, near '%.32s'", query);
-                result = -1;
+                mdebug1("DB(%s) Invalid vuln_cves query syntax.", sagent_id);
+                mdebug2("DB(%s) vuln_cves query error near: %s", sagent_id, query);
+                snprintf(output, OS_MAXSTR + 1, "err Invalid vuln_cves query syntax, near '%.32s'", query);
+                result = OS_INVALID;
             } else {
-                result = wdb_parse_vuln_cve(wdb, next, output);
+                gettimeofday(&begin, 0);
+                result = wdb_parse_vuln_cves(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_vul_detector_time(diff);
             }
         } else if (strcmp(query, "sql") == 0) {
+            w_inc_agent_sql();
             if (!next) {
                 mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
                 mdebug2("DB(%s) query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
                 sql = next;
 
-                if (data = wdb_exec(wdb->db, sql), data) {
+                gettimeofday(&begin, 0);
+                data = wdb_exec(wdb->db, sql);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_sql_time(diff);
+                if (data) {
                     out = cJSON_PrintUnformatted(data);
                     snprintf(output, OS_MAXSTR + 1, "ok %s", out);
                     os_free(out);
@@ -472,57 +576,74 @@ int wdb_parse(char * input, char * output) {
                     mdebug1("DB(%s) Cannot execute SQL query.", sagent_id);
                     mdebug2("DB(%s) SQL query: %s", sagent_id, sql);
                     snprintf(output, OS_MAXSTR + 1, "err Cannot execute SQL query");
-                    result = -1;
+                    result = OS_INVALID;
                 }
             }
         } else if (strcmp(query, "remove") == 0) {
+            w_inc_agent_remove();
             wdb_leave(wdb);
             snprintf(output, OS_MAXSTR + 1, "ok");
-            result = 0;
 
             w_mutex_lock(&pool_mutex);
 
+            gettimeofday(&begin, 0);
             if (wdb_close(wdb, FALSE) < 0) {
                 mdebug1("DB(%s) Cannot close database.", sagent_id);
                 snprintf(output, OS_MAXSTR + 1, "err Cannot close database");
-                result = -1;
+                result = OS_INVALID;
             }
-
             if (wdb_remove_database(sagent_id) < 0) {
                 snprintf(output, OS_MAXSTR + 1, "err Cannot remove database");
-                result = -1;
+                result = OS_INVALID;
             }
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_agent_remove_time(diff);
 
             w_mutex_unlock(&pool_mutex);
             return result;
         } else if (strcmp(query, "begin") == 0) {
+            w_inc_agent_begin();
+            gettimeofday(&begin, 0);
             if (wdb_begin2(wdb) < 0) {
                 mdebug1("DB(%s) Cannot begin transaction.", sagent_id);
                 snprintf(output, OS_MAXSTR + 1, "err Cannot begin transaction");
-                result = -1;
+                result = OS_INVALID;
             } else {
                 snprintf(output, OS_MAXSTR + 1, "ok");
             }
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_agent_begin_time(diff);
         } else if (strcmp(query, "commit") == 0) {
+            w_inc_agent_commit();
+            gettimeofday(&begin, 0);
             if (wdb_commit2(wdb) < 0) {
                 mdebug1("DB(%s) Cannot end transaction.", sagent_id);
                 snprintf(output, OS_MAXSTR + 1, "err Cannot end transaction");
-                result = -1;
+                result = OS_INVALID;
             } else {
                 snprintf(output, OS_MAXSTR + 1, "ok");
             }
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_agent_commit_time(diff);
         } else if (strcmp(query, "close") == 0) {
+            w_inc_agent_close();
             wdb_leave(wdb);
+            snprintf(output, OS_MAXSTR + 1, "ok");
+
             w_mutex_lock(&pool_mutex);
 
+            gettimeofday(&begin, 0);
             if (wdb_close(wdb, TRUE) < 0) {
                 mdebug1("DB(%s) Cannot close database.", sagent_id);
                 snprintf(output, OS_MAXSTR + 1, "err Cannot close database");
-                result = -1;
-            } else {
-                snprintf(output, OS_MAXSTR + 1, "ok");
-                result = 0;
+                result = OS_INVALID;
             }
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_agent_close_time(diff);
 
             w_mutex_unlock(&pool_mutex);
             return result;
@@ -531,31 +652,115 @@ int wdb_parse(char * input, char * output) {
                 mdebug1("DB(%s) Invalid Syscollector query syntax.", sagent_id);
                 mdebug2("DB(%s) Syscollector query error near: %s", sagent_id, query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid Syscollector query syntax, near '%.32s'", query);
+                result = OS_INVALID;
+            } else {
+                gettimeofday(&begin, 0);
+                result = wdb_parse_syscollector(wdb, query, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_agent_syscollector_times(diff, result);
+            }
+        } else if (strcmp(query, "vacuum") == 0) {
+            w_inc_agent_vacuum();
+            gettimeofday(&begin, 0);
+            if (wdb_commit2(wdb) < 0) {
+                mdebug1("DB(%s) Cannot end transaction.", sagent_id);
+                snprintf(output, OS_MAXSTR + 1, "err Cannot end transaction");
+                result = -1;
+            }
+
+            wdb_finalize_all_statements(wdb);
+
+            if (result != -1) {
+                if (wdb_vacuum(wdb->db) < 0) {
+                    mdebug1("DB(%s) Cannot vacuum database.", sagent_id);
+                    snprintf(output, OS_MAXSTR + 1, "err Cannot vacuum database");
+                    result = -1;
+                } else {
+                    int fragmentation_after_vacuum;
+
+                    // save fragmentation after vacuum
+                    if (fragmentation_after_vacuum = wdb_get_db_state(wdb), fragmentation_after_vacuum == OS_INVALID) {
+                        mdebug1("DB(%s) Couldn't get fragmentation after vacuum for the database.", wdb->id);
+                        snprintf(output, OS_MAXSTR + 1, "err Vacuum performed, but couldn't get fragmentation information after vacuum");
+                        result = -1;
+                    } else {
+                        char str_vacuum_time[OS_SIZE_128] = { '\0' };
+                        char str_vacuum_value[OS_SIZE_128] = { '\0' };
+
+                        snprintf(str_vacuum_time, OS_SIZE_128, "%ld", time(0));
+                        snprintf(str_vacuum_value, OS_SIZE_128, "%d", fragmentation_after_vacuum);
+                        if (wdb_update_last_vacuum_data(wdb, str_vacuum_time, str_vacuum_value) != OS_SUCCESS) {
+                            mdebug1("DB(%s) Couldn't update last vacuum info for the database.", wdb->id);
+                            snprintf(output, OS_MAXSTR + 1, "err Vacuum performed, but last vacuum information couldn't be updated in the metadata table");
+                            result = -1;
+                        } else {
+                            cJSON *json_fragmentation = cJSON_CreateObject();
+                            cJSON_AddNumberToObject(json_fragmentation, "fragmentation_after_vacuum", fragmentation_after_vacuum);
+                            char *out = cJSON_PrintUnformatted(json_fragmentation);
+                            snprintf(output, OS_MAXSTR + 1, "ok %s", out);
+
+                            os_free(out);
+                            cJSON_Delete(json_fragmentation);
+                            result = 0;
+                        }
+                    }
+                }
+            }
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_agent_vacuum_time(diff);
+        } else if (strcmp(query, "get_fragmentation") == 0) {
+            w_inc_agent_get_fragmentation();
+            gettimeofday(&begin, 0);
+            int state = wdb_get_db_state(wdb);
+            int free_pages = wdb_get_db_free_pages_percentage(wdb);
+            if (state < 0 || free_pages < 0) {
+                mdebug1("DB(%s) Cannot get database fragmentation.", sagent_id);
+                snprintf(output, OS_MAXSTR + 1, "err Cannot get database fragmentation");
                 result = -1;
             } else {
-                result = wdb_parse_syscollector(wdb, query, next, output);
+                cJSON *json_fragmentation = cJSON_CreateObject();
+                cJSON_AddNumberToObject(json_fragmentation, "fragmentation", state);
+                cJSON_AddNumberToObject(json_fragmentation, "free_pages_percentage", free_pages);
+                char *out = cJSON_PrintUnformatted(json_fragmentation);
+                snprintf(output, OS_MAXSTR + 1, "ok %s", out);
+
+                os_free(out);
+                cJSON_Delete(json_fragmentation);
+                result = 0;
             }
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_agent_get_fragmentation_time(diff);
         } else {
             mdebug1("DB(%s) Invalid DB query syntax.", sagent_id);
             mdebug2("DB(%s) query error near: %s", sagent_id, query);
             snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-            result = -1;
+            result = OS_INVALID;
         }
         wdb_leave(wdb);
         return result;
     } else if (strcmp(actor, "wazuhdb") == 0) {
         query = next;
 
+        w_inc_wazuhdb();
+
         if (next = wstr_chr(query, ' '), !next) {
             mdebug1("Invalid DB query syntax.");
             mdebug2("DB query error near: %s", query);
             snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-            return -1;
+            return OS_INVALID;
         }
         *next++ = '\0';
 
-        if(strcmp(query, "remove") == 0) {
+        if (strcmp(query, "remove") == 0) {
+            w_inc_wazuhdb_remove();
+            gettimeofday(&begin, 0);
             data = wdb_remove_multiple_agents(next);
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_wazuhdb_remove_time(diff);
             out = cJSON_PrintUnformatted(data);
             snprintf(output, OS_MAXSTR + 1, "ok %s", out);
             os_free(out);
@@ -564,39 +769,49 @@ int wdb_parse(char * input, char * output) {
             mdebug1("Invalid DB query syntax.");
             mdebug2("DB query error near: %s", query);
             snprintf(output, OS_MAXSTR + 1, "err No agents id provided");
-            return -1;
+            result = OS_INVALID;
         }
         return result;
-    } else if(strcmp(actor, "mitre") == 0) {
+    } else if (strcmp(actor, "mitre") == 0) {
         query = next;
+
+        w_inc_mitre();
 
         mdebug2("Mitre query: %s", query);
 
         if (wdb = wdb_open_mitre(), !wdb) {
             mdebug2("Couldn't open DB mitre: %s/%s.db", WDB_DIR, WDB_MITRE_NAME);
             snprintf(output, OS_MAXSTR + 1, "err Couldn't open DB mitre");
-            return -1;
+            return OS_INVALID;
         }
+        // Add the current peer to wdb structure
+        wdb->peer = peer;
 
         if (next = wstr_chr(query, ' '), !next) {
             mdebug1("Invalid DB query syntax.");
             mdebug2("DB query error near: %s", query);
             snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
             wdb_leave(wdb);
-            return -1;
+            return OS_INVALID;
         }
         *next++ = '\0';
 
         if (strcmp(query, "sql") == 0) {
+            w_inc_mitre_sql();
             if (!next) {
                 mdebug1("Mitre DB Invalid DB query syntax.");
                 mdebug2("Mitre DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = -1;
+                result = OS_INVALID;
             } else {
                 sql = next;
 
-                if (data = wdb_exec(wdb->db, sql), data) {
+                gettimeofday(&begin, 0);
+                data = wdb_exec(wdb->db, sql);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_mitre_sql_time(diff);
+                if (data) {
                     out = cJSON_PrintUnformatted(data);
                     snprintf(output, OS_MAXSTR + 1, "ok %s", out);
                     os_free(out);
@@ -605,19 +820,21 @@ int wdb_parse(char * input, char * output) {
                     mdebug1("Mitre DB Cannot execute SQL query; err database %s/%s.db: %s", WDB_DIR, WDB_MITRE_NAME, sqlite3_errmsg(wdb->db));
                     mdebug2("Mitre DB SQL query: %s", sql);
                     snprintf(output, OS_MAXSTR + 1, "err Cannot execute Mitre database query; %s", sqlite3_errmsg(wdb->db));
-                    result = -1;
+                    result = OS_INVALID;
                 }
             }
         } else {
             mdebug1("Invalid DB query syntax.");
             mdebug2("DB query error near: %s", query);
             snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-            result = -1;
+            result = OS_INVALID;
         }
         wdb_leave(wdb);
         return result;
-    } else if(strcmp(actor, "global") == 0) {
+    } else if (strcmp(actor, "global") == 0) {
         query = next;
+
+        w_inc_global();
 
         mdebug2("Global query: %s", query);
 
@@ -625,20 +842,35 @@ int wdb_parse(char * input, char * output) {
             mdebug2("Couldn't open DB global: %s/%s.db", WDB2_DIR, WDB_GLOB_NAME);
             snprintf(output, OS_MAXSTR + 1, "err Couldn't open DB global");
             return OS_INVALID;
+        } else if (!wdb->enabled) {
+            mdebug2("Database disabled: %s/%s.db.", WDB2_DIR, WDB_GLOB_NAME);
+            snprintf(output, OS_MAXSTR + 1, "err DB global disabled.");
+            wdb_leave(wdb);
+            return OS_INVALID;
         }
+        // Add the current peer to wdb structure
+        wdb->peer = peer;
 
         if (next = wstr_chr(query, ' '), next) {
             *next++ = '\0';
         }
 
         if (strcmp(query, "sql") == 0) {
+            w_inc_global_sql();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
-                if (data = wdb_exec(wdb->db, next), data) {
+                sql = next;
+
+                gettimeofday(&begin, 0);
+                data = wdb_exec(wdb->db, sql);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_sql_time(diff);
+                if (data) {
                     out = cJSON_PrintUnformatted(data);
                     snprintf(output, OS_MAXSTR + 1, "ok %s", out);
                     os_free(out);
@@ -651,241 +883,465 @@ int wdb_parse(char * input, char * output) {
                 }
             }
         } else if (strcmp(query, "insert-agent") == 0) {
+            w_inc_global_agent_insert_agent();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for insert-agent.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_insert_agent(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_insert_agent_time(diff);
             }
         } else if (strcmp(query, "update-agent-name") == 0) {
+            w_inc_global_agent_update_agent_name();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for update-agent-name.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_update_agent_name(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_update_agent_name_time(diff);
             }
         } else if (strcmp(query, "update-agent-data") == 0) {
+            w_inc_global_agent_update_agent_data();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for update-agent-data.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_update_agent_data(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_update_agent_data_time(diff);
             }
         } else if (strcmp(query, "get-labels") == 0) {
+            w_inc_global_labels_get_labels();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for get-labels.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_get_agent_labels(wdb, next, output);
-            }
-        } else if (strcmp(query, "set-labels") == 0) {
-            if (!next) {
-                mdebug1("Global DB Invalid DB query syntax for set-labels.");
-                mdebug2("Global DB query error near: %s", query);
-                snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = OS_INVALID;
-            } else {
-                result = wdb_parse_global_set_agent_labels(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_labels_get_labels_time(diff);
             }
         } else if (strcmp(query, "update-keepalive") == 0) {
+            w_inc_global_agent_update_keepalive();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for update-keepalive.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_update_agent_keepalive(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_update_keepalive_time(diff);
             }
         } else if (strcmp(query, "update-connection-status") == 0) {
+            w_inc_global_agent_update_connection_status();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for update-connection-status.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_update_connection_status(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_update_connection_status_time(diff);
+            }
+        } else if (strcmp(query, "update-status-code") == 0) {
+            w_inc_global_agent_update_status_code();
+            if (!next) {
+                mdebug1("Global DB Invalid DB query syntax for update-status-code.");
+                mdebug2("Global DB query error near: %s", query);
+                snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
+                result = OS_INVALID;
+            } else {
+                gettimeofday(&begin, 0);
+                result = wdb_parse_global_update_status_code(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_update_status_code_time(diff);
             }
         } else if (strcmp(query, "delete-agent") == 0) {
+            w_inc_global_agent_delete_agent();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for delete-agent.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_delete_agent(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_delete_agent_time(diff);
             }
         } else if (strcmp(query, "select-agent-name") == 0) {
+            w_inc_global_agent_select_agent_name();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for select-agent-name.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_select_agent_name(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_select_agent_name_time(diff);
             }
         } else if (strcmp(query, "select-agent-group") == 0) {
+            w_inc_global_agent_select_agent_group();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for select-agent-group.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_select_agent_group(wdb, next, output);
-            }
-        } else if (strcmp(query, "delete-agent-belong") == 0) {
-            if (!next) {
-                mdebug1("Global DB Invalid DB query syntax for delete-agent-belong.");
-                mdebug2("Global DB query error near: %s", query);
-                snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = OS_INVALID;
-            } else {
-                result = wdb_parse_global_delete_agent_belong(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_select_agent_group_time(diff);
             }
         } else if (strcmp(query, "find-agent") == 0) {
+            w_inc_global_agent_find_agent();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for find-agent.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_find_agent(wdb, next, output);
-            }
-        } else if (strcmp(query, "update-agent-group") == 0) {
-            if (!next) {
-                mdebug1("Global DB Invalid DB query syntax for update-agent-group.");
-                mdebug2("Global DB query error near: %s", query);
-                snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
-                result = OS_INVALID;
-            } else {
-                result = wdb_parse_global_update_agent_group(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_find_agent_time(diff);
             }
         } else if (strcmp(query, "find-group") == 0) {
+            w_inc_global_group_find_group();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for find-group.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_find_group(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_group_find_group_time(diff);
             }
         } else if (strcmp(query, "insert-agent-group") == 0) {
+            w_inc_global_group_insert_agent_group();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for insert-agent-group.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_insert_agent_group(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_group_insert_agent_group_time(diff);
             }
-        } else if (strcmp(query, "insert-agent-belong") == 0) {
+        } else if (strcmp(query, "select-group-belong") == 0) {
+            w_inc_global_belongs_select_group_belong();
             if (!next) {
-                mdebug1("Global DB Invalid DB query syntax for insert-agent-belong.");
+                mdebug1("Global DB Invalid DB query syntax for select-group-belong.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
-                result = wdb_parse_global_insert_agent_belong(wdb, next, output);
+                gettimeofday(&begin, 0);
+                result = wdb_parse_global_select_group_belong(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_belongs_select_group_belong_time(diff);
             }
-        } else if (strcmp(query, "delete-group-belong") == 0) {
+        } else if (strcmp(query, "get-group-agents") == 0) {
+            w_inc_global_belongs_get_group_agent();
             if (!next) {
-                mdebug1("Global DB Invalid DB query syntax for delete-group-belong.");
+                mdebug1("Global DB Invalid DB query syntax for get-group-agents.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
-                result = wdb_parse_global_delete_group_belong(wdb, next, output);
+                gettimeofday(&begin, 0);
+                result = wdb_parse_global_get_group_agents(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_belongs_get_group_agent_time(diff);
             }
         } else if (strcmp(query, "delete-group") == 0) {
+            w_inc_global_group_delete_group();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for delete-group.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_delete_group(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_group_delete_group_time(diff);
             }
         } else if (strcmp(query, "select-groups") == 0) {
+            w_inc_global_group_select_groups();
+            gettimeofday(&begin, 0);
             result = wdb_parse_global_select_groups(wdb, output);
-        } else if (strcmp(query, "select-keepalive") == 0) {
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_global_group_select_groups_time(diff);
+        } else if (strcmp(query, "sync-agent-groups-get") == 0) {
+            w_inc_global_agent_sync_agent_groups_get();
             if (!next) {
-                mdebug1("Global DB Invalid DB query syntax for select-keepalive.");
+                mdebug1("Global DB Invalid DB query syntax for sync-agent-groups-get.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
-                result = wdb_parse_global_select_agent_keepalive(wdb, next, output);
+                gettimeofday(&begin, 0);
+                result = wdb_parse_global_sync_agent_groups_get(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_sync_agent_groups_get_time(diff);
+            }
+        } else if (strcmp(query, "set-agent-groups") == 0) {
+            w_inc_global_agent_set_agent_groups();
+            if (!next) {
+                mdebug1("Global DB Invalid DB query syntax for set-agent-groups.");
+                mdebug2("Global DB query error near: %s", query);
+                snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
+                result = OS_INVALID;
+            } else {
+                gettimeofday(&begin, 0);
+                result = wdb_parse_global_set_agent_groups(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_set_agent_groups_time(diff);
             }
         } else if (strcmp(query, "sync-agent-info-get") == 0) {
+            w_inc_global_agent_sync_agent_info_get();
+            gettimeofday(&begin, 0);
             result = wdb_parse_global_sync_agent_info_get(wdb, next, output);
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_global_agent_sync_agent_info_get_time(diff);
         } else if (strcmp(query, "sync-agent-info-set") == 0) {
+            w_inc_global_agent_sync_agent_info_set();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for sync-agent-info-set.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_sync_agent_info_set(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_sync_agent_info_set_time(diff);
             }
-        }
-        else if (strcmp(query, "disconnect-agents") == 0) {
+        } else if (strcmp(query, "get-groups-integrity") == 0) {
+            w_inc_global_agent_get_groups_integrity();
+            if (!next) {
+                mdebug1("Global DB Invalid DB query syntax for get-groups-integrity.");
+                mdebug2("Global DB query error near: %s", query);
+                snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
+                result = OS_INVALID;
+            } else {
+                gettimeofday(&begin, 0);
+                result = wdb_parse_get_groups_integrity(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_get_groups_integrity_time(diff);
+            }
+        } else if (strcmp(query, "disconnect-agents") == 0) {
+            w_inc_global_agent_disconnect_agents();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for disconnect-agents.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_disconnect_agents(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_disconnect_agents_time(diff);
             }
-        }
-        else if (strcmp(query, "get-all-agents") == 0) {
+        } else if (strcmp(query, "get-all-agents") == 0) {
+            w_inc_global_agent_get_all_agents();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for get-all-agents.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_get_all_agents(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_get_all_agents_time(diff);
             }
-        }
-        else if (strcmp(query, "get-agent-info") == 0) {
+        } else if (strcmp(query, "get-distinct-groups") == 0) {
+            w_inc_global_agent_get_distinct_groups();
+            gettimeofday(&begin, 0);
+            result = wdb_parse_global_get_distinct_agent_groups(wdb, next, output);
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_global_agent_get_distinct_groups_time(diff);
+        } else if (strcmp(query, "get-agent-info") == 0) {
+            w_inc_global_agent_get_agent_info();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for get-agent-info.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_get_agent_info(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_get_agent_info_time(diff);
             }
-        }
-        else if (strcmp(query, "reset-agents-connection") == 0) {
+        } else if (strcmp(query, "reset-agents-connection") == 0) {
+            w_inc_global_agent_reset_agents_connection();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for reset-agents-connection.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_reset_agents_connection(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_reset_agents_connection_time(diff);
             }
-        }
-        else if (strcmp(query, "get-agents-by-connection-status") == 0) {
+        } else if (strcmp(query, "get-agents-by-connection-status") == 0) {
+            w_inc_global_agent_get_agents_by_connection_status();
             if (!next) {
                 mdebug1("Global DB Invalid DB query syntax for get-agents-by-connection-status.");
                 mdebug2("Global DB query error near: %s", query);
                 snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
                 result = OS_INVALID;
             } else {
+                gettimeofday(&begin, 0);
                 result = wdb_parse_global_get_agents_by_connection_status(wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_agent_get_agents_by_connection_status_time(diff);
             }
-        }
-        else {
+        } else if (strcmp(query, "backup") == 0) {
+            w_inc_global_backup();
+            if (!next) {
+                mdebug1("Global DB Invalid DB query syntax for backup.");
+                mdebug2("Global DB query error near: %s", query);
+                snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
+                result = OS_INVALID;
+            } else {
+                // The "backup restore" command takes the pool_mutex to remove the wdb pointer
+                gettimeofday(&begin, 0);
+                result = wdb_parse_global_backup(&wdb, next, output);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_global_backup_time(diff);
+            }
+        } else if (strcmp(query, "vacuum") == 0) {
+            w_inc_global_vacuum();
+            gettimeofday(&begin, 0);
+            if (wdb_commit2(wdb) < 0) {
+                mdebug1("Global DB Cannot end transaction.");
+                snprintf(output, OS_MAXSTR + 1, "err Cannot end transaction");
+                result = -1;
+            }
+
+            wdb_finalize_all_statements(wdb);
+
+            if (result != -1) {
+                if (wdb_vacuum(wdb->db) < 0) {
+                    mdebug1("Global DB Cannot vacuum database.");
+                    snprintf(output, OS_MAXSTR + 1, "err Cannot vacuum database");
+                    result = -1;
+                } else {
+                    int fragmentation_after_vacuum;
+
+                    // save fragmentation after vacuum
+                    if (fragmentation_after_vacuum = wdb_get_db_state(wdb), fragmentation_after_vacuum == OS_INVALID) {
+                        mdebug1("Global DB Couldn't get fragmentation after vacuum for the database.");
+                        snprintf(output, OS_MAXSTR + 1, "err Vacuum performed, but couldn't get fragmentation information after vacuum");
+                        result = -1;
+                    } else {
+                        char str_vacuum_time[OS_SIZE_128] = { '\0' };
+                        char str_vacuum_value[OS_SIZE_128] = { '\0' };
+
+                        snprintf(str_vacuum_time, OS_SIZE_128, "%ld", time(0));
+                        snprintf(str_vacuum_value, OS_SIZE_128, "%d", fragmentation_after_vacuum);
+                        if (wdb_update_last_vacuum_data(wdb, str_vacuum_time, str_vacuum_value) != OS_SUCCESS) {
+                            mdebug1("Global DB Couldn't update last vacuum info for the database.");
+                            snprintf(output, OS_MAXSTR + 1, "err Vacuum performed, but last vacuum information couldn't be updated in the metadata table");
+                            result = -1;
+                        } else {
+                            cJSON *json_fragmentation = cJSON_CreateObject();
+                            cJSON_AddNumberToObject(json_fragmentation, "fragmentation_after_vacuum", fragmentation_after_vacuum);
+                            char *out = cJSON_PrintUnformatted(json_fragmentation);
+                            snprintf(output, OS_MAXSTR + 1, "ok %s", out);
+
+                            os_free(out);
+                            cJSON_Delete(json_fragmentation);
+                            result = 0;
+                        }
+                    }
+                }
+            }
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_global_vacuum_time(diff);
+        } else if (strcmp(query, "get_fragmentation") == 0) {
+            w_inc_global_get_fragmentation();
+            gettimeofday(&begin, 0);
+            int state = wdb_get_db_state(wdb);
+            int free_pages = wdb_get_db_free_pages_percentage(wdb);
+            if (state < 0 || free_pages < 0) {
+                mdebug1("Global DB Cannot get database fragmentation.");
+                snprintf(output, OS_MAXSTR + 1, "err Cannot get database fragmentation");
+                result = -1;
+            } else {
+                cJSON *json_fragmentation = cJSON_CreateObject();
+                cJSON_AddNumberToObject(json_fragmentation, "fragmentation", state);
+                cJSON_AddNumberToObject(json_fragmentation, "free_pages_percentage", free_pages);
+                char *out = cJSON_PrintUnformatted(json_fragmentation);
+                snprintf(output, OS_MAXSTR + 1, "ok %s", out);
+
+                os_free(out);
+                cJSON_Delete(json_fragmentation);
+                result = 0;
+            }
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_global_get_fragmentation_time(diff);
+        } else {
             mdebug1("Invalid DB query syntax.");
             mdebug2("Global DB query error near: %s", query);
             snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", query);
@@ -898,6 +1354,8 @@ int wdb_parse(char * input, char * output) {
         const char *json_err;
         query = next;
 
+        w_inc_task();
+
         mdebug2("Task query: %s", query);
 
         if (wdb = wdb_open_tasks(), !wdb) {
@@ -905,6 +1363,8 @@ int wdb_parse(char * input, char * output) {
             snprintf(output, OS_MAXSTR + 1, "err Couldn't open DB task");
             return OS_INVALID;
         }
+        // Add the current peer to wdb structure
+        wdb->peer = peer;
 
         if (next = wstr_chr(query, ' '), !next) {
             mdebug1("Invalid DB query syntax.");
@@ -917,6 +1377,7 @@ int wdb_parse(char * input, char * output) {
         *next++ = '\0';
 
         if (!strcmp("upgrade", query)) {
+            w_inc_task_upgrade();
             if (!next) {
                 mdebug1("Task DB Invalid DB query syntax.");
                 mdebug2("Task DB query error near: %s", query);
@@ -932,10 +1393,15 @@ int wdb_parse(char * input, char * output) {
                 return OS_INVALID;
             }
 
+            gettimeofday(&begin, 0);
             result = wdb_parse_task_upgrade(wdb, parameters_json, "upgrade", output);
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_task_upgrade_time(diff);
             cJSON_Delete(parameters_json);
 
         } else if (!strcmp("upgrade_custom", query)) {
+            w_inc_task_upgrade_custom();
             if (!next) {
                 mdebug1("Task DB Invalid DB query syntax.");
                 mdebug2("Task DB query error near: %s", query);
@@ -951,10 +1417,15 @@ int wdb_parse(char * input, char * output) {
                 return OS_INVALID;
             }
 
+            gettimeofday(&begin, 0);
             result = wdb_parse_task_upgrade(wdb, parameters_json, "upgrade_custom", output);
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_task_upgrade_custom_time(diff);
             cJSON_Delete(parameters_json);
 
         } else if (!strcmp("upgrade_get_status", query)) {
+            w_inc_task_upgrade_get_status();
             if (!next) {
                 mdebug1("Task DB Invalid DB query syntax.");
                 mdebug2("Task DB query error near: %s", query);
@@ -970,10 +1441,15 @@ int wdb_parse(char * input, char * output) {
                 return OS_INVALID;
             }
 
+            gettimeofday(&begin, 0);
             result = wdb_parse_task_upgrade_get_status(wdb, parameters_json, output);
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_task_upgrade_get_status_time(diff);
             cJSON_Delete(parameters_json);
 
         } else if (!strcmp("upgrade_update_status", query)) {
+            w_inc_task_upgrade_update_status();
             if (!next) {
                 mdebug1("Task DB Invalid DB query syntax.");
                 mdebug2("Task DB query error near: %s", query);
@@ -989,10 +1465,15 @@ int wdb_parse(char * input, char * output) {
                 return OS_INVALID;
             }
 
+            gettimeofday(&begin, 0);
             result = wdb_parse_task_upgrade_update_status(wdb, parameters_json, output);
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_task_upgrade_update_status_time(diff);
             cJSON_Delete(parameters_json);
 
         } else if (!strcmp("upgrade_result", query)) {
+            w_inc_task_upgrade_result();
             if (!next) {
                 mdebug1("Task DB Invalid DB query syntax.");
                 mdebug2("Task DB query error near: %s", query);
@@ -1008,10 +1489,15 @@ int wdb_parse(char * input, char * output) {
                 return OS_INVALID;
             }
 
+            gettimeofday(&begin, 0);
             result = wdb_parse_task_upgrade_result(wdb, parameters_json, output);
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_task_upgrade_result_time(diff);
             cJSON_Delete(parameters_json);
 
         } else if (!strcmp("upgrade_cancel_tasks", query)) {
+            w_inc_task_upgrade_cancel_tasks();
             if (!next) {
                 mdebug1("Task DB Invalid DB query syntax.");
                 mdebug2("Task DB query error near: %s", query);
@@ -1027,10 +1513,15 @@ int wdb_parse(char * input, char * output) {
                 return OS_INVALID;
             }
 
+            gettimeofday(&begin, 0);
             result = wdb_parse_task_upgrade_cancel_tasks(wdb, parameters_json, output);
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_task_upgrade_cancel_tasks_time(diff);
             cJSON_Delete(parameters_json);
 
         } else if (!strcmp("set_timeout", query)) {
+            w_inc_task_set_timeout();
             if (!next) {
                 mdebug1("Task DB Invalid DB query syntax.");
                 mdebug2("Task DB query error near: %s", query);
@@ -1046,10 +1537,15 @@ int wdb_parse(char * input, char * output) {
                 return OS_INVALID;
             }
 
+            gettimeofday(&begin, 0);
             result = wdb_parse_task_set_timeout(wdb, parameters_json, output);
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_task_set_timeout_time(diff);
             cJSON_Delete(parameters_json);
 
         } else if (!strcmp("delete_old", query)) {
+            w_inc_task_delete_old();
             if (!next) {
                 mdebug1("Task DB Invalid DB query syntax.");
                 mdebug2("Task DB query error near: %s", query);
@@ -1065,10 +1561,15 @@ int wdb_parse(char * input, char * output) {
                 return OS_INVALID;
             }
 
+            gettimeofday(&begin, 0);
             result = wdb_parse_task_delete_old(wdb, parameters_json, output);
+            gettimeofday(&end, 0);
+            timersub(&end, &begin, &diff);
+            w_inc_task_delete_old_time(diff);
             cJSON_Delete(parameters_json);
 
         } else if (!strcmp("sql", query)) {
+            w_inc_task_sql();
             if (!next) {
                 mdebug1("Task DB Invalid DB query syntax.");
                 mdebug2("Task DB query error near: %s", query);
@@ -1077,7 +1578,12 @@ int wdb_parse(char * input, char * output) {
             } else {
                 sql = next;
 
-                if (data = wdb_exec(wdb->db, sql), data) {
+                gettimeofday(&begin, 0);
+                data = wdb_exec(wdb->db, sql);
+                gettimeofday(&end, 0);
+                timersub(&end, &begin, &diff);
+                w_inc_task_sql_time(diff);
+                if (data) {
                     out = cJSON_PrintUnformatted(data);
                     snprintf(output, OS_MAXSTR + 1, "ok %s", out);
                     os_free(out);
@@ -1116,7 +1622,7 @@ int wdb_parse_syscheck(wdb_t * wdb, wdb_component_t component, char * input, cha
     if (next = wstr_chr(input, ' '), !next) {
         mdebug2("DB(%s) Invalid FIM query syntax: %s", wdb->id, input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid FIM query syntax, near '%.32s'", input);
-        return -1;
+        return OS_INVALID;
     }
 
     curr = input;
@@ -1155,7 +1661,7 @@ int wdb_parse_syscheck(wdb_t * wdb, wdb_component_t component, char * input, cha
         if (next = wstr_chr(curr, ' '), !next) {
             mdebug1("DB(%s) Invalid scan_info fim query syntax.", wdb->id);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Syscheck query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         *next++ = '\0';
@@ -1202,7 +1708,7 @@ int wdb_parse_syscheck(wdb_t * wdb, wdb_component_t component, char * input, cha
             mdebug1("DB(%s) Invalid FIM query syntax.", wdb->id);
             mdebug2("DB(%s) FIM query: %s", wdb->id, curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Syscheck query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         *next++ = '\0';
@@ -1215,7 +1721,7 @@ int wdb_parse_syscheck(wdb_t * wdb, wdb_component_t component, char * input, cha
             mdebug1("DB(%s) Invalid FIM query syntax.", wdb->id);
             mdebug2("DB(%s) FIM query: %s", wdb->id, curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Syscheck query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         checksum = next;
@@ -1224,7 +1730,7 @@ int wdb_parse_syscheck(wdb_t * wdb, wdb_component_t component, char * input, cha
             mdebug1("DB(%s) Invalid FIM query syntax.", wdb->id);
             mdebug2("FIM query: %s", checksum);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Syscheck query syntax, near '%.32s'", checksum);
-            return -1;
+            return OS_INVALID;
         }
 
         *next++ = '\0';
@@ -1238,7 +1744,7 @@ int wdb_parse_syscheck(wdb_t * wdb, wdb_component_t component, char * input, cha
             size_t unsc_size = strlen(unsc_checksum);
             size_t mark_size = strlen(mark);
             os_realloc(unsc_checksum, unsc_size + mark_size + 1, unsc_checksum);
-            strncpy(unsc_checksum + unsc_size, mark, mark_size);
+            strncpy(unsc_checksum + unsc_size, mark, mark_size + 1);
             unsc_checksum[unsc_size + mark_size] = '\0';
         }
 
@@ -1252,26 +1758,35 @@ int wdb_parse_syscheck(wdb_t * wdb, wdb_component_t component, char * input, cha
 
         return result;
     } else if (strcmp(curr, "save2") == 0) {
-        if (wdb_syscheck_save2(wdb, next) == -1) {
+        if (wdb_syscheck_save2(wdb, next) == OS_INVALID) {
             mdebug1("DB(%s) Cannot save FIM.", wdb->id);
             snprintf(output, OS_MAXSTR + 1, "err Cannot save Syscheck");
-            return -1;
+            return OS_INVALID;
         }
 
         snprintf(output, OS_MAXSTR + 1, "ok");
         return 0;
     } else if (strncmp(curr, "integrity_check_", 16) == 0) {
-        switch (wdbi_query_checksum(wdb, component, curr, next)) {
-        case -1:
+        dbsync_msg action = INTEGRITY_CLEAR;
+        if (0 == strcmp(curr, INTEGRITY_COMMANDS[INTEGRITY_CHECK_GLOBAL])) {
+            action = INTEGRITY_CHECK_GLOBAL;
+        } else if (0 == strcmp(curr, INTEGRITY_COMMANDS[INTEGRITY_CHECK_LEFT])) {
+            action = INTEGRITY_CHECK_LEFT;
+        } else if (0 == strcmp(curr, INTEGRITY_COMMANDS[INTEGRITY_CHECK_RIGHT])) {
+            action = INTEGRITY_CHECK_RIGHT;
+        }
+
+        switch (wdbi_query_checksum(wdb, component, action, next)) {
+        case INTEGRITY_SYNC_ERR:
             mdebug1("DB(%s) Cannot query FIM range checksum.", wdb->id);
             snprintf(output, OS_MAXSTR + 1, "err Cannot perform range checksum");
-            return -1;
+            return OS_INVALID;
 
-        case 0:
+        case INTEGRITY_SYNC_NO_DATA:
             snprintf(output, OS_MAXSTR + 1, "ok no_data");
             break;
 
-        case 1:
+        case INTEGRITY_SYNC_CKS_FAIL:
             snprintf(output, OS_MAXSTR + 1, "ok checksum_fail");
             break;
 
@@ -1282,10 +1797,10 @@ int wdb_parse_syscheck(wdb_t * wdb, wdb_component_t component, char * input, cha
         return 0;
     } else if (strcmp(curr, "integrity_clear") == 0) {
         switch (wdbi_query_clear(wdb, component, next)) {
-        case -1:
+        case OS_INVALID:
             mdebug1("DB(%s) Cannot query FIM range checksum.", wdb->id);
             snprintf(output, OS_MAXSTR + 1, "err Cannot perform range checksum");
-            return -1;
+            return OS_INVALID;
 
         default:
             snprintf(output, OS_MAXSTR + 1, "ok ");
@@ -1296,7 +1811,7 @@ int wdb_parse_syscheck(wdb_t * wdb, wdb_component_t component, char * input, cha
         mdebug1("DB(%s) Invalid FIM query syntax.", wdb->id);
         mdebug2("DB query error near: %s", curr);
         snprintf(output, OS_MAXSTR + 1, "err Invalid Syscheck query syntax, near '%.32s'", curr);
-        return -1;
+        return OS_INVALID;
     }
 }
 
@@ -1307,46 +1822,55 @@ int wdb_parse_syscollector(wdb_t * wdb, const char * query, char * input, char *
 
     if (strcmp(query, "syscollector_processes") == 0)
     {
+        w_inc_agent_syscollector_processes();
         component = WDB_SYSCOLLECTOR_PROCESSES;
         mdebug2("DB(%s) syscollector_processes Syscollector query. ", wdb->id);
     }
     else if (strcmp(query, "syscollector_packages") == 0)
     {
+        w_inc_agent_syscollector_packages();
         component = WDB_SYSCOLLECTOR_PACKAGES;
         mdebug2("DB(%s) syscollector_packages Syscollector query. ", wdb->id);
     }
     else if (strcmp(query, "syscollector_hotfixes") == 0)
     {
+        w_inc_agent_syscollector_hotfixes();
         component = WDB_SYSCOLLECTOR_HOTFIXES;
         mdebug2("DB(%s) syscollector_hotfixes Syscollector query. ", wdb->id);
     }
     else if (strcmp(query, "syscollector_ports") == 0)
     {
+        w_inc_agent_syscollector_ports();
         component = WDB_SYSCOLLECTOR_PORTS;
         mdebug2("DB(%s) syscollector_ports Syscollector query. ", wdb->id);
     }
     else if (strcmp(query, "syscollector_network_protocol") == 0)
     {
+        w_inc_agent_syscollector_network_protocol();
         component = WDB_SYSCOLLECTOR_NETPROTO;
         mdebug2("DB(%s) syscollector_network_protocol Syscollector query. ", wdb->id);
     }
     else if (strcmp(query, "syscollector_network_address") == 0)
     {
+        w_inc_agent_syscollector_network_address();
         component = WDB_SYSCOLLECTOR_NETADDRESS;
         mdebug2("DB(%s) syscollector_network_address Syscollector query. ", wdb->id);
     }
     else if (strcmp(query, "syscollector_network_iface") == 0)
     {
+        w_inc_agent_syscollector_network_iface();
         component = WDB_SYSCOLLECTOR_NETINFO;
         mdebug2("DB(%s) syscollector_network_iface Syscollector query. ", wdb->id);
     }
     else if (strcmp(query, "syscollector_hwinfo") == 0)
     {
+        w_inc_agent_syscollector_hwinfo();
         component = WDB_SYSCOLLECTOR_HWINFO;
         mdebug2("DB(%s) syscollector_hwinfo Syscollector query. ", wdb->id);
     }
     else if (strcmp(query, "syscollector_osinfo") == 0)
     {
+        w_inc_agent_syscollector_osinfo();
         component = WDB_SYSCOLLECTOR_OSINFO;
         mdebug2("DB(%s) syscollector_osinfo Syscollector query. ", wdb->id);
     }
@@ -1354,39 +1878,48 @@ int wdb_parse_syscollector(wdb_t * wdb, const char * query, char * input, char *
     {
         mdebug2("DB(%s) Invalid Syscollector query : %s", wdb->id, query);
         snprintf(output, OS_MAXSTR + 1, "err Invalid Syscollector query syntax, near '%.32s'", query);
-        return -1;
+        return OS_INVALID;
     }
 
     if (next = wstr_chr(input, ' '), !next) {
         mdebug2("DB(%s) Invalid Syscollector query syntax: %s", wdb->id, input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid Syscollector query syntax, near '%.32s'", input);
-        return -1;
+        return OS_INVALID;
     }
 
     curr = input;
     *next++ = '\0';
     if (strcmp(curr, "save2") == 0) {
-        if (wdb_syscollector_save2(wdb, component, next) == -1) {
+        if (wdb_syscollector_save2(wdb, component, next) == OS_INVALID) {
             mdebug1("DB(%s) Cannot save Syscollector.", wdb->id);
             snprintf(output, OS_MAXSTR + 1, "err Cannot save Syscollector");
-            return -1;
+            return OS_INVALID;
         }
 
         snprintf(output, OS_MAXSTR + 1, "ok");
-        return 0;
+        return component;
     }
     if (strncmp(curr, "integrity_check_", 16) == 0) {
-        switch (wdbi_query_checksum(wdb, component, curr, next)) {
-        case -1:
+        dbsync_msg action = INTEGRITY_CLEAR;
+        if (0 == strcmp(curr, INTEGRITY_COMMANDS[INTEGRITY_CHECK_GLOBAL])) {
+            action = INTEGRITY_CHECK_GLOBAL;
+        } else if (0 == strcmp(curr, INTEGRITY_COMMANDS[INTEGRITY_CHECK_LEFT])) {
+            action = INTEGRITY_CHECK_LEFT;
+        } else if (0 == strcmp(curr, INTEGRITY_COMMANDS[INTEGRITY_CHECK_RIGHT])) {
+            action = INTEGRITY_CHECK_RIGHT;
+        }
+
+        switch (wdbi_query_checksum(wdb, component, action, next)) {
+        case INTEGRITY_SYNC_ERR:
             mdebug1("DB(%s) Cannot query Syscollector range checksum.", wdb->id);
             snprintf(output, OS_MAXSTR + 1, "err Cannot perform range checksum");
-            return -1;
+            return OS_INVALID;
 
-        case 0:
+        case INTEGRITY_SYNC_NO_DATA:
             snprintf(output, OS_MAXSTR + 1, "ok no_data");
             break;
 
-        case 1:
+        case INTEGRITY_SYNC_CKS_FAIL:
             snprintf(output, OS_MAXSTR + 1, "ok checksum_fail");
             break;
 
@@ -1394,32 +1927,31 @@ int wdb_parse_syscollector(wdb_t * wdb, const char * query, char * input, char *
             snprintf(output, OS_MAXSTR + 1, "ok ");
         }
 
-        return 0;
+        return component;
     } else if (strncmp(curr, "integrity_clear", 15) == 0) {
         switch (wdbi_query_clear(wdb, component, next)) {
-        case -1:
+        case OS_INVALID:
             mdebug1("DB(%s) Cannot query Syscollector range checksum.", wdb->id);
             snprintf(output, OS_MAXSTR + 1, "err Cannot perform range checksum");
-            return -1;
+            return OS_INVALID;
 
         default:
             snprintf(output, OS_MAXSTR + 1, "ok ");
         }
 
-        return 0;
+        return component;
     } else {
         mdebug1("DB(%s) Invalid Syscollector query syntax.", wdb->id);
         mdebug2("DB query error near: %s", curr);
         snprintf(output, OS_MAXSTR + 1, "err Invalid Syscollector query syntax, near '%.32s'", curr);
-        return -1;
+        return OS_INVALID;
     }
 }
 
 int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
     char * curr;
     char * next;
-    char * result_check; // Pass, failed
-    char * status_check;
+    char * result_check; // Pass, failed, or not applicable
     char * reason_check;
     int result;
 
@@ -1427,19 +1959,18 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid Security Configuration Assessment query syntax.");
         mdebug2("Security Configuration Assessment query: %s", input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", input);
-        return -1;
+        return OS_INVALID;
     }
 
     curr = input;
     *next++ = '\0';
 
     if (strcmp(curr, "query") == 0) {
-
         int pm_id;
         char result_found[OS_MAXSTR - WDB_RESPONSE_BEGIN_SIZE] = {0};
 
         curr = next;
-        pm_id = strtol(curr,NULL,10);
+        pm_id = strtol(curr, NULL, 10);
 
         result = wdb_sca_find(wdb, pm_id, result_found);
 
@@ -1448,7 +1979,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
                 snprintf(output, OS_MAXSTR + 1, "ok not found");
                 break;
             case 1:
-                snprintf(output, OS_MAXSTR + 1, "ok found %s",result_found);
+                snprintf(output, OS_MAXSTR + 1, "ok found %s", result_found);
                 break;
             default:
                 mdebug1("Cannot query Security Configuration Assessment.");
@@ -1457,18 +1988,17 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "update") == 0) {
-
         int pm_id;
         int scan_id;
 
         curr = next;
-        pm_id = strtol(curr,NULL,10);
+        pm_id = strtol(curr, NULL, 10);
 
         if (next = strchr(curr, '|'), !next) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         *next++ = '\0';
@@ -1479,18 +2009,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
-        }
-
-        *next++ = '\0';
-        status_check = next;
-
-        curr = next;
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Security Configuration Assessment query syntax.");
-            mdebug2("Security Configuration Assessment query: %s", curr);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         *next++ = '\0';
@@ -1501,17 +2020,17 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         *next++ = '\0';
         curr = next;
         if (!strncmp(curr, "NULL", 4))
-            scan_id = -1;
+            scan_id = OS_INVALID;
         else
-            scan_id = strtol(curr,NULL,10);
+            scan_id = strtol(curr, NULL, 10);
 
-        if (result = wdb_sca_update(wdb, result_check, pm_id, scan_id, status_check, reason_check), result < 0) {
+        if (result = wdb_sca_update(wdb, result_check, pm_id, scan_id, reason_check), result < 0) {
             mdebug1("Cannot update Security Configuration Assessment information.");
             snprintf(output, OS_MAXSTR + 1, "err Cannot update Security Configuration Assessment information.");
         } else {
@@ -1520,7 +2039,6 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "insert") == 0) {
-
         curr = next;
         cJSON *event;
         const char *jsonErrPtr;
@@ -1528,7 +2046,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
         {
             mdebug1("Invalid Security Configuration Assessment query syntax. JSON object not found or invalid");
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         cJSON *id = NULL;
@@ -1547,152 +2065,132 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
         cJSON *result_check = NULL;
         cJSON *policy_id = NULL;
         cJSON *check = NULL;
-        cJSON *status = NULL;
         cJSON *reason = NULL;
 
-        if( scan_id = cJSON_GetObjectItem(event, "id"), !scan_id) {
+        if (scan_id = cJSON_GetObjectItem(event, "id"), !scan_id) {
             mdebug1("Invalid Security Configuration Assessment query syntax. JSON object not found or invalid");
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
-        if( !scan_id->valueint ) {
+        if (!scan_id->valueint) {
             mdebug1("Malformed JSON: field 'id' must be a number");
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
-        if( policy_id = cJSON_GetObjectItem(event, "policy_id"), !policy_id) {
+        if (policy_id = cJSON_GetObjectItem(event, "policy_id"), !policy_id) {
             mdebug1("Malformed JSON: field 'policy_id' not found");
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
-        if( !policy_id->valuestring ) {
+        if (!policy_id->valuestring) {
             mdebug1("Malformed JSON: field 'policy_id' must be a string");
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
-        if( check = cJSON_GetObjectItem(event, "check"),!check) {
+        if (check = cJSON_GetObjectItem(event, "check"), !check) {
             mdebug1("Malformed JSON: field 'check' not found");
-            return -1;
+            return OS_INVALID;
 
         } else {
-
-            if( id = cJSON_GetObjectItem(check, "id"), !id) {
+            if (id = cJSON_GetObjectItem(check, "id"), !id) {
                 mdebug1("Malformed JSON: field 'id' not found");
-                return -1;
+                return OS_INVALID;
             }
 
-            if( !id->valueint ) {
+            if (!id->valueint) {
                 mdebug1("Malformed JSON: field 'id' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
-            if( title = cJSON_GetObjectItem(check, "title"), !title) {
+            if (title = cJSON_GetObjectItem(check, "title"), !title) {
                 mdebug1("Malformed JSON: field 'title' not found");
-                return -1;
+                return OS_INVALID;
             }
 
-            if( !title->valuestring ) {
+            if (!title->valuestring) {
                 mdebug1("Malformed JSON: field 'title' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
             description = cJSON_GetObjectItem(check, "description");
 
-            if( description && !description->valuestring ) {
+            if (description && !description->valuestring) {
                 mdebug1("Malformed JSON: field 'description' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
             rationale = cJSON_GetObjectItem(check, "rationale");
 
-            if( rationale && !rationale->valuestring ) {
+            if (rationale && !rationale->valuestring) {
                 mdebug1("Malformed JSON: field 'rationale' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
             remediation = cJSON_GetObjectItem(check, "remediation");
-            if( remediation && !remediation->valuestring ) {
+            if (remediation && !remediation->valuestring) {
                 mdebug1("Malformed JSON: field 'remediation' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
             reference = cJSON_GetObjectItem(check, "references");
 
-            if( reference && !reference->valuestring ) {
+            if (reference && !reference->valuestring) {
                 mdebug1("Malformed JSON: field 'reference' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
             file = cJSON_GetObjectItem(check, "file");
-            if( file && !file->valuestring ) {
+            if (file && !file->valuestring) {
                 mdebug1("Malformed JSON: field 'file' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
             condition = cJSON_GetObjectItem(check, "condition");
-            if(condition && !condition->valuestring){
+            if (condition && !condition->valuestring) {
                 mdebug1("Malformed JSON: field 'condition' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
             directory = cJSON_GetObjectItem(check, "directory");
-            if( directory && !directory->valuestring ) {
+            if (directory && !directory->valuestring) {
                 mdebug1("Malformed JSON: field 'directory' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
             process = cJSON_GetObjectItem(check, "process");
-            if( process && !process->valuestring ) {
+            if (process && !process->valuestring) {
                 mdebug1("Malformed JSON: field 'process' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
             registry = cJSON_GetObjectItem(check, "registry");
-            if( registry && !registry->valuestring ) {
+            if (registry && !registry->valuestring) {
                 mdebug1("Malformed JSON: field 'registry' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
             command = cJSON_GetObjectItem(check, "command");
-            if( command && !command->valuestring ) {
+            if (command && !command->valuestring) {
                 mdebug1("Malformed JSON: field 'command' must be a string");
-                return -1;
+                return OS_INVALID;
             }
 
-            if ( status = cJSON_GetObjectItem(check, "status"), status) {
-                if ( reason = cJSON_GetObjectItem(check, "reason"), !reason) {
-                    merror("Malformed JSON: field 'reason' not found");
-                    return -1;
-                }
-
-                if( !status->valuestring ) {
-                    merror("Malformed JSON: field 'status' must be a string");
-                    return -1;
-                }
-
-                if( !reason->valuestring ) {
-                    merror("Malformed JSON: field 'reason' must be a string");
-                    return -1;
-                }
+            result_check = cJSON_GetObjectItem(check, "result");
+            if (result_check && !result_check->valuestring) {
+                mdebug1("Malformed JSON: field 'result' must be a string");
+                return OS_INVALID;
             }
 
-            if( result_check = cJSON_GetObjectItem(check, "result"), !result_check) {
-                if (!status){
-                    merror("Malformed JSON: field 'result' not found");
-                    return -1;
-                }
-            } else {
-                if(!result_check->valuestring ) {
-                    mdebug1("Malformed JSON: field 'result' must be a string");
-                    return -1;
-                }
+            reason = cJSON_GetObjectItem(check, "reason");
+            if (reason && !reason->valuestring) {
+                mdebug1("Malformed JSON: field 'reason' must be a string");
+                return OS_INVALID;
             }
         }
-
 
         if (result = wdb_sca_save(wdb, id->valueint, scan_id->valueint, title->valuestring,
                     description ? description->valuestring : NULL,
@@ -1704,10 +2202,10 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
                     process ? process->valuestring : NULL,
                     registry ? registry->valuestring : NULL,
                     reference ? reference->valuestring : NULL,
-                    result_check ? result_check->valuestring : "",
+                    result_check ? result_check->valuestring : "not applicable",
                     policy_id->valuestring,
                     command ? command->valuestring : NULL,
-                    status ? status->valuestring : NULL, reason ? reason->valuestring : NULL),
+                    reason ? reason->valuestring : NULL),
             result < 0)
         {
             mdebug1("Cannot save Security Configuration Assessment information.");
@@ -1720,13 +2218,12 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "delete_policy") == 0) {
-
         char *policy_id;
 
         curr = next;
         policy_id = curr;
 
-        if (result = wdb_sca_policy_delete(wdb,policy_id), result < 0) {
+        if (result = wdb_sca_policy_delete(wdb, policy_id), result < 0) {
             mdebug1("Cannot delete Security Configuration Assessment information.");
             snprintf(output, OS_MAXSTR + 1, "err Cannot delete Security Configuration Assessment information.");
         } else {
@@ -1735,7 +2232,6 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "delete_check_distinct") == 0) {
-
         char *policy_id;
         int scan_id;
 
@@ -1746,17 +2242,17 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         *next++ = '\0';
         curr = next;
         if (!strncmp(curr, "NULL", 4))
-            scan_id = -1;
+            scan_id = OS_INVALID;
         else
-            scan_id = strtol(curr,NULL,10);
+            scan_id = strtol(curr, NULL, 10);
 
-        if (result = wdb_sca_check_delete_distinct(wdb,policy_id,scan_id), result < 0) {
+        if (result = wdb_sca_check_delete_distinct(wdb, policy_id, scan_id), result < 0) {
             mdebug1("Cannot delete Security Configuration Assessment checks.");
             snprintf(output, OS_MAXSTR + 1, "err Cannot delete Security Configuration Assessment checks.");
         } else {
@@ -1768,13 +2264,12 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
         return result;
 
     } else if (strcmp(curr, "delete_check") == 0) {
-
         char *policy_id;
 
         curr = next;
         policy_id = curr;
 
-        if (result = wdb_sca_check_delete(wdb,policy_id), result < 0) {
+        if (result = wdb_sca_check_delete(wdb, policy_id), result < 0) {
             mdebug1("Cannot delete Security Configuration Assessment information.");
             snprintf(output, OS_MAXSTR + 1, "err Cannot delete Security Configuration Assessment check information.");
         } else {
@@ -1785,7 +2280,6 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "query_results") == 0) {
-
         char * policy_id;
         char result_found[OS_MAXSTR - WDB_RESPONSE_BEGIN_SIZE] = {0};
 
@@ -1799,7 +2293,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
                 snprintf(output, OS_MAXSTR + 1, "ok not found");
                 break;
             case 1:
-                snprintf(output, OS_MAXSTR + 1, "ok found %s",result_found);
+                snprintf(output, OS_MAXSTR + 1, "ok found %s", result_found);
                 break;
             default:
                 mdebug1("Cannot query Security Configuration Assessment.");
@@ -1808,7 +2302,6 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "query_scan") == 0) {
-
         char *policy_id;
         char result_found[OS_MAXSTR - WDB_RESPONSE_BEGIN_SIZE] = {0};
 
@@ -1822,7 +2315,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
                 snprintf(output, OS_MAXSTR + 1, "ok not found");
                 break;
             case 1:
-                snprintf(output, OS_MAXSTR + 1, "ok found %s",result_found);
+                snprintf(output, OS_MAXSTR + 1, "ok found %s", result_found);
                 break;
             default:
                 mdebug1("Cannot query Security Configuration Assessment.");
@@ -1831,7 +2324,6 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "query_policies") == 0) {
-
         char result_found[OS_MAXSTR - WDB_RESPONSE_BEGIN_SIZE] = {0};
 
         result = wdb_sca_policy_get_id(wdb, result_found);
@@ -1841,7 +2333,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
                 snprintf(output, OS_MAXSTR + 1, "ok not found");
                 break;
             case 1:
-                snprintf(output, OS_MAXSTR + 1, "ok found %s",result_found);
+                snprintf(output, OS_MAXSTR + 1, "ok found %s", result_found);
                 break;
             default:
                 mdebug1("Cannot query Security Configuration Assessment.");
@@ -1850,7 +2342,6 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "query_policy") == 0) {
-
         char *policy;
         char result_found[OS_MAXSTR - WDB_RESPONSE_BEGIN_SIZE] = {0};
 
@@ -1864,7 +2355,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
                 snprintf(output, OS_MAXSTR + 1, "ok not found");
                 break;
             case 1:
-                snprintf(output, OS_MAXSTR + 1, "ok found %s",result_found);
+                snprintf(output, OS_MAXSTR + 1, "ok found %s", result_found);
                 break;
             default:
                 mdebug1("Cannot query Security Configuration Assessment.");
@@ -1873,7 +2364,6 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "query_policy_sha256") == 0) {
-
         char *policy;
         char result_found[OS_MAXSTR - WDB_RESPONSE_BEGIN_SIZE] = {0};
 
@@ -1895,7 +2385,6 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "insert_policy") == 0) {
-
         char *name;
         char *file;
         char *id;
@@ -1908,7 +2397,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         name = curr;
@@ -1919,7 +2408,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         file = curr;
@@ -1930,7 +2419,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         id = curr;
@@ -1941,7 +2430,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         description = curr;
@@ -1952,14 +2441,14 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         references = curr;
         *next++ = '\0';
 
         hash_file = next;
-        if (result = wdb_sca_policy_info_save(wdb,name,file,id,description,references,hash_file), result < 0) {
+        if (result = wdb_sca_policy_info_save(wdb, name, file, id, description, references, hash_file), result < 0) {
             mdebug1("Cannot save Security Configuration Assessment information.");
             snprintf(output, OS_MAXSTR + 1, "err Cannot save Security Configuration Assessment global information.");
         } else {
@@ -1968,8 +2457,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
 
-    } else if (strcmp(curr, "insert_rules") == 0){
-
+    } else if (strcmp(curr, "insert_rules") == 0) {
         int id_check;
         char *type;
         char *rule;
@@ -1980,10 +2468,10 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
-         id_check = strtol(curr,NULL,10);
+         id_check = strtol(curr, NULL, 10);
         *next++ = '\0';
 
          curr = next;
@@ -1991,14 +2479,14 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
          type = curr;
         *next++ = '\0';
 
          rule = next;
-        if (result = wdb_sca_rules_save(wdb,id_check,type,rule), result < 0) {
+        if (result = wdb_sca_rules_save(wdb, id_check, type, rule), result < 0) {
             mdebug1("Cannot save configuration assessment information.");
             snprintf(output, OS_MAXSTR + 1, "err Cannot save configuration assessment global information.");
         } else {
@@ -2008,7 +2496,6 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
          return result;
 
     } else if (strcmp(curr, "insert_compliance") == 0) {
-
         int id_check;
         char *key;
         char *value;
@@ -2019,10 +2506,10 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Security Configuration Assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
-        id_check = strtol(curr,NULL,10);
+        id_check = strtol(curr, NULL, 10);
         *next++ = '\0';
 
         curr = next;
@@ -2030,14 +2517,14 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Security Configuration Assessment query syntax.");
             mdebug2("Security Configuration Assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         key = curr;
         *next++ = '\0';
 
         value = next;
-        if (result = wdb_sca_compliance_save(wdb,id_check,key,value), result < 0) {
+        if (result = wdb_sca_compliance_save(wdb, id_check, key, value), result < 0) {
             mdebug1("Cannot save configuration assessment information.");
             snprintf(output, OS_MAXSTR + 1, "err Cannot save configuration assessment global information.");
         } else {
@@ -2046,7 +2533,6 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "insert_scan_info") == 0) {
-
         curr = next;
 
         int pm_start_scan;
@@ -2064,13 +2550,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            pm_start_scan = -1;
+            pm_start_scan = OS_INVALID;
         else
-            pm_start_scan = strtol(curr,NULL,10);
+            pm_start_scan = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2079,13 +2565,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            pm_end_scan = -1;
+            pm_end_scan = OS_INVALID;
         else
-            pm_end_scan = strtol(curr,NULL,10);
+            pm_end_scan = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2094,13 +2580,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            scan_id = -1;
+            scan_id = OS_INVALID;
         else
-            scan_id = strtol(curr,NULL,10);
+            scan_id = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2109,7 +2595,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         policy_id = curr;
@@ -2120,13 +2606,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            pass = -1;
+            pass = OS_INVALID;
         else
-            pass = strtol(curr,NULL,10);
+            pass = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2135,13 +2621,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            fail = -1;
+            fail = OS_INVALID;
         else
-            fail = strtol(curr,NULL,10);
+            fail = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2150,13 +2636,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            invalid = -1;
+            invalid = OS_INVALID;
         else
-            invalid = strtol(curr,NULL,10);
+            invalid = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2165,13 +2651,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            total_checks = -1;
+            total_checks = OS_INVALID;
         else
-            total_checks = strtol(curr,NULL,10);
+            total_checks = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2180,18 +2666,18 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            score = -1;
+            score = OS_INVALID;
         else
-            score = strtol(curr,NULL,10);
+            score = strtol(curr, NULL, 10);
 
         *next++ = '\0';
 
         hash = next;
-        if (result = wdb_sca_scan_info_save(wdb,pm_start_scan,pm_end_scan,scan_id,policy_id,pass,fail,invalid,total_checks,score,hash), result < 0) {
+        if (result = wdb_sca_scan_info_save(wdb, pm_start_scan, pm_end_scan, scan_id, policy_id, pass, fail, invalid, total_checks, score, hash), result < 0) {
             mdebug1("Cannot save configuration assessment information.");
             snprintf(output, OS_MAXSTR + 1, "err Cannot save configuration assessment information.");
         } else {
@@ -2205,12 +2691,11 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
         char *module;
         int pm_end_scan;
 
-
         if (next = strchr(curr, '|'), !next) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         module = curr;
@@ -2223,11 +2708,11 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
         curr = next;
 
         if (!strncmp(curr, "NULL", 4))
-            pm_end_scan = -1;
+            pm_end_scan = OS_INVALID;
         else
-            pm_end_scan = strtol(curr,NULL,10);
+            pm_end_scan = strtol(curr, NULL, 10);
 
-        if (result = wdb_sca_scan_info_update(wdb, module,pm_end_scan), result < 0) {
+        if (result = wdb_sca_scan_info_update(wdb, module, pm_end_scan), result < 0) {
             mdebug1("Cannot save configuration assessment information.");
             snprintf(output, OS_MAXSTR + 1, "err Cannot save configuration assessment information.");
         } else {
@@ -2236,7 +2721,6 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "update_scan_info_start") == 0) {
-
         char *policy_id;
         int pm_start_scan;
         int pm_end_scan;
@@ -2253,7 +2737,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         policy_id = curr;
@@ -2265,7 +2749,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(policy_id, "NULL"))
@@ -2275,22 +2759,22 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
         curr = next;
 
         if (!strncmp(curr, "NULL", 4))
-            pm_start_scan = -1;
+            pm_start_scan = OS_INVALID;
         else
-            pm_start_scan = strtol(curr,NULL,10);
+            pm_start_scan = strtol(curr, NULL, 10);
 
         curr = next;
         if (next = strchr(curr, '|'), !next) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            pm_end_scan = -1;
+            pm_end_scan = OS_INVALID;
         else
-            pm_end_scan = strtol(curr,NULL,10);
+            pm_end_scan = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2299,13 +2783,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            scan_id = -1;
+            scan_id = OS_INVALID;
         else
-            scan_id = strtol(curr,NULL,10);
+            scan_id = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2314,13 +2798,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            pass = -1;
+            pass = OS_INVALID;
         else
-            pass = strtol(curr,NULL,10);
+            pass = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2329,13 +2813,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            fail = -1;
+            fail = OS_INVALID;
         else
-            fail = strtol(curr,NULL,10);
+            fail = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2344,13 +2828,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            invalid = -1;
+            invalid = OS_INVALID;
         else
-            invalid = strtol(curr,NULL,10);
+            invalid = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2359,13 +2843,13 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            total_checks = -1;
+            total_checks = OS_INVALID;
         else
-            total_checks = strtol(curr,NULL,10);
+            total_checks = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2374,19 +2858,19 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid configuration assessment query syntax.");
             mdebug2("configuration assessment query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid configuration assessment query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            score = -1;
+            score = OS_INVALID;
         else
-            score = strtol(curr,NULL,10);
+            score = strtol(curr, NULL, 10);
 
         *next++ = '\0';
 
         hash = next;
 
-        if (result = wdb_sca_scan_info_update_start(wdb, policy_id,pm_start_scan,pm_end_scan,scan_id,pass,fail,invalid,total_checks,score,hash), result < 0) {
+        if (result = wdb_sca_scan_info_update_start(wdb, policy_id, pm_start_scan, pm_end_scan, scan_id, pass, fail, invalid, total_checks, score, hash), result < 0) {
             mdebug1("Cannot save configuration assessment information.");
             snprintf(output, OS_MAXSTR + 1, "err Cannot save configuration assessment information.");
         } else {
@@ -2398,7 +2882,7 @@ int wdb_parse_sca(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid configuration assessment query syntax.");
         mdebug2("DB query error near: %s", curr);
         snprintf(output, OS_MAXSTR + 1, "err Invalid Rootcheck query syntax, near '%.32s'", curr);
-        return -1;
+        return OS_INVALID;
     }
 }
 
@@ -2427,7 +2911,7 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid Network query syntax.");
         mdebug2("Network query: %s", input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", input);
-        return -1;
+        return OS_INVALID;
     }
 
     curr = input;
@@ -2440,7 +2924,7 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         scan_id = curr;
@@ -2454,7 +2938,7 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         scan_time = curr;
@@ -2465,7 +2949,7 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %s", scan_time);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", scan_time);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(scan_time, "NULL"))
@@ -2475,12 +2959,11 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
         *next++ = '\0';
         curr = next;
 
-
         if (next = strchr(curr, '|'), !next) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %s", name);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", name);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(name, "NULL"))
@@ -2494,7 +2977,7 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %s", adapter);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", adapter);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(adapter, "NULL"))
@@ -2508,7 +2991,7 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %s", type);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", type);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(type, "NULL"))
@@ -2522,16 +3005,16 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %s", state);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", state);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(state, "NULL"))
             state = NULL;
 
         if (!strncmp(curr, "NULL", 4))
-            mtu = -1;
+            mtu = OS_INVALID;
         else
-            mtu = strtol(curr,NULL,10);
+            mtu = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2540,7 +3023,7 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %d", mtu);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         mac = curr;
@@ -2551,16 +3034,16 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %s", mac);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", mac);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(mac, "NULL"))
             mac = NULL;
 
         if (!strncmp(curr, "NULL", 4))
-            tx_packets = -1;
+            tx_packets = OS_INVALID;
         else
-            tx_packets = strtol(curr,NULL,10);
+            tx_packets = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2569,13 +3052,13 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %ld", tx_packets);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            rx_packets = -1;
+            rx_packets = OS_INVALID;
         else
-            rx_packets = strtol(curr,NULL,10);
+            rx_packets = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2584,13 +3067,13 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %ld", rx_packets);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            tx_bytes = -1;
+            tx_bytes = OS_INVALID;
         else
-            tx_bytes = strtol(curr,NULL,10);
+            tx_bytes = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2599,13 +3082,13 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %ld", tx_bytes);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            rx_bytes = -1;
+            rx_bytes = OS_INVALID;
         else
-            rx_bytes = strtol(curr,NULL,10);
+            rx_bytes = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2614,13 +3097,13 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %ld", rx_bytes);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            tx_errors = -1;
+            tx_errors = OS_INVALID;
         else
-            tx_errors = strtol(curr,NULL,10);
+            tx_errors = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2629,13 +3112,13 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %ld", tx_errors);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            rx_errors = -1;
+            rx_errors = OS_INVALID;
         else
-            rx_errors = strtol(curr,NULL,10);
+            rx_errors = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2644,19 +3127,19 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %ld", rx_errors);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            tx_dropped = -1;
+            tx_dropped = OS_INVALID;
         else
-            tx_dropped = strtol(curr,NULL,10);
+            tx_dropped = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         if (!strncmp(next, "NULL", 4))
-            rx_dropped = -1;
+            rx_dropped = OS_INVALID;
         else
-            rx_dropped = strtol(next,NULL,10);
+            rx_dropped = strtol(next, NULL, 10);
 
         if (result = wdb_netinfo_save(wdb, scan_id, scan_time, name, adapter, type, state, mtu, mac, tx_packets, rx_packets, tx_bytes, rx_bytes, tx_errors, rx_errors, tx_dropped, rx_dropped, SYSCOLLECTOR_LEGACY_CHECKSUM_VALUE, NULL, FALSE), result < 0) {
             mdebug1("Cannot save Network information.");
@@ -2668,7 +3151,6 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
         return result;
 
     } else if (strcmp(curr, "del") == 0) {
-
         if (!strcmp(next, "NULL"))
             scan_id = NULL;
         else
@@ -2687,7 +3169,7 @@ int wdb_parse_netinfo(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid netinfo query syntax.");
         mdebug2("DB query error near: %s", curr);
         snprintf(output, OS_MAXSTR + 1, "err Invalid netinfo query syntax, near '%.32s'", curr);
-        return -1;
+        return OS_INVALID;
     }
 }
 
@@ -2706,7 +3188,7 @@ int wdb_parse_netproto(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid netproto query syntax.");
         mdebug2("netproto query: %s", input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid netproto query syntax, near '%.32s'", input);
-        return -1;
+        return OS_INVALID;
     }
 
     curr = input;
@@ -2719,7 +3201,7 @@ int wdb_parse_netproto(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid netproto query syntax.");
             mdebug2("netproto query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid netproto query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         scan_id = curr;
@@ -2733,7 +3215,7 @@ int wdb_parse_netproto(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid netproto query syntax.");
             mdebug2("netproto query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid netproto query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         iface = curr;
@@ -2744,13 +3226,13 @@ int wdb_parse_netproto(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid netproto query syntax.");
             mdebug2("netproto query: %s", iface);
             snprintf(output, OS_MAXSTR + 1, "err Invalid netproto query syntax, near '%.32s'", iface);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(iface, "NULL"))
             iface = NULL;
 
-        type = strtol(curr,NULL,10);
+        type = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2759,7 +3241,7 @@ int wdb_parse_netproto(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %d", type);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         gateway = curr;
@@ -2770,7 +3252,7 @@ int wdb_parse_netproto(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid netproto query syntax.");
             mdebug2("netproto query: %s", gateway);
             snprintf(output, OS_MAXSTR + 1, "err Invalid netproto query syntax, near '%.32s'", gateway);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(gateway, "NULL"))
@@ -2783,9 +3265,9 @@ int wdb_parse_netproto(wdb_t * wdb, char * input, char * output) {
             dhcp = NULL;
 
         if (!strncmp(next, "NULL", 4))
-            metric = -1;
+            metric = OS_INVALID;
         else
-            metric = strtol(next,NULL,10);
+            metric = strtol(next, NULL, 10);
 
         if (result = wdb_netproto_save(wdb, scan_id, iface, type, gateway, dhcp, metric, SYSCOLLECTOR_LEGACY_CHECKSUM_VALUE, NULL, FALSE), result < 0) {
             mdebug1("Cannot save netproto information.");
@@ -2800,7 +3282,7 @@ int wdb_parse_netproto(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid netproto query syntax.");
         mdebug2("DB query error near: %s", curr);
         snprintf(output, OS_MAXSTR + 1, "err Invalid netproto query syntax, near '%.32s'", curr);
-        return -1;
+        return OS_INVALID;
     }
 }
 
@@ -2819,7 +3301,7 @@ int wdb_parse_netaddr(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid netaddr query syntax.");
         mdebug2("netaddr query: %s", input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid netaddr query syntax, near '%.32s'", input);
-        return -1;
+        return OS_INVALID;
     }
 
     curr = input;
@@ -2832,7 +3314,7 @@ int wdb_parse_netaddr(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid netaddr query syntax.");
             mdebug2("netaddr query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid netaddr query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         scan_id = curr;
@@ -2846,24 +3328,24 @@ int wdb_parse_netaddr(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid netaddr query syntax.");
             mdebug2("netaddr query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid netaddr query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         iface = curr;
-		*next++ = '\0';
-		curr = next;
+        *next++ = '\0';
+        curr = next;
 
-		if (next = strchr(curr, '|'), !next) {
-			mdebug1("Invalid netaddr query syntax.");
-			mdebug2("netaddr query: %s", iface);
-			snprintf(output, OS_MAXSTR + 1, "err Invalid netaddr query syntax, near '%.32s'", iface);
-			return -1;
-		}
+        if (next = strchr(curr, '|'), !next) {
+            mdebug1("Invalid netaddr query syntax.");
+            mdebug2("netaddr query: %s", iface);
+            snprintf(output, OS_MAXSTR + 1, "err Invalid netaddr query syntax, near '%.32s'", iface);
+            return OS_INVALID;
+        }
 
-		if (!strcmp(iface, "NULL"))
-			iface = NULL;
+        if (!strcmp(iface, "NULL"))
+            iface = NULL;
 
-        proto = strtol(curr,NULL,10);
+        proto = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -2872,7 +3354,7 @@ int wdb_parse_netaddr(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Network query syntax.");
             mdebug2("Network query: %d", proto);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Network query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         address = curr;
@@ -2883,7 +3365,7 @@ int wdb_parse_netaddr(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid netaddr query syntax.");
             mdebug2("netaddr query: %s", address);
             snprintf(output, OS_MAXSTR + 1, "err Invalid netaddr query syntax, near '%.32s'", address);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(address, "NULL"))
@@ -2913,11 +3395,65 @@ int wdb_parse_netaddr(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid netaddr query syntax.");
         mdebug2("DB query error near: %s", curr);
         snprintf(output, OS_MAXSTR + 1, "err Invalid netaddr query syntax, near '%.32s'", curr);
-        return -1;
+        return OS_INVALID;
     }
 }
 
-int wdb_parse_osinfo(wdb_t * wdb, char * input, char * output) {
+int wdb_parse_osinfo(wdb_t* wdb, char* input, char* output) {
+    int result = OS_INVALID;
+    char * next;
+    const char delim[] = " ";
+    char *tail = NULL;
+
+    next = strtok_r(input, delim, &tail);
+
+    if (!next) {
+        snprintf(output, OS_MAXSTR + 1, "err Missing osinfo action");
+    }
+    else if (strcmp(next, "get") == 0) {
+        result = wdb_parse_agents_get_sys_osinfo(wdb, output);
+    }
+    else if (strcmp(next, "set") == 0) {
+        result = wdb_parse_agents_set_sys_osinfo(wdb, tail, output);
+    }
+    else if (strcmp(next, "set_triaged") == 0) {
+        result = wdb_parse_agents_set_sys_osinfo_triaged(wdb, output);
+    }
+    else {
+        snprintf(output, OS_MAXSTR + 1, "err Invalid osinfo action: %s", next);
+    }
+
+    return result;
+}
+
+int wdb_parse_agents_set_sys_osinfo_triaged(wdb_t* wdb, char* output) {
+    int ret = wdb_agents_set_sys_osinfo_triaged(wdb);
+    if (OS_SUCCESS != ret) {
+        snprintf(output, OS_MAXSTR + 1, "err Cannot set sys_osinfo as triaged; SQL err: %s", sqlite3_errmsg(wdb->db));
+    }
+    else {
+        snprintf(output, OS_MAXSTR + 1, "ok");
+    }
+    return ret;
+}
+
+int wdb_parse_agents_get_sys_osinfo(wdb_t* wdb, char* output) {
+    int ret = OS_INVALID;
+    cJSON *result = wdb_agents_get_sys_osinfo(wdb);
+    if (!result) {
+        snprintf(output, OS_MAXSTR + 1, "err Cannot get sys_osinfo database table information; SQL err: %s", sqlite3_errmsg(wdb->db));
+    }
+    else {
+        char *out = cJSON_PrintUnformatted(result);
+        snprintf(output, OS_MAXSTR + 1, "ok %s", out);
+        os_free(out);
+        cJSON_Delete(result);
+        ret = OS_SUCCESS;
+    }
+    return ret;
+}
+
+int wdb_parse_agents_set_sys_osinfo(wdb_t * wdb, char * input, char * output) {
     char * curr;
     char * next;
     char * scan_id;
@@ -2939,261 +3475,229 @@ int wdb_parse_osinfo(wdb_t * wdb, char * input, char * output) {
     char * os_display_version;
     int result;
 
-    if (next = strchr(input, ' '), !next) {
+    curr = input;
+
+    if (next = strchr(curr, '|'), !next) {
         mdebug1("Invalid OS info query syntax.");
-        mdebug2("OS info query: %s", input);
-        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", input);
-        return -1;
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
     }
 
-    curr = input;
+    scan_id = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(scan_id, "NULL"))
+        scan_id = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    scan_time = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(scan_time, "NULL"))
+        scan_time = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    hostname = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(hostname, "NULL"))
+        hostname = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    architecture = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(architecture, "NULL"))
+        architecture = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    os_name = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(os_name, "NULL"))
+        os_name = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    os_version = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(os_version, "NULL"))
+        os_version = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    os_codename = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(os_codename, "NULL"))
+        os_codename = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    os_major = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(os_major, "NULL"))
+        os_major = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    os_minor = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(os_minor, "NULL"))
+        os_minor = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    os_build = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(os_build, "NULL"))
+        os_build = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    os_platform = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(os_platform, "NULL"))
+        os_platform = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    sysname = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(sysname, "NULL"))
+        sysname = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    release = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(release, "NULL"))
+        release = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    version = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(version, "NULL"))
+        version = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax");
+        return OS_INVALID;
+    }
+
+    os_release = curr;
+    *next++ = '\0';
+    curr = next;
+
+    if (!strcmp(os_release, "NULL"))
+    os_release = NULL;
+
+    if (next = strchr(curr, '|'), !next) {
+        mdebug1("Invalid OS info query syntax.");
+        mdebug2("OS info query: %s", curr);
+        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", curr);
+        return OS_INVALID;
+    }
+
+    os_patch = curr;
     *next++ = '\0';
 
-    if (strcmp(curr, "save") == 0) {
-        curr = next;
+    if (!strcmp(os_patch, "NULL"))
+        os_patch = NULL;
 
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", curr);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", curr);
-            return -1;
-        }
+    if (!strcmp(next, "NULL"))
+        os_display_version = NULL;
+    else
+        os_display_version = next;
 
-        scan_id = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (!strcmp(scan_id, "NULL"))
-            scan_id = NULL;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", curr);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", curr);
-            return -1;
-        }
-
-        scan_time = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", scan_time);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", scan_time);
-            return -1;
-        }
-
-        if (!strcmp(scan_time, "NULL"))
-            scan_time = NULL;
-
-        hostname = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", hostname);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", hostname);
-            return -1;
-        }
-
-        if (!strcmp(hostname, "NULL"))
-            hostname = NULL;
-
-        architecture = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", architecture);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", architecture);
-            return -1;
-        }
-
-        if (!strcmp(architecture, "NULL"))
-            architecture = NULL;
-
-        os_name = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", os_name);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", os_name);
-            return -1;
-        }
-
-        if (!strcmp(os_name, "NULL"))
-            os_name = NULL;
-
-        os_version = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", os_version);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", os_version);
-            return -1;
-        }
-
-        if (!strcmp(os_version, "NULL"))
-            os_version = NULL;
-
-        os_codename = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", os_codename);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", os_codename);
-            return -1;
-        }
-
-        if (!strcmp(os_codename, "NULL"))
-            os_codename = NULL;
-
-        os_major = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", os_major);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", os_major);
-            return -1;
-        }
-
-        if (!strcmp(os_major, "NULL"))
-            os_major = NULL;
-
-        os_minor = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", os_minor);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", os_minor);
-            return -1;
-        }
-
-        if (!strcmp(os_minor, "NULL"))
-            os_minor = NULL;
-
-        os_build = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", os_build);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", os_build);
-            return -1;
-        }
-
-        if (!strcmp(os_build, "NULL"))
-            os_build = NULL;
-
-        os_platform = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", os_platform);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", os_platform);
-            return -1;
-        }
-
-        if (!strcmp(os_platform, "NULL"))
-            os_platform = NULL;
-
-        sysname = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", sysname);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", sysname);
-            return -1;
-        }
-
-        if (!strcmp(sysname, "NULL"))
-            sysname = NULL;
-
-        release = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (!strcmp(release, "NULL"))
-            release = NULL;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", curr);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", curr);
-            return -1;
-        }
-
-        version = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (!strcmp(version, "NULL"))
-            version = NULL;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", curr);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", curr);
-            return -1;
-        }
-
-        os_release = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (!strcmp(os_release, "NULL"))
-            os_release = NULL;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid OS info query syntax.");
-            mdebug2("OS info query: %s", curr);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", curr);
-            return -1;
-        }
-
-        os_patch = curr;
-        *next++ = '\0';
-
-        if (!strcmp(os_patch, "NULL"))
-            os_patch = NULL;
-
-        if (!strcmp(next, "NULL"))
-            os_display_version = NULL;
-        else
-            os_display_version = next;
-
-        if (result = wdb_osinfo_save(wdb, scan_id, scan_time, hostname, architecture, os_name, os_version, os_codename, os_major, os_minor, os_patch, os_build, os_platform, sysname, release, version, os_release, os_display_version, SYSCOLLECTOR_LEGACY_CHECKSUM_VALUE, FALSE), result < 0) {
-            mdebug1("Cannot save OS information.");
-            snprintf(output, OS_MAXSTR + 1, "err Cannot save OS information.");
-        } else {
-            snprintf(output, OS_MAXSTR + 1, "ok");
-        }
-
-        return result;
+    if (result = wdb_osinfo_save(wdb, scan_id, scan_time, hostname, architecture, os_name, os_version, os_codename, os_major, os_minor, os_patch, os_build, os_platform, sysname, release, version, os_release, os_display_version, SYSCOLLECTOR_LEGACY_CHECKSUM_VALUE, FALSE), result < 0) {
+        mdebug1("Cannot save OS information.");
+        snprintf(output, OS_MAXSTR + 1, "err Cannot save OS information.");
     } else {
-        mdebug1("Invalid OS info query syntax.");
-        mdebug2("DB query error near: %s", curr);
-        snprintf(output, OS_MAXSTR + 1, "err Invalid OS info query syntax, near '%.32s'", curr);
-        return -1;
+        snprintf(output, OS_MAXSTR + 1, "ok");
     }
+
+    return result;
 }
 
 int wdb_parse_hardware(wdb_t * wdb, char * input, char * output) {
@@ -3214,7 +3718,7 @@ int wdb_parse_hardware(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid HW info query syntax.");
         mdebug2("HW info query: %s", input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid HW info query syntax, near '%.32s'", input);
-        return -1;
+        return OS_INVALID;
     }
 
     curr = input;
@@ -3227,7 +3731,7 @@ int wdb_parse_hardware(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid HW info query syntax.");
             mdebug2("HW info query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid HW info query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         scan_id = curr;
@@ -3238,7 +3742,7 @@ int wdb_parse_hardware(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid HW info query syntax.");
             mdebug2("HW info query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid HW info query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(scan_id, "NULL"))
@@ -3252,7 +3756,7 @@ int wdb_parse_hardware(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid HW info query syntax.");
             mdebug2("HW info query: %s", scan_time);
             snprintf(output, OS_MAXSTR + 1, "err Invalid HW info query syntax, near '%.32s'", scan_time);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(scan_time, "NULL"))
@@ -3266,7 +3770,7 @@ int wdb_parse_hardware(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid HW info query syntax.");
             mdebug2("HW info query: %s", serial);
             snprintf(output, OS_MAXSTR + 1, "err Invalid HW info query syntax, near '%.32s'", serial);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(serial, "NULL"))
@@ -3280,13 +3784,13 @@ int wdb_parse_hardware(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid HW info query syntax.");
             mdebug2("HW info query: %s", cpu_name);
             snprintf(output, OS_MAXSTR + 1, "err Invalid HW info query syntax, near '%.32s'", cpu_name);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(cpu_name, "NULL"))
             cpu_name = NULL;
 
-        cpu_cores = strtol(curr,NULL,10);
+        cpu_cores = strtol(curr, NULL, 10);
         *next++ = '\0';
         curr = next;
 
@@ -3294,7 +3798,7 @@ int wdb_parse_hardware(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid HW info query syntax.");
             mdebug2("HW info query: %d", cpu_cores);
             snprintf(output, OS_MAXSTR + 1, "err Invalid HW info query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         cpu_mhz = strtod(curr, NULL);
@@ -3305,10 +3809,10 @@ int wdb_parse_hardware(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid HW info query syntax.");
             mdebug2("HW info query: %f", cpu_mhz);
             snprintf(output, OS_MAXSTR + 1, "err Invalid HW info query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
-        ram_total = strtol(curr,NULL,10);
+        ram_total = strtol(curr, NULL, 10);
         *next++ = '\0';
         curr = next;
 
@@ -3316,12 +3820,12 @@ int wdb_parse_hardware(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid HW info query syntax.");
             mdebug2("HW info query: %" PRIu64, ram_total);
             snprintf(output, OS_MAXSTR + 1, "err Invalid HW info query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
-        ram_free = strtol(curr,NULL,10);
+        ram_free = strtol(curr, NULL, 10);
         *next++ = '\0';
-        ram_usage = strtol(next,NULL,10);
+        ram_usage = strtol(next, NULL, 10);
 
         if (result = wdb_hardware_save(wdb, scan_id, scan_time, serial, cpu_name, cpu_cores, cpu_mhz, ram_total, ram_free, ram_usage, SYSCOLLECTOR_LEGACY_CHECKSUM_VALUE, FALSE), result < 0) {
             mdebug1("wdb_parse_hardware(): Cannot save HW information.");
@@ -3335,7 +3839,7 @@ int wdb_parse_hardware(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid HW info query syntax.");
         mdebug2("DB query error near: %s", curr);
         snprintf(output, OS_MAXSTR + 1, "err Invalid HW info query syntax, near '%.32s'", curr);
-        return -1;
+        return OS_INVALID;
     }
 }
 
@@ -3351,7 +3855,7 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
     int remote_port;
     int tx_queue;
     int rx_queue;
-    int inode;
+    long long inode;
     char * state;
     int pid;
     char * process;
@@ -3361,7 +3865,7 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid Port query syntax.");
         mdebug2("Port query: %s", input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", input);
-        return -1;
+        return OS_INVALID;
     }
 
     curr = input;
@@ -3374,7 +3878,7 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Port query syntax.");
             mdebug2("Port query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         scan_id = curr;
@@ -3388,7 +3892,7 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Port query syntax.");
             mdebug2("Port query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         scan_time = curr;
@@ -3399,7 +3903,7 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Port query syntax.");
             mdebug2("Port query: %s", scan_time);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", scan_time);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(scan_time, "NULL"))
@@ -3409,12 +3913,11 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
         *next++ = '\0';
         curr = next;
 
-
         if (next = strchr(curr, '|'), !next) {
             mdebug1("Invalid Port query syntax.");
             mdebug2("Port query: %s", protocol);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", protocol);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(protocol, "NULL"))
@@ -3428,16 +3931,16 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Port query syntax.");
             mdebug2("Port query: %s", local_ip);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", local_ip);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(local_ip, "NULL"))
             local_ip = NULL;
 
         if (!strncmp(curr, "NULL", 4))
-            local_port = -1;
+            local_port = OS_INVALID;
         else
-            local_port = strtol(curr,NULL,10);
+            local_port = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -3446,7 +3949,7 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Port query syntax.");
             mdebug2("Port query: %d", local_port);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         remote_ip = curr;
@@ -3457,16 +3960,16 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Port query syntax.");
             mdebug2("Port query: %s", remote_ip);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", remote_ip);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(remote_ip, "NULL"))
             remote_ip = NULL;
 
         if (!strncmp(curr, "NULL", 4))
-            remote_port = -1;
+            remote_port = OS_INVALID;
         else
-            remote_port = strtol(curr,NULL,10);
+            remote_port = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -3475,13 +3978,13 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Port query syntax.");
             mdebug2("Port query: %d", remote_port);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            tx_queue = -1;
+            tx_queue = OS_INVALID;
         else
-            tx_queue = strtol(curr,NULL,10);
+            tx_queue = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -3490,13 +3993,13 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Port query syntax.");
             mdebug2("Port query: %d", tx_queue);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            rx_queue = -1;
+            rx_queue = OS_INVALID;
         else
-            rx_queue = strtol(curr,NULL,10);
+            rx_queue = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -3505,22 +4008,22 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Port query syntax.");
             mdebug2("Port query: %d", rx_queue);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            inode = -1;
+            inode = OS_INVALID;
         else
-            inode = strtol(curr,NULL,10);
+            inode = strtoll(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
 
         if (next = strchr(curr, '|'), !next) {
             mdebug1("Invalid Port query syntax.");
-            mdebug2("Port query: %d", inode);
+            mdebug2("Port query: %lld", inode);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         state = curr;
@@ -3531,16 +4034,16 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Port query syntax.");
             mdebug2("Port query: %s", state);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", state);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(state, "NULL"))
             state = NULL;
 
         if (!strncmp(curr, "NULL", 4))
-            pid = -1;
+            pid = OS_INVALID;
         else
-            pid = strtol(curr,NULL,10);
+            pid = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         if (!strncmp(next, "NULL", 4))
@@ -3557,7 +4060,6 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "del") == 0) {
-
         if (!strcmp(next, "NULL"))
             scan_id = NULL;
         else
@@ -3576,367 +4078,209 @@ int wdb_parse_ports(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid Port query syntax.");
         mdebug2("DB query error near: %s", curr);
         snprintf(output, OS_MAXSTR + 1, "err Invalid Port query syntax, near '%.32s'", curr);
-        return -1;
+        return OS_INVALID;
     }
 }
 
-
 int wdb_parse_packages(wdb_t * wdb, char * input, char * output) {
-    char * curr;
-    char * next;
-    char * scan_id;
-    char * scan_time;
-    char * format;
-    char * name;
-    char * priority;
-    char * section;
-    long size;
-    char * vendor;
-    char * install_time;
-    char * version;
-    char * architecture;
-    char * multiarch;
-    char * source;
-    char * description;
-    char * location;
-    int result;
+    int result = OS_INVALID;
+    char* next = NULL;
+    char* tail = NULL;
+    char* action = strtok_r(input, " ", &tail);
 
-    if (next = strchr(input, ' '), !next) {
-        mdebug1("Invalid Package info query syntax.");
-        mdebug2("Package info query: %s", input);
-        snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", input);
-        return -1;
+    if (!action) {
+        mdebug1("Invalid package info query syntax. Missing action");
+        mdebug2("DB query error. Missing action");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid package info query syntax. Missing action");
+        return result;
     }
+    else if (strcmp(action, "save") == 0) {
+        /* The format of the data is scan_id|scan_time|format|name|priority|section|size|vendor|install_time|version|architecture|multiarch|source|description|location|item_id*/
+        #define SAVE_PACKAGE_FIELDS_AMOUNT 16
+        char* fields[SAVE_PACKAGE_FIELDS_AMOUNT] = {NULL};
+        char* last = NULL;
 
-    curr = input;
-    *next++ = '\0';
-
-    if (strcmp(curr, "save") == 0) {
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", curr);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", curr);
-            return -1;
+        for (int i = 0; i < SAVE_PACKAGE_FIELDS_AMOUNT; i++) {
+            last = tail;
+            if (i < SAVE_PACKAGE_FIELDS_AMOUNT-1) {
+                if (next = strchr(tail, '|'), !next) {
+                    mdebug1("Invalid package info query syntax.");
+                    mdebug2("Package info query: %s", last);
+                    snprintf(output, OS_MAXSTR + 1, "err Invalid package info query syntax, near '%.32s'", last);
+                    return result;
+                }
+                *next++ = '\0';
+                tail = next;
+            }
+            if (strcmp(last, "NULL"))
+            {
+                fields[i] = last;
+            }
         }
 
-        scan_id = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (!strcmp(scan_id, "NULL"))
-            scan_id = NULL;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", curr);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", curr);
-            return -1;
+        /* size (field[6]) must be converted and can be represented as NULL with a string longer than "NULL" */
+        long size = OS_INVALID;
+        if (fields[6] && strncmp(fields[6], "NULL", 4)) {
+            size = strtol(fields[6], NULL, 10);
         }
 
-        scan_time = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", scan_time);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", scan_time);
-            return -1;
-        }
-
-        if (!strcmp(scan_time, "NULL"))
-            scan_time = NULL;
-
-        format = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", format);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", format);
-            return -1;
-        }
-
-        if (!strcmp(format, "NULL"))
-            format = NULL;
-
-        name = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", name);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", name);
-            return -1;
-        }
-
-        if (!strcmp(name, "NULL"))
-            name = NULL;
-
-        priority = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", priority);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", priority);
-            return -1;
-        }
-
-        if (!strcmp(priority, "NULL"))
-            priority = NULL;
-
-        section = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", section);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", section);
-            return -1;
-        }
-
-        if (!strcmp(section, "NULL"))
-            section = NULL;
-
-        if (!strncmp(curr, "NULL", 4))
-            size = -1;
-        else
-            size = strtol(curr,NULL,10);
-
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package query syntax.");
-            mdebug2("Package query: %ld", size);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package query syntax, near '%.32s'", curr);
-            return -1;
-        }
-
-        vendor = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", vendor);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", vendor);
-            return -1;
-        }
-
-        if (!strcmp(vendor, "NULL"))
-            vendor = NULL;
-
-        install_time = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", install_time);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", install_time);
-            return -1;
-        }
-
-        if (!strcmp(install_time, "NULL"))
-            install_time = NULL;
-
-        version = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", version);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", version);
-            return -1;
-        }
-
-        if (!strcmp(version, "NULL"))
-            version = NULL;
-
-        architecture = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", architecture);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", architecture);
-            return -1;
-        }
-
-        if (!strcmp(architecture, "NULL"))
-            architecture = NULL;
-
-        multiarch = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", multiarch);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", multiarch);
-            return -1;
-        }
-
-        if (!strcmp(multiarch, "NULL"))
-            multiarch = NULL;
-
-        source = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Package info query syntax.");
-            mdebug2("Package info query: %s", source);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", source);
-            return -1;
-        }
-
-        if (!strcmp(source, "NULL"))
-            source = NULL;
-
-        description = curr;
-        *next++ = '\0';
-
-        if (!strcmp(description, "NULL"))
-            description = NULL;
-
-        if (!strcmp(next, "NULL"))
-            location = NULL;
-        else
-            location = next;
-
-        if (result = wdb_package_save(wdb, scan_id, scan_time, format, name, priority, section, size, vendor, install_time, version, architecture, multiarch, source, description, location, SYSCOLLECTOR_LEGACY_CHECKSUM_VALUE, NULL, FALSE), result < 0) {
-            mdebug1("Cannot save Package information.");
-            snprintf(output, OS_MAXSTR + 1, "err Cannot save Package information.");
+        if (result = wdb_package_save(wdb, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], size, fields[7], fields[8], fields[9], fields[10], fields[11], fields[12], fields[13], fields[14], SYSCOLLECTOR_LEGACY_CHECKSUM_VALUE, fields[15], FALSE), result < 0) {
+            mdebug1("Cannot save package information.");
+            snprintf(output, OS_MAXSTR + 1, "err Cannot save package information.");
         } else {
+            wdbi_update_attempt(wdb, WDB_SYSCOLLECTOR_PACKAGES, (unsigned)time(NULL), "", "", TRUE);
             snprintf(output, OS_MAXSTR + 1, "ok");
         }
 
         return result;
 
-    } else if (strcmp(curr, "del") == 0) {
-
-        if (!strcmp(next, "NULL"))
-            scan_id = NULL;
-        else
-            scan_id = next;
+    }
+    else if (strcmp(action, "del") == 0) {
+        char* scan_id = NULL;
+        if (strcmp(tail, "NULL")) {
+            scan_id = tail;
+        }
 
         if (result = wdb_package_update(wdb, scan_id), result < 0) {
             mdebug1("Cannot update scanned packages.");
-            snprintf(output, OS_MAXSTR + 1, "err Cannot save scanned packages before delete old Package information.");
         }
 
         if (result = wdb_package_delete(wdb, scan_id), result < 0) {
-            mdebug1("Cannot delete old Package information.");
-            snprintf(output, OS_MAXSTR + 1, "err Cannot delete old Package information.");
+            mdebug1("Cannot delete old package information.");
+            snprintf(output, OS_MAXSTR + 1, "err Cannot delete old package information.");
         } else {
+            wdbi_update_completion(wdb, WDB_SYSCOLLECTOR_PACKAGES, (unsigned)time(NULL), "", "");
             snprintf(output, OS_MAXSTR + 1, "ok");
         }
 
         return result;
 
-    } else {
-        mdebug1("Invalid Package info query syntax.");
-        mdebug2("DB query error near: %s", curr);
-        snprintf(output, OS_MAXSTR + 1, "err Invalid Package info query syntax, near '%.32s'", curr);
-        return -1;
+    }
+    else if (strcmp(action, "get") == 0) {
+        bool not_triaged_only = FALSE;
+        if (!strcmp(tail, "not_triaged")) {
+            not_triaged_only = TRUE;
+        }
+
+        cJSON* status_response = NULL;
+        result = wdb_agents_get_packages(wdb, not_triaged_only, &status_response);
+        if (status_response) {
+            char *out = cJSON_PrintUnformatted(status_response);
+            if (OS_SUCCESS == result) {
+                snprintf(output, OS_MAXSTR + 1, "ok %s", out);
+            } else {
+                snprintf(output, OS_MAXSTR + 1, "err %s", out);
+            }
+            os_free(out);
+            cJSON_Delete(status_response);
+        } else {
+            mdebug1("Error getting packages from sys_programs");
+            snprintf(output, OS_MAXSTR + 1, "err Error getting packages from sys_programs");
+        }
+        if (OS_SOCKTERR == result) {
+            // Close the socket and send nothing as a response
+            close(wdb->peer);
+            *output = '\0';
+        }
+
+        return result;
+    }
+    else {
+        mdebug1("Invalid package info query syntax.");
+        mdebug2("DB query error near: %s", input);
+        snprintf(output, OS_MAXSTR + 1, "err Invalid package info query syntax, near '%.32s'", input);
+        return result;
     }
 }
 
 int wdb_parse_hotfixes(wdb_t * wdb, char * input, char * output) {
-    char * curr;
-    char * next;
-    char * scan_id;
-    char * scan_time;
-    char * hotfix;
-    int result;
+    int result = OS_INVALID;
+    char* next = NULL;
+    char* tail = NULL;
+    char* action = strtok_r(input, " ", &tail);
 
-    if (next = strchr(input, ' '), !next) {
-        mdebug1("Invalid Hotfix info query syntax.");
-        mdebug2("Hotfix info query: %s", input);
-        snprintf(output, OS_MAXSTR + 1, "err Invalid Hotfix info query syntax, near '%.32s'", input);
-        return -1;
+    if (!action) {
+        mdebug1("Invalid hotfix info query syntax. Missing action");
+        mdebug2("DB query error. Missing action");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid hotfix info query syntax. Missing action");
+        return result;
     }
+    else if (strcmp(action, "save") == 0) {
+        /* The format of the data is scan_id|scan_time|hotfix */
+        #define SAVE_HOTFIX_FIELDS_AMOUNT 3
+        char* fields[SAVE_HOTFIX_FIELDS_AMOUNT] = {NULL};
+        char* last = tail;
 
-    curr = input;
-    *next++ = '\0';
-
-    if (strcmp(curr, "save") == 0) {
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Hotfix info query syntax.");
-            mdebug2("Hotfix info query: %s", curr);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Hotfix info query syntax, near '%.32s'", curr);
-            return -1;
+        for (int i = 0; i < SAVE_HOTFIX_FIELDS_AMOUNT; i++) {
+            if (!(next = strtok_r(NULL, "|", &tail))) {
+                mdebug1("Invalid hotfix info query syntax.");
+                mdebug2("Hotfix info query: %s", last);
+                snprintf(output, OS_MAXSTR + 1, "err Invalid hotfix info query syntax, near '%.32s'", last);
+                return OS_INVALID;
+            }
+            last = next;
+            if (strcmp(next, "NULL"))
+            {
+                fields[i] = next;
+            }
         }
 
-        scan_id = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Hotfix info query syntax.");
-            mdebug2("Hotfix info query: %s", curr);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Hotfix info query syntax, near '%.32s'", curr);
-            return -1;
-        }
-
-        scan_time = curr;
-        *next++ = '\0';
-        curr = next;
-
-        if (next = strchr(curr, '|'), !next) {
-            mdebug1("Invalid Hotfix info query syntax.");
-            mdebug2("Hotfix info query: %s", scan_time);
-            snprintf(output, OS_MAXSTR + 1, "err Invalid Hotfix info query syntax, near '%.32s'", scan_time);
-            return -1;
-        }
-
-        hotfix = curr;
-        *next++ = '\0';
-
-        if (result = wdb_hotfix_save(wdb, scan_id, scan_time, hotfix, SYSCOLLECTOR_LEGACY_CHECKSUM_VALUE, FALSE), result < 0) {
-            mdebug1("Cannot save Hotfix information.");
-            snprintf(output, OS_MAXSTR + 1, "err Cannot save Hotfix information.");
+        if (result = wdb_hotfix_save(wdb, fields[0], fields[1], fields[2], SYSCOLLECTOR_LEGACY_CHECKSUM_VALUE, FALSE), result < 0) {
+            mdebug1("Cannot save hotfix information.");
+            snprintf(output, OS_MAXSTR + 1, "err Cannot save hotfix information.");
         } else {
+            wdbi_update_attempt(wdb, WDB_SYSCOLLECTOR_HOTFIXES, (unsigned)time(NULL), "", "", TRUE);
             snprintf(output, OS_MAXSTR + 1, "ok");
         }
 
         return result;
-    } else if (strcmp(curr, "del") == 0) {
-
-        if (!strcmp(next, "NULL"))
-            scan_id = NULL;
-        else
-            scan_id = next;
+    }
+    else if (strcmp(action, "del") == 0) {
+        char* scan_id = NULL;
+        if (strcmp(tail, "NULL")) {
+            scan_id = tail;
+        }
 
         if (result = wdb_hotfix_delete(wdb, scan_id), result < 0) {
-            mdebug1("Cannot delete old Process information.");
-            snprintf(output, OS_MAXSTR + 1, "err Cannot delete old Hotfix information.");
+            mdebug1("Cannot delete old hotfix information.");
+            snprintf(output, OS_MAXSTR + 1, "err Cannot delete old hotfix information.");
         } else {
+            wdbi_update_completion(wdb, WDB_SYSCOLLECTOR_HOTFIXES, (unsigned)time(NULL), "", "");
             snprintf(output, OS_MAXSTR + 1, "ok");
         }
 
-        wdb_set_hotfix_metadata(wdb, scan_id);
-
         return result;
 
-    } else {
-        mdebug1("Invalid Hotfix info query syntax.");
-        mdebug2("DB query error near: %s", curr);
-        snprintf(output, OS_MAXSTR + 1, "err Invalid Hotfix info query syntax, near '%.32s'", curr);
-        return -1;
+    }
+    else if (strcmp(action, "get") == 0) {
+        cJSON* status_response = NULL;
+        result = wdb_agents_get_hotfixes(wdb, &status_response);
+        if (status_response) {
+            char *out = cJSON_PrintUnformatted(status_response);
+            if (OS_SUCCESS == result) {
+                snprintf(output, OS_MAXSTR + 1, "ok %s", out);
+            } else {
+                snprintf(output, OS_MAXSTR + 1, "err %s", out);
+            }
+            os_free(out);
+            cJSON_Delete(status_response);
+        } else {
+            mdebug1("Error getting hotfixes from sys_hotfixes");
+            snprintf(output, OS_MAXSTR + 1, "err Error getting hotfixes from sys_hotfixes");
+        }
+        if (OS_SOCKTERR == result) {
+            // Close the socket and send nothing as a response
+            close(wdb->peer);
+            *output = '\0';
+        }
+
+        return result;
+    }
+    else {
+        mdebug1("Invalid hotfix info query syntax.");
+        mdebug2("DB query error near: %s", input);
+        snprintf(output, OS_MAXSTR + 1, "err Invalid hotfix info query syntax, near '%.32s'", input);
+        return result;
     }
 }
 
@@ -3945,7 +4289,8 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
     char * next;
     char * scan_id;
     char * scan_time;
-    int pid, ppid, utime, stime, priority, nice, size, vm_size, resident, share, start_time, pgrp, session, nlwp, tgid, tty, processor;
+    int pid, ppid, utime, stime, priority, nice, size, vm_size, resident, share, pgrp, session, nlwp, tgid, tty, processor;
+    long long start_time;
     char * name;
     char * state;
     char * cmd;
@@ -3963,7 +4308,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid Process query syntax.");
         mdebug2("Process query: %s", input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", input);
-        return -1;
+        return OS_INVALID;
     }
 
     curr = input;
@@ -3976,7 +4321,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         scan_id = curr;
@@ -3990,7 +4335,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         scan_time = curr;
@@ -4001,16 +4346,16 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", scan_time);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", scan_time);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(scan_time, "NULL"))
             scan_time = NULL;
 
         if (!strncmp(curr, "NULL", 4))
-            pid = -1;
+            pid = OS_INVALID;
         else
-            pid = strtol(curr,NULL,10);
+            pid = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4019,7 +4364,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", pid);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         name = curr;
@@ -4030,7 +4375,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", name);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", name);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(name, "NULL"))
@@ -4044,16 +4389,16 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", state);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", state);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(state, "NULL"))
             state = NULL;
 
         if (!strncmp(curr, "NULL", 4))
-            ppid = -1;
+            ppid = OS_INVALID;
         else
-            ppid = strtol(curr,NULL,10);
+            ppid = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4062,13 +4407,13 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", ppid);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            utime = -1;
+            utime = OS_INVALID;
         else
-            utime = strtol(curr,NULL,10);
+            utime = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4077,13 +4422,13 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", utime);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            stime = -1;
+            stime = OS_INVALID;
         else
-            stime = strtol(curr,NULL,10);
+            stime = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4092,7 +4437,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", stime);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         cmd = curr;
@@ -4103,7 +4448,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", cmd);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", cmd);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(cmd, "NULL"))
@@ -4117,7 +4462,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", argvs);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", argvs);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(argvs, "NULL"))
@@ -4131,7 +4476,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", euser);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", euser);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(euser, "NULL"))
@@ -4145,7 +4490,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", ruser);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", ruser);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(ruser, "NULL"))
@@ -4159,7 +4504,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", suser);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", suser);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(suser, "NULL"))
@@ -4173,7 +4518,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", egroup);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", egroup);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(egroup, "NULL"))
@@ -4187,7 +4532,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", rgroup);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", rgroup);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(rgroup, "NULL"))
@@ -4201,7 +4546,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", sgroup);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", sgroup);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(sgroup, "NULL"))
@@ -4215,16 +4560,16 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %s", fgroup);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", fgroup);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(fgroup, "NULL"))
             fgroup = NULL;
 
         if (!strncmp(curr, "NULL", 4))
-            priority = -1;
+            priority = OS_INVALID;
         else
-            priority = strtol(curr,NULL,10);
+            priority = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4233,13 +4578,13 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", priority);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
             nice = 0;
         else
-            nice = strtol(curr,NULL,10);
+            nice = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4248,13 +4593,13 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", nice);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            size = -1;
+            size = OS_INVALID;
         else
-            size = strtol(curr,NULL,10);
+            size = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4263,13 +4608,13 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", size);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            vm_size = -1;
+            vm_size = OS_INVALID;
         else
-            vm_size = strtol(curr,NULL,10);
+            vm_size = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4278,13 +4623,13 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", vm_size);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            resident = -1;
+            resident = OS_INVALID;
         else
-            resident = strtol(curr,NULL,10);
+            resident = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4293,13 +4638,13 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", resident);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            share = -1;
+            share = OS_INVALID;
         else
-            share = strtol(curr,NULL,10);
+            share = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4308,28 +4653,28 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", share);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            start_time = -1;
+            start_time = OS_INVALID;
         else
-            start_time = strtol(curr,NULL,10);
+            start_time = (long long) strtoull(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
 
         if (next = strchr(curr, '|'), !next) {
             mdebug1("Invalid Process query syntax.");
-            mdebug2("Process query: %d", start_time);
+            mdebug2("Process query: %lld", start_time);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            pgrp = -1;
+            pgrp = OS_INVALID;
         else
-            pgrp = strtol(curr,NULL,10);
+            pgrp = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4338,13 +4683,13 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", pgrp);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            session = -1;
+            session = OS_INVALID;
         else
-            session = strtol(curr,NULL,10);
+            session = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4353,13 +4698,13 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", session);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            nlwp = -1;
+            nlwp = OS_INVALID;
         else
-            nlwp = strtol(curr,NULL,10);
+            nlwp = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4368,13 +4713,13 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", nlwp);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            tgid = -1;
+            tgid = OS_INVALID;
         else
-            tgid = strtol(curr,NULL,10);
+            tgid = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4383,19 +4728,19 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid Process query syntax.");
             mdebug2("Process query: %d", tgid);
             snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            tty = -1;
+            tty = OS_INVALID;
         else
-            tty = strtol(curr,NULL,10);
+            tty = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         if (!strncmp(next, "NULL", 4))
-            processor = -1;
+            processor = OS_INVALID;
         else
-            processor = strtol(next,NULL,10);
+            processor = strtol(next, NULL, 10);
 
         if (result = wdb_process_save(wdb, scan_id, scan_time, pid, name, state, ppid, utime, stime, cmd, argvs, euser, ruser, suser, egroup, rgroup, sgroup, fgroup, priority, nice, size, vm_size, resident, share, start_time, pgrp, session, nlwp, tgid, tty, processor, SYSCOLLECTOR_LEGACY_CHECKSUM_VALUE, FALSE), result < 0) {
             mdebug1("Cannot save Process information.");
@@ -4406,7 +4751,6 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
 
         return result;
     } else if (strcmp(curr, "del") == 0) {
-
         if (!strcmp(next, "NULL"))
             scan_id = NULL;
         else
@@ -4425,7 +4769,7 @@ int wdb_parse_processes(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid Process query syntax.");
         mdebug2("DB query error near: %s", curr);
         snprintf(output, OS_MAXSTR + 1, "err Invalid Process query syntax, near '%.32s'", curr);
-        return -1;
+        return OS_INVALID;
     }
 }
 
@@ -4443,7 +4787,7 @@ int wdb_parse_ciscat(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid CISCAT query syntax.");
         mdebug2("CISCAT query: %s", input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid CISCAT query syntax, near '%.32s'", input);
-        return -1;
+        return OS_INVALID;
     }
 
     curr = input;
@@ -4456,7 +4800,7 @@ int wdb_parse_ciscat(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid CISCAT query syntax.");
             mdebug2("CISCAT query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid CISCAT query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         scan_id = curr;
@@ -4470,7 +4814,7 @@ int wdb_parse_ciscat(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid CISCAT query syntax.");
             mdebug2("CISCAT query: %s", curr);
             snprintf(output, OS_MAXSTR + 1, "err Invalid CISCAT query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         scan_time = curr;
@@ -4481,7 +4825,7 @@ int wdb_parse_ciscat(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid CISCAT query syntax.");
             mdebug2("CISCAT query: %s", scan_time);
             snprintf(output, OS_MAXSTR + 1, "err Invalid CISCAT query syntax, near '%.32s'", scan_time);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(scan_time, "NULL"))
@@ -4495,7 +4839,7 @@ int wdb_parse_ciscat(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid CISCAT query syntax.");
             mdebug2("CISCAT query: %s", benchmark);
             snprintf(output, OS_MAXSTR + 1, "err Invalid CISCAT query syntax, near '%.32s'", benchmark);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(benchmark, "NULL"))
@@ -4509,16 +4853,16 @@ int wdb_parse_ciscat(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid CISCAT query syntax.");
             mdebug2("CISCAT query: %s", profile);
             snprintf(output, OS_MAXSTR + 1, "err Invalid CISCAT query syntax, near '%.32s'", profile);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strcmp(profile, "NULL"))
             profile = NULL;
 
         if (!strncmp(curr, "NULL", 4))
-            pass = -1;
+            pass = OS_INVALID;
         else
-            pass = strtol(curr,NULL,10);
+            pass = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4527,13 +4871,13 @@ int wdb_parse_ciscat(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid CISCAT query syntax.");
             mdebug2("CISCAT query: %d", pass);
             snprintf(output, OS_MAXSTR + 1, "err Invalid CISCAT query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            fail = -1;
+            fail = OS_INVALID;
         else
-            fail = strtol(curr,NULL,10);
+            fail = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4542,13 +4886,13 @@ int wdb_parse_ciscat(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid CISCAT query syntax.");
             mdebug2("CISCAT query: %d", fail);
             snprintf(output, OS_MAXSTR + 1, "err Invalid CISCAT query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            error = -1;
+            error = OS_INVALID;
         else
-            error = strtol(curr,NULL,10);
+            error = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4557,13 +4901,13 @@ int wdb_parse_ciscat(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid CISCAT query syntax.");
             mdebug2("CISCAT query: %d", error);
             snprintf(output, OS_MAXSTR + 1, "err Invalid CISCAT query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            notchecked = -1;
+            notchecked = OS_INVALID;
         else
-            notchecked = strtol(curr,NULL,10);
+            notchecked = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         curr = next;
@@ -4572,19 +4916,19 @@ int wdb_parse_ciscat(wdb_t * wdb, char * input, char * output) {
             mdebug1("Invalid CISCAT query syntax.");
             mdebug2("CISCAT query: %d", notchecked);
             snprintf(output, OS_MAXSTR + 1, "err Invalid CISCAT query syntax, near '%.32s'", curr);
-            return -1;
+            return OS_INVALID;
         }
 
         if (!strncmp(curr, "NULL", 4))
-            unknown = -1;
+            unknown = OS_INVALID;
         else
-            unknown = strtol(curr,NULL,10);
+            unknown = strtol(curr, NULL, 10);
 
         *next++ = '\0';
         if (!strncmp(next, "NULL", 4))
-            score = -1;
+            score = OS_INVALID;
         else
-            score = strtol(next,NULL,10);
+            score = strtol(next, NULL, 10);
 
         if (result = wdb_ciscat_save(wdb, scan_id, scan_time, benchmark, profile, pass, fail, error, notchecked, unknown, score), result < 0) {
             mdebug1("Cannot save CISCAT information.");
@@ -4598,7 +4942,7 @@ int wdb_parse_ciscat(wdb_t * wdb, char * input, char * output) {
         mdebug1("Invalid CISCAT query syntax.");
         mdebug2("DB query error near: %s", curr);
         snprintf(output, OS_MAXSTR + 1, "err Invalid CISCAT query syntax, near '%.32s'", curr);
-        return -1;
+        return OS_INVALID;
     }
 }
 
@@ -4621,7 +4965,7 @@ int wdb_parse_rootcheck(wdb_t * wdb, char * input, char * output) {
             return 0;
         } else {
             snprintf(output, OS_MAXSTR + 1, "err Error deleting rootcheck PM tuple");
-            return -1;
+            return OS_INVALID;
         }
     } else if (strcmp(curr, "save") == 0) {
         rk_event_t event;
@@ -4629,7 +4973,7 @@ int wdb_parse_rootcheck(wdb_t * wdb, char * input, char * output) {
         if (!next) {
             mdebug2("DB(%s) Invalid rootcheck query syntax: %s", wdb->id, input);
             snprintf(output, OS_MAXSTR + 1, "err Invalid rootcheck query syntax, near '%.32s'", input);
-            return -1;
+            return OS_INVALID;
         }
 
         char *ptr = wstr_chr(next, ' ');
@@ -4637,7 +4981,7 @@ int wdb_parse_rootcheck(wdb_t * wdb, char * input, char * output) {
         if (!ptr) {
             mdebug2("DB(%s) Invalid rootcheck query syntax: %s", wdb->id, input);
             snprintf(output, OS_MAXSTR + 1, "err Invalid rootcheck query syntax, near '%.32s'", input);
-            return -1;
+            return OS_INVALID;
         }
 
         *ptr++ = '\0';
@@ -4649,20 +4993,20 @@ int wdb_parse_rootcheck(wdb_t * wdb, char * input, char * output) {
         if (event.date_last == LONG_MAX || event.date_last < 0) {
             mdebug2("DB(%s) Invalid rootcheck date timestamp: %li", wdb->id, event.date_last);
             snprintf(output, OS_MAXSTR + 1, "err Invalid rootcheck query syntax, near '%.32s'", input);
-            return -1;
+            return OS_INVALID;
         }
 
         switch (wdb_rootcheck_update(wdb, &event)) {
-            case -1:
+            case OS_INVALID:
                 merror("DB(%s) Error updating rootcheck PM tuple on SQLite database", wdb->id);
                 snprintf(output, OS_MAXSTR + 1, "err Error updating rootcheck PM tuple");
-                result = -1;
+                result = OS_INVALID;
                 break;
-            case 0:
+            case OS_SUCCESS:
                 if (wdb_rootcheck_insert(wdb, &event) < 0) {
                     merror("DB(%s) Error inserting rootcheck PM tuple on SQLite database for agent", wdb->id);
                     snprintf(output, OS_MAXSTR + 1, "err Error updating rootcheck PM tuple");
-                    result = -1;
+                    result = OS_INVALID;
                 } else {
                     snprintf(output, OS_MAXSTR + 1, "ok 2");
                 }
@@ -4674,7 +5018,7 @@ int wdb_parse_rootcheck(wdb_t * wdb, char * input, char * output) {
     } else {
         mdebug2("DB(%s) Invalid rootcheck query syntax: %s", wdb->id, input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid rootcheck query syntax, near '%.32s'", input);
-        result = -1;
+        result = OS_INVALID;
     }
     return result;
 }
@@ -4710,7 +5054,6 @@ int wdb_parse_global_insert_agent(wdb_t * wdb, char * input, char * output) {
         if (cJSON_IsNumber(j_id) &&
             cJSON_IsString(j_name) && j_name->valuestring &&
             cJSON_IsNumber(j_date_add)) {
-
             // Getting each field
             int id = j_id->valueint;
             char* name = j_name->valuestring;
@@ -4733,6 +5076,8 @@ int wdb_parse_global_insert_agent(wdb_t * wdb, char * input, char * output) {
             return OS_INVALID;
         }
     }
+
+    wdb_global_group_hash_cache(WDB_GLOBAL_GROUP_HASH_CLEAR, NULL);
 
     snprintf(output, OS_MAXSTR + 1, "ok");
     cJSON_Delete(agent_data);
@@ -4758,7 +5103,6 @@ int wdb_parse_global_update_agent_name(wdb_t * wdb, char * input, char * output)
 
         if (cJSON_IsNumber(j_id) &&
             cJSON_IsString(j_name) && j_name->valuestring) {
-
             // Getting each field
             int id = j_id->valueint;
             char* name = j_name->valuestring;
@@ -4805,6 +5149,7 @@ int wdb_parse_global_update_agent_data(wdb_t * wdb, char * input, char * output)
     cJSON *j_connection_status = NULL;
     cJSON *j_sync_status = NULL;
     cJSON *j_labels = NULL;
+    cJSON *j_group_config_status = NULL;
 
     agent_data = cJSON_ParseWithOpts(input, &error, TRUE);
     if (!agent_data) {
@@ -4832,6 +5177,7 @@ int wdb_parse_global_update_agent_data(wdb_t * wdb, char * input, char * output)
         j_connection_status = cJSON_GetObjectItem(agent_data, "connection_status");
         j_sync_status = cJSON_GetObjectItem(agent_data, "sync_status");
         j_labels = cJSON_GetObjectItem(agent_data, "labels");
+        j_group_config_status = cJSON_GetObjectItem(agent_data, "group_config_status");
 
         if (cJSON_IsNumber(j_id)) {
             // Getting each field
@@ -4854,16 +5200,17 @@ int wdb_parse_global_update_agent_data(wdb_t * wdb, char * input, char * output)
             char *connection_status = cJSON_IsString(j_connection_status) ? j_connection_status->valuestring : NULL;
             char *sync_status = cJSON_IsString(j_sync_status) ? j_sync_status->valuestring : "synced";
             char *labels = cJSON_IsString(j_labels) ? j_labels->valuestring : NULL;
+            char *group_config_status = cJSON_IsString(j_group_config_status) ? j_group_config_status->valuestring : NULL;
 
             if (OS_SUCCESS != wdb_global_update_agent_version(wdb, id, os_name, os_version, os_major, os_minor, os_codename,
                                                               os_platform, os_build, os_uname, os_arch, version, config_sum,
-                                                              merged_sum, manager_host, node_name, agent_ip, connection_status, sync_status)) {
+                                                              merged_sum, manager_host, node_name, agent_ip, connection_status,
+                                                              sync_status, group_config_status)) {
                 mdebug1("Global DB Cannot execute SQL query; err database %s/%s.db: %s", WDB2_DIR, WDB_GLOB_NAME, sqlite3_errmsg(wdb->db));
                 snprintf(output, OS_MAXSTR + 1, "err Cannot execute Global database query; %s", sqlite3_errmsg(wdb->db));
                 cJSON_Delete(agent_data);
                 return OS_INVALID;
-            }
-            else {
+            } else {
                 // We will only add the agent's labels if the agent was successfully added to the database.
                 // We dont check for NULL because if NULL, the current labels should be removed.
                 // The output string will be filled by the labels setter method.
@@ -4944,8 +5291,7 @@ int wdb_parse_global_set_agent_labels(wdb_t * wdb, char * input, char * output) 
         if (value = strstr(label, ":"), value) {
             *value = '\0';
             value++;
-        }
-        else {
+        } else {
             continue;
         }
 
@@ -5014,6 +5360,7 @@ int wdb_parse_global_update_connection_status(wdb_t * wdb, char * input, char * 
     cJSON *j_id = NULL;
     cJSON *j_connection_status = NULL;
     cJSON *j_sync_status = NULL;
+    cJSON *j_status_code = NULL;
 
     agent_data = cJSON_ParseWithOpts(input, &error, TRUE);
     if (!agent_data) {
@@ -5025,14 +5372,16 @@ int wdb_parse_global_update_connection_status(wdb_t * wdb, char * input, char * 
         j_id = cJSON_GetObjectItem(agent_data, "id");
         j_connection_status = cJSON_GetObjectItem(agent_data, "connection_status");
         j_sync_status = cJSON_GetObjectItem(agent_data, "sync_status");
+        j_status_code = cJSON_GetObjectItem(agent_data, "status_code");
 
-        if (cJSON_IsNumber(j_id) && cJSON_IsString(j_connection_status) && cJSON_IsString(j_sync_status)) {
+        if (cJSON_IsNumber(j_id) && cJSON_IsString(j_connection_status) && cJSON_IsString(j_sync_status) && cJSON_IsNumber(j_status_code)) {
             // Getting each field
             int id = j_id->valueint;
             char *connection_status = j_connection_status->valuestring;
             char *sync_status = j_sync_status->valuestring;
+            int status_code = j_status_code->valueint;
 
-            if (OS_SUCCESS != wdb_global_update_agent_connection_status(wdb, id, connection_status, sync_status)) {
+            if (OS_SUCCESS != wdb_global_update_agent_connection_status(wdb, id, connection_status, sync_status, status_code)) {
                 mdebug1("Global DB Cannot execute SQL query; err database %s/%s.db: %s", WDB2_DIR, WDB_GLOB_NAME, sqlite3_errmsg(wdb->db));
                 snprintf(output, OS_MAXSTR + 1, "err Cannot execute Global database query; %s", sqlite3_errmsg(wdb->db));
                 cJSON_Delete(agent_data);
@@ -5040,6 +5389,56 @@ int wdb_parse_global_update_connection_status(wdb_t * wdb, char * input, char * 
             }
         } else {
             mdebug1("Global DB Invalid JSON data when updating agent connection status.");
+            snprintf(output, OS_MAXSTR + 1, "err Invalid JSON data, near '%.32s'", input);
+            cJSON_Delete(agent_data);
+            return OS_INVALID;
+        }
+    }
+
+    snprintf(output, OS_MAXSTR + 1, "ok");
+    cJSON_Delete(agent_data);
+
+    return OS_SUCCESS;
+}
+
+int wdb_parse_global_update_status_code(wdb_t * wdb, char * input, char * output) {
+    cJSON *agent_data = NULL;
+    const char *error = NULL;
+    cJSON *j_id = NULL;
+    cJSON *j_status_code = NULL;
+    cJSON *j_version = NULL;
+    cJSON *j_sync_status = NULL;
+
+    agent_data = cJSON_ParseWithOpts(input, &error, TRUE);
+    if (!agent_data) {
+        mdebug1("Global DB Invalid JSON syntax when updating agent status code.");
+        mdebug2("Global DB JSON error near: %s", error);
+        snprintf(output, OS_MAXSTR + 1, "err Invalid JSON syntax, near '%.32s'", input);
+        return OS_INVALID;
+    } else {
+        j_id = cJSON_GetObjectItem(agent_data, "id");
+        j_status_code = cJSON_GetObjectItem(agent_data, "status_code");
+        j_version = cJSON_GetObjectItem(agent_data, "version");
+        j_sync_status = cJSON_GetObjectItem(agent_data, "sync_status");
+
+        if (cJSON_IsNumber(j_id) && cJSON_IsNumber(j_status_code) && (j_version == NULL || cJSON_IsString(j_version)) && cJSON_IsString(j_sync_status)) {
+            // Getting each field
+            int id = j_id->valueint;
+            int status_code = j_status_code->valueint;
+            char *version = NULL;
+            if (j_version != NULL) {
+                version = j_version->valuestring;
+            }
+            char *sync_status = j_sync_status->valuestring;
+
+            if (OS_SUCCESS != wdb_global_update_agent_status_code(wdb, id, status_code, version, sync_status)) {
+                mdebug1("Global DB Cannot execute SQL query; err database %s/%s.db: %s", WDB2_DIR, WDB_GLOB_NAME, sqlite3_errmsg(wdb->db));
+                snprintf(output, OS_MAXSTR + 1, "err Cannot execute Global database query; %s", sqlite3_errmsg(wdb->db));
+                cJSON_Delete(agent_data);
+                return OS_INVALID;
+            }
+        } else {
+            mdebug1("Global DB Invalid JSON data when updating agent status code.");
             snprintf(output, OS_MAXSTR + 1, "err Invalid JSON data, near '%.32s'", input);
             cJSON_Delete(agent_data);
             return OS_INVALID;
@@ -5062,6 +5461,8 @@ int wdb_parse_global_delete_agent(wdb_t * wdb, char * input, char * output) {
         snprintf(output, OS_MAXSTR + 1, "err Error deleting agent from agent table in global.db.");
         return OS_INVALID;
     }
+
+    wdb_global_group_hash_cache(WDB_GLOBAL_GROUP_HASH_CLEAR, NULL);
 
     snprintf(output, OS_MAXSTR + 1, "ok");
 
@@ -5106,22 +5507,6 @@ int wdb_parse_global_select_agent_group(wdb_t * wdb, char * input, char * output
     snprintf(output, OS_MAXSTR + 1, "ok %s", out);
     os_free(out);
     cJSON_Delete(name);
-
-    return OS_SUCCESS;
-}
-
-int wdb_parse_global_delete_agent_belong(wdb_t * wdb, char * input, char * output) {
-    int agent_id = 0;
-
-    agent_id = atoi(input);
-
-    if (OS_SUCCESS != wdb_global_delete_agent_belong(wdb, agent_id)) {
-        mdebug1("Error deleting agent from belongs table in global.db.");
-        snprintf(output, OS_MAXSTR + 1, "err Error deleting agent from belongs table in global.db.");
-        return OS_INVALID;
-    }
-
-    snprintf(output, OS_MAXSTR + 1, "ok");
 
     return OS_SUCCESS;
 }
@@ -5172,47 +5557,6 @@ int wdb_parse_global_find_agent(wdb_t * wdb, char * input, char * output) {
     return OS_SUCCESS;
 }
 
-int wdb_parse_global_update_agent_group(wdb_t * wdb, char * input, char * output) {
-    cJSON *agent_data = NULL;
-    const char *error = NULL;
-    cJSON *j_id = NULL;
-    cJSON *j_group = NULL;
-
-    agent_data = cJSON_ParseWithOpts(input, &error, TRUE);
-    if (!agent_data) {
-        mdebug1("Global DB Invalid JSON syntax when updating agent group.");
-        mdebug2("Global DB JSON error near: %s", error);
-        snprintf(output, OS_MAXSTR + 1, "err Invalid JSON syntax, near '%.32s'", input);
-        return OS_INVALID;
-    } else {
-        j_id = cJSON_GetObjectItem(agent_data, "id");
-        j_group = cJSON_GetObjectItem(agent_data, "group");
-
-        if (cJSON_IsNumber(j_id)) {
-            // Getting each field
-            int id = j_id->valueint;
-            char *group = cJSON_IsString(j_group) ? j_group->valuestring : NULL;
-
-            if (OS_SUCCESS != wdb_global_update_agent_group(wdb, id, group)) {
-                mdebug1("Global DB Cannot execute SQL query; err database %s/%s.db: %s", WDB2_DIR, WDB_GLOB_NAME, sqlite3_errmsg(wdb->db));
-                snprintf(output, OS_MAXSTR + 1, "err Cannot execute Global database query; %s", sqlite3_errmsg(wdb->db));
-                cJSON_Delete(agent_data);
-                return OS_INVALID;
-            }
-        } else {
-            mdebug1("Global DB Invalid JSON data when updating agent group.");
-            snprintf(output, OS_MAXSTR + 1, "err Invalid JSON data, near '%.32s'", input);
-            cJSON_Delete(agent_data);
-            return OS_INVALID;
-        }
-    }
-
-    snprintf(output, OS_MAXSTR + 1, "ok");
-    cJSON_Delete(agent_data);
-
-    return OS_SUCCESS;
-}
-
 int wdb_parse_global_find_group(wdb_t * wdb, char * input, char * output) {
     char *group_name = NULL;
     cJSON *group_id = NULL;
@@ -5250,59 +5594,71 @@ int wdb_parse_global_insert_agent_group(wdb_t * wdb, char * input, char * output
     return OS_SUCCESS;
 }
 
-int wdb_parse_global_insert_agent_belong(wdb_t * wdb, char * input, char * output) {
-    cJSON *agent_data = NULL;
-    const char *error = NULL;
-    cJSON *j_id_group = NULL;
-    cJSON *j_id_agent = NULL;
+int wdb_parse_global_select_group_belong(wdb_t *wdb, char *input, char *output) {
+    int agent_id = atoi(input);
+    cJSON *agent_groups = NULL;
 
-    agent_data = cJSON_ParseWithOpts(input, &error, TRUE);
-    if (!agent_data) {
-        mdebug1("Global DB Invalid JSON syntax when inserting agent to belongs table.");
-        mdebug2("Global DB JSON error near: %s", error);
-        snprintf(output, OS_MAXSTR + 1, "err Invalid JSON syntax, near '%.32s'", input);
+    if (agent_groups = wdb_global_select_group_belong(wdb, agent_id), !agent_groups) {
+        mdebug1("Error getting agent groups information from global.db.");
+        snprintf(output, OS_MAXSTR + 1, "err Error getting agent groups information from global.db.");
         return OS_INVALID;
-    } else {
-        j_id_group = cJSON_GetObjectItem(agent_data, "id_group");
-        j_id_agent = cJSON_GetObjectItem(agent_data, "id_agent");
-
-        if (cJSON_IsNumber(j_id_group) && cJSON_IsNumber(j_id_agent)) {
-            // Getting each field
-            int id_group = j_id_group->valueint;
-            int id_agent = j_id_agent->valueint;
-
-            if (OS_SUCCESS != wdb_global_insert_agent_belong(wdb, id_group, id_agent)) {
-                mdebug1("Global DB Cannot execute SQL query; err database %s/%s.db: %s", WDB2_DIR, WDB_GLOB_NAME, sqlite3_errmsg(wdb->db));
-                snprintf(output, OS_MAXSTR + 1, "err Cannot execute Global database query; %s", sqlite3_errmsg(wdb->db));
-                cJSON_Delete(agent_data);
-                return OS_INVALID;
-            }
-        } else {
-            mdebug1("Global DB Invalid JSON data when inserting agent to belongs table.");
-            snprintf(output, OS_MAXSTR + 1, "err Invalid JSON data, near '%.32s'", input);
-            cJSON_Delete(agent_data);
-            return OS_INVALID;
-        }
     }
 
-    snprintf(output, OS_MAXSTR + 1, "ok");
-    cJSON_Delete(agent_data);
+    char *out = NULL;
+    out = cJSON_PrintUnformatted(agent_groups);
+    snprintf(output, OS_MAXSTR + 1, "ok %s", out);
+    os_free(out);
+    cJSON_Delete(agent_groups);
 
     return OS_SUCCESS;
 }
 
-int wdb_parse_global_delete_group_belong(wdb_t * wdb, char * input, char * output) {
+int wdb_parse_global_get_group_agents(wdb_t* wdb, char* input, char* output) {
+    int last_agent_id = 0;
+    char *next = NULL;
+    const char delim[2] = " ";
+    char *savedptr = NULL;
     char *group_name = NULL;
 
-    group_name = input;
+    /* Get group name */
+    next = strtok_r(input, delim, &savedptr);
+    if (next == NULL) {
+        mdebug1("Invalid arguments, group name not found.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid arguments, group name not found.");
+        return OS_INVALID;
+    }
+    group_name = next;
 
-    if (OS_SUCCESS != wdb_global_delete_group_belong(wdb, group_name)) {
-        mdebug1("Error deleting group from belongs table in global.db.");
-        snprintf(output, OS_MAXSTR + 1, "err Error deleting group from belongs table in global.db.");
+    /* Get last_id */
+    next = strtok_r(NULL, delim, &savedptr);
+    if (next == NULL || strcmp(next, "last_id") != 0) {
+        mdebug1("Invalid arguments, 'last_id' not found.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid arguments, 'last_id' not found.");
+        return OS_INVALID;
+    }
+    next = strtok_r(NULL, delim, &savedptr);
+    if (next == NULL) {
+        mdebug1("Invalid arguments, last agent id not found.");
+        snprintf(output, OS_MAXSTR + 1, "err Invalid arguments, last agent id not found.");
+        return OS_INVALID;
+    }
+    last_agent_id = atoi(next);
+
+    // Execute command
+    wdbc_result status = WDBC_UNKNOWN;
+    cJSON* result = wdb_global_get_group_agents(wdb, &status, group_name, last_agent_id);
+    if (!result) {
+        mdebug1("Error getting group agents from global.db.");
+        snprintf(output, OS_MAXSTR + 1, "err Error getting group agents from global.db.");
         return OS_INVALID;
     }
 
-    snprintf(output, OS_MAXSTR + 1, "ok");
+    //Print response
+    char* out = cJSON_PrintUnformatted(result);
+    snprintf(output, OS_MAXSTR + 1, "%s %s",  WDBC_RESULT[status], out);
+
+    cJSON_Delete(result);
+    os_free(out)
 
     return OS_SUCCESS;
 }
@@ -5341,35 +5697,135 @@ int wdb_parse_global_select_groups(wdb_t * wdb, char * output) {
     return OS_SUCCESS;
 }
 
-int wdb_parse_global_select_agent_keepalive(wdb_t * wdb, char * input, char * output) {
-   char *out = NULL;
-   char *next = NULL;
+int wdb_parse_global_set_agent_groups(wdb_t* wdb, char* input, char* output) {
+    int ret = OS_SUCCESS;
+    const char *error = NULL;
+    cJSON *args = cJSON_ParseWithOpts(input, &error, TRUE);
+    if (args) {
+        cJSON *j_mode = cJSON_GetObjectItem(args, "mode");
+        cJSON *j_sync_status = cJSON_GetObjectItem(args, "sync_status");
+        cJSON *j_groups_data = cJSON_GetObjectItem(args, "data");
 
-   if (next = wstr_chr(input, ' '), !next) {
-        mdebug1("Invalid DB query syntax.");
-        mdebug2("DB query error near: %s", input);
-        snprintf(output, OS_MAXSTR + 1, "err Invalid DB query syntax, near '%.32s'", input);
-        return OS_INVALID;
+        // Mandatory fields
+        if (cJSON_IsArray(j_groups_data) && cJSON_IsString(j_mode)) {
+            wdb_groups_set_mode_t mode = WDB_GROUP_INVALID_MODE;
+            char* sync_status = "synced";
+            if (0 == strcmp(j_mode->valuestring, "override")) {
+                mode = WDB_GROUP_OVERRIDE;
+            } else if (0 == strcmp(j_mode->valuestring, "append")) {
+                mode = WDB_GROUP_APPEND;
+            } else if (0 == strcmp(j_mode->valuestring, "empty_only")) {
+                mode = WDB_GROUP_EMPTY_ONLY;
+            } else if (0 == strcmp(j_mode->valuestring, "remove")) {
+                mode = WDB_GROUP_REMOVE;
+            }
+
+            if (WDB_GROUP_INVALID_MODE != mode) {
+                if (cJSON_IsString(j_sync_status)) {
+                    sync_status = j_sync_status->valuestring;
+                }
+
+                wdbc_result status = wdb_global_set_agent_groups(wdb, mode, sync_status, j_groups_data);
+                if (status == WDBC_OK) {
+                    snprintf(output, OS_MAXSTR + 1, "%s",  WDBC_RESULT[status]);
+                } else {
+                    snprintf(output, OS_MAXSTR + 1, "%s An error occurred during the set of the groups",  WDBC_RESULT[status]);
+                    ret = OS_INVALID;
+                }
+            } else {
+                mdebug1("Invalid mode '%s' in set_agent_groups command.", j_mode->valuestring);
+                snprintf(output, OS_MAXSTR + 1, "err Invalid mode '%s' in set_agent_groups command", j_mode->valuestring);
+                ret = OS_INVALID;
+            }
+        } else {
+            mdebug1("Missing mandatory fields in set_agent_groups command.");
+            snprintf(output, OS_MAXSTR + 1, "err Invalid JSON data, missing required fields");
+            ret = OS_INVALID;
+        }
+        cJSON_Delete(args);
+    } else {
+        mdebug1("Global DB Invalid JSON syntax when parsing set_agent_groups");
+        mdebug2("Global DB JSON error near: %s", error);
+        snprintf(output, OS_MAXSTR + 1, "err Invalid JSON syntax, near '%.32s'", input);
+        ret = OS_INVALID;
     }
-    *next++ = '\0';
 
-    char* agent_name = input;
-    char* agent_ip = next;
-    cJSON *keepalive = NULL;
+    return ret;
+}
 
-    keepalive = wdb_global_select_agent_keepalive(wdb, agent_name, agent_ip);
-    if (!keepalive) {
-        mdebug1("Error getting agent keepalive from global.db.");
-        snprintf(output, OS_MAXSTR + 1, "err Error getting agent keepalive from global.db.");
-        return OS_INVALID;
+int wdb_parse_global_sync_agent_groups_get(wdb_t* wdb, char* input, char* output) {
+    int ret = OS_SUCCESS;
+    const char *error = NULL;
+    cJSON *args = cJSON_ParseWithOpts(input, &error, TRUE);
+    if (args) {
+        cJSON *j_sync_condition = cJSON_GetObjectItem(args, "condition");
+        cJSON *j_last_id = cJSON_GetObjectItem(args, "last_id");
+        cJSON *j_set_synced = cJSON_GetObjectItem(args, "set_synced");
+        cJSON *j_get_hash = cJSON_GetObjectItem(args, "get_global_hash");
+        cJSON *j_agent_registration_delta = cJSON_GetObjectItem(args, "agent_registration_delta");
+
+        // Checking data types of alternative parameters in case they would have been sent in the input JSON.
+        if ((j_sync_condition && !cJSON_IsString(j_sync_condition)) ||
+            (j_last_id && (!cJSON_IsNumber(j_last_id) || j_last_id->valueint < 0)) ||
+            (j_set_synced && !cJSON_IsBool(j_set_synced)) ||
+            (j_get_hash && !cJSON_IsBool(j_get_hash)) ||
+            (j_agent_registration_delta && (!cJSON_IsNumber(j_agent_registration_delta) || j_agent_registration_delta->valueint < 0))) {
+            mdebug1("Invalid alternative fields data in sync-agent-groups-get command.");
+            snprintf(output, OS_MAXSTR + 1, "err Invalid JSON data, invalid alternative fields data");
+            ret = OS_INVALID;
+        } else {
+            wdb_groups_sync_condition_t condition = WDB_GROUP_NO_CONDITION;
+            int last_id = 0;
+            bool set_synced = false;
+            bool get_hash = false;
+            int agent_registration_delta = 0;
+
+            if (j_sync_condition && 0 == strcmp(j_sync_condition->valuestring, "sync_status")) {
+                condition = WDB_GROUP_SYNC_STATUS;
+            } else if (j_sync_condition && 0 == strcmp(j_sync_condition->valuestring, "all")) {
+                condition = WDB_GROUP_ALL;
+            } else if (j_sync_condition) {
+                condition = WDB_GROUP_INVALID_CONDITION;
+            }
+            if (j_last_id) {
+                last_id = j_last_id->valueint;
+            }
+            if (cJSON_IsTrue(j_set_synced)) {
+                set_synced = true;
+            }
+            if (cJSON_IsTrue(j_get_hash)) {
+                get_hash = true;
+            }
+            if (j_agent_registration_delta) {
+                agent_registration_delta = j_agent_registration_delta->valueint;
+            }
+
+            cJSON* agent_group_sync = NULL;
+            wdbc_result status = wdb_global_sync_agent_groups_get(wdb, condition, last_id, set_synced, get_hash, agent_registration_delta, &agent_group_sync);
+            if (agent_group_sync) {
+                char* response = cJSON_PrintUnformatted(agent_group_sync);
+                cJSON_Delete(agent_group_sync);
+                if (strlen(response) <= WDB_MAX_RESPONSE_SIZE) {
+                    snprintf(output, OS_MAXSTR + 1, "%s %s", WDBC_RESULT[status], response);
+                } else {
+                    snprintf(output, OS_MAXSTR + 1, "err %s", "Invalid response from wdb_global_sync_agent_groups_get");
+                    ret = OS_INVALID;
+                }
+                os_free(response);
+            } else {
+                snprintf(output, OS_MAXSTR + 1, "err %s", "Could not obtain a response from wdb_global_sync_agent_groups_get");
+                ret = OS_INVALID;
+            }
+        }
+        cJSON_Delete(args);
+    } else {
+        mdebug1("Global DB Invalid JSON syntax when parsing sync-agent-groups-get");
+        mdebug2("Global DB JSON error near: %s", error);
+        snprintf(output, OS_MAXSTR + 1, "err Invalid JSON syntax, near '%.32s'", input);
+        ret = OS_INVALID;
     }
 
-    out = cJSON_PrintUnformatted(keepalive);
-    snprintf(output, OS_MAXSTR + 1, "ok %s", out);
-    os_free(out);
-    cJSON_Delete(keepalive);
-
-    return OS_SUCCESS;
+    return ret;
 }
 
 int wdb_parse_global_sync_agent_info_get(wdb_t* wdb, char* input, char* output) {
@@ -5378,7 +5834,7 @@ int wdb_parse_global_sync_agent_info_get(wdb_t* wdb, char* input, char* output) 
 
     if (input) {
         char *next = wstr_chr(input, ' ');
-        if(next) {
+        if (next) {
             *next++ = '\0';
             if (strcmp(input, "last_id") == 0) {
                 last_id = atoi(next);
@@ -5396,7 +5852,7 @@ int wdb_parse_global_sync_agent_info_get(wdb_t* wdb, char* input, char* output) 
     return OS_SUCCESS;
 }
 
-int wdb_parse_global_sync_agent_info_set(wdb_t * wdb, char * input, char * output){
+int wdb_parse_global_sync_agent_info_set(wdb_t * wdb, char * input, char * output) {
     const char *error = NULL;
     int agent_id = 0;
     cJSON *root = NULL;
@@ -5422,7 +5878,7 @@ int wdb_parse_global_sync_agent_info_set(wdb_t * wdb, char * input, char * outpu
         return OS_INVALID;
 
     } else {
-        cJSON_ArrayForEach(json_agent, root){
+        cJSON_ArrayForEach(json_agent, root) {
             // Inserting new agent information in the database
             if (OS_SUCCESS != wdb_global_sync_agent_info_set(wdb, json_agent)) {
                 mdebug1("Global DB Cannot execute SQL query; err database %s/%s.db: %s", WDB2_DIR, WDB_GLOB_NAME, sqlite3_errmsg(wdb->db));
@@ -5432,13 +5888,13 @@ int wdb_parse_global_sync_agent_info_set(wdb_t * wdb, char * input, char * outpu
             }
             // Checking for labels
             json_labels = cJSON_GetObjectItem(json_agent, "labels");
-            if(cJSON_IsArray(json_labels)){
+            if (cJSON_IsArray(json_labels)) {
                 // The JSON has a label array
                 // Removing old labels from the labels table before inserting
                 json_field = cJSON_GetObjectItem(json_agent, "id");
-                agent_id = cJSON_IsNumber(json_field) ? json_field->valueint : -1;
+                agent_id = cJSON_IsNumber(json_field) ? json_field->valueint : OS_INVALID;
 
-                if (agent_id == -1){
+                if (agent_id == OS_INVALID) {
                     mdebug1("Global DB Cannot execute SQL query; incorrect agent id in labels array.");
                     snprintf(output, OS_MAXSTR + 1, "err Cannot update labels due to invalid id.");
                     cJSON_Delete(root);
@@ -5452,13 +5908,13 @@ int wdb_parse_global_sync_agent_info_set(wdb_t * wdb, char * input, char * outpu
                     return OS_INVALID;
                 }
                 // For every label in array, insert it in the database
-                cJSON_ArrayForEach(json_label, json_labels){
+                cJSON_ArrayForEach(json_label, json_labels) {
                     json_key = cJSON_GetObjectItem(json_label, "key");
                     json_value = cJSON_GetObjectItem(json_label, "value");
                     json_id = cJSON_GetObjectItem(json_label, "id");
 
-                    if(cJSON_IsString(json_key) && json_key->valuestring != NULL && cJSON_IsString(json_value) &&
-                        json_value->valuestring != NULL && cJSON_IsNumber(json_id)){
+                    if (cJSON_IsString(json_key) && json_key->valuestring != NULL && cJSON_IsString(json_value) &&
+                        json_value->valuestring != NULL && cJSON_IsNumber(json_id)) {
                         // Inserting labels in the database
                         if (OS_SUCCESS != wdb_global_set_agent_label(wdb, json_id->valueint, json_key->valuestring, json_value->valuestring)) {
                             mdebug1("Global DB Cannot execute SQL query; err database %s/%s.db: %s", WDB2_DIR, WDB_GLOB_NAME, sqlite3_errmsg(wdb->db));
@@ -5475,6 +5931,37 @@ int wdb_parse_global_sync_agent_info_set(wdb_t * wdb, char * input, char * outpu
     snprintf(output, OS_MAXSTR + 1, "ok");
     cJSON_Delete(root);
 
+    return OS_SUCCESS;
+}
+
+int wdb_parse_get_groups_integrity(wdb_t* wdb, char* input, char* output) {
+    int input_len = strlen(input);
+    if (input_len < OS_SHA1_HEXDIGEST_SIZE) {
+        mdebug1("Hash hex-digest does not have the expected length. Expected (%d) got (%d)",
+                OS_SHA1_HEXDIGEST_SIZE,
+                input_len);
+        snprintf(output,
+                 OS_MAXSTR + 1,
+                 "err Hash hex-digest does not have the expected length. Expected (%d) got (%d)",
+                 OS_SHA1_HEXDIGEST_SIZE,
+                 input_len);
+        return OS_INVALID;
+    }
+
+    os_sha1 hash = {0};
+    strncpy(hash, input, OS_SHA1_HEXDIGEST_SIZE);
+
+    cJSON *j_result = wdb_global_get_groups_integrity(wdb, hash);
+    if (j_result == NULL) {
+        mdebug1("Error getting groups integrity information from global.db.");
+        snprintf(output, OS_MAXSTR + 1, "err Error getting groups integrity information from global.db.");
+        return OS_INVALID;
+    }
+
+    char* out = cJSON_PrintUnformatted(j_result);
+    snprintf(output, OS_MAXSTR + 1, "ok %s", out);
+    os_free(out);
+    cJSON_Delete(j_result);
     return OS_SUCCESS;
 }
 
@@ -5501,7 +5988,9 @@ int wdb_parse_global_get_agent_info(wdb_t* wdb, char* input, char* output) {
 
 int wdb_parse_global_get_agents_by_connection_status(wdb_t* wdb, char* input, char* output) {
     int last_id = 0;
+    int limit = 0;
     char *connection_status = NULL;
+    char *node_name = NULL;
     char *next = NULL;
     const char delim[2] = " ";
     char *savedptr = NULL;
@@ -5523,9 +6012,24 @@ int wdb_parse_global_get_agents_by_connection_status(wdb_t* wdb, char* input, ch
     }
     connection_status = next;
 
+    /* Get node name */
+    next = strtok_r(NULL, delim, &savedptr);
+    if (next != NULL) {
+        node_name = next;
+
+        /* Get limit */
+        next = strtok_r(NULL, delim, &savedptr);
+        if (next == NULL) {
+            mdebug1("Invalid arguments 'limit' not found.");
+            snprintf(output, OS_MAXSTR + 1, "err Invalid arguments 'limit' not found");
+            return OS_INVALID;
+        }
+        limit = atoi(next);
+    }
+
     // Execute command
     wdbc_result status = WDBC_UNKNOWN;
-    cJSON* result = wdb_global_get_agents_by_connection_status(wdb, last_id, connection_status, &status);
+    cJSON* result = wdb_global_get_agents_by_connection_status(wdb, last_id, connection_status, node_name, limit, &status);
     if (!result) {
         mdebug1("Error getting agents by connection status from global.db.");
         snprintf(output, OS_MAXSTR + 1, "err Error getting agents by connection status from global.db.");
@@ -5569,6 +6073,27 @@ int wdb_parse_global_get_all_agents(wdb_t* wdb, char* input, char* output) {
     if (!result) {
         mdebug1("Error getting agents from global.db.");
         snprintf(output, OS_MAXSTR + 1, "err Error getting agents from global.db.");
+        return OS_INVALID;
+    }
+
+    //Print response
+    char* out = cJSON_PrintUnformatted(result);
+    snprintf(output, OS_MAXSTR + 1, "%s %s",  WDBC_RESULT[status], out);
+
+    cJSON_Delete(result);
+    os_free(out)
+
+    return OS_SUCCESS;
+}
+
+int wdb_parse_global_get_distinct_agent_groups(wdb_t* wdb, char* input, char* output) {
+
+    // Execute command
+    wdbc_result status = WDBC_UNKNOWN;
+    cJSON* result = wdb_global_get_distinct_agent_groups(wdb, input, &status);
+    if (!result) {
+        mdebug1("Error getting agent groups from global.db.");
+        snprintf(output, OS_MAXSTR + 1, "err Error getting agent groups from global.db.");
         return OS_INVALID;
     }
 
@@ -5647,29 +6172,100 @@ int wdb_parse_global_disconnect_agents(wdb_t* wdb, char* input, char* output) {
     return OS_SUCCESS;
 }
 
-bool process_dbsync_data(wdb_t * wdb, const struct kv *kv_value, const char *operation, char *data)
-{
-    bool ret_val = false;
-    if (NULL != kv_value) {
-        if (kv_value->single_row_table) {
-            ret_val = wdb_single_row_insert_dbsync(wdb, kv_value, data);
-        } else {
-            if (strcmp(operation, "INSERTED") == 0) {
-                ret_val = wdb_insert_dbsync(wdb, kv_value, data);
-            } else if (strcmp(operation, "MODIFIED") == 0) {
-                ret_val = wdb_modify_dbsync(wdb, kv_value, data);
-            } else if (strcmp(operation, "DELETED") == 0) {
-                ret_val = wdb_delete_dbsync(wdb, kv_value, data);
-            }
+int wdb_parse_global_backup(wdb_t** wdb, char* input, char* output) {
+    int result = OS_INVALID;
+    char * next;
+    const char delim[] = " ";
+    char *tail = NULL;
+
+    next = strtok_r(input, delim, &tail);
+
+    if (!next) {
+        snprintf(output, OS_MAXSTR + 1, "err Missing backup action");
+    }
+    else if (strcmp(next, "create") == 0) {
+        result = wdb_global_create_backup(*wdb, output, NULL);
+        if (OS_SUCCESS != result) {
+            merror("Creating Global DB snapshot on demand failed: %s", output);
         }
     }
+    else if (strcmp(next, "get") == 0) {
+        result = wdb_parse_global_get_backup(output);
+    }
+    else if (strcmp(next, "restore") == 0) {
+        // During a restore, the global wdb_t pointer may change. The mutex prevents anyone else from accesing it
+        w_mutex_lock(&pool_mutex);
+        result = wdb_parse_global_restore_backup(wdb, tail, output);
+        w_mutex_unlock(&pool_mutex);
+    }
+    else {
+        snprintf(output, OS_MAXSTR + 1, "err Invalid backup action: %s", next);
+    }
 
+    return result;
+}
+
+int wdb_parse_global_get_backup(char* output) {
+    cJSON* j_backups = wdb_global_get_backups();
+
+    if (j_backups) {
+        char* out = cJSON_PrintUnformatted(j_backups);
+        snprintf(output, OS_MAXSTR + 1, "ok %s", out);
+        os_free(out);
+        cJSON_Delete(j_backups);
+        return OS_SUCCESS;
+    } else {
+        snprintf(output, OS_MAXSTR + 1, "err Cannot execute backup get command, unable to open '%s' folder", WDB_BACKUP_FOLDER);
+        return OS_INVALID;
+    }
+}
+
+int wdb_parse_global_restore_backup(wdb_t** wdb, char* input, char* output) {
+    cJSON *j_parameters = NULL;
+    const char *error = NULL;
+    int result = OS_INVALID;
+
+    j_parameters = cJSON_ParseWithOpts(input, &error, TRUE);
+
+    if (!j_parameters && strcmp(input, "")) {
+        mdebug1("Invalid backup JSON syntax when restoring snapshot.");
+        mdebug2("JSON error near: %s", error);
+        snprintf(output, OS_MAXSTR + 1, "err Invalid JSON syntax, near '%.32s'", input);
+        return OS_INVALID;
+    } else {
+        char* snapshot = cJSON_GetStringValue(cJSON_GetObjectItem(j_parameters, "snapshot"));
+        cJSON* j_save_pre_restore_state = cJSON_GetObjectItem(j_parameters, "save_pre_restore_state");
+        bool save_pre_restore_state = cJSON_IsBool(j_save_pre_restore_state) ? (bool) j_save_pre_restore_state->valueint : false;
+        result = wdb_global_restore_backup(wdb, snapshot, save_pre_restore_state, output);
+    }
+
+    cJSON_Delete(j_parameters);
+    return result;
+}
+
+bool process_dbsync_data(wdb_t * wdb, const struct kv * kv_value, const char * operation, const char * raw_data) {
+    bool ret_val = false;
+    const char * parse_error;
+    cJSON * data = cJSON_ParseWithOpts(raw_data, &parse_error, true);
+    if (NULL != data) {
+        if (strcmp(operation, "INSERTED") == 0 || strcmp(operation, "MODIFIED") == 0) {
+            ret_val = wdb_upsert_dbsync(wdb, kv_value, data);
+        } else if (strcmp(operation, "DELETED") == 0) {
+            wdb_delete_dbsync(wdb, kv_value, data);
+            ret_val = true;
+        } else {
+            mdebug1("Invalid operation type: %s", operation);
+        }
+        cJSON_Delete(data);
+    } else {
+        mdebug1(DB_DELTA_PARSING_ERR);
+        mdebug2("JSON error near: %s", parse_error);
+    }
     return ret_val;
 }
 
-
 int wdb_parse_dbsync(wdb_t * wdb, char * input, char * output) {
-    int ret_val = -1;
+    int ret_val = OS_INVALID;
     char *next = NULL;
     char *curr = input;
     if (next = strchr(curr, ' '), !next) {
@@ -5691,27 +6287,26 @@ int wdb_parse_dbsync(wdb_t * wdb, char * input, char * output) {
     *next++ = '\0';
     curr = next;
 
-    if (next = strchr(curr, '\0'), !next) {
+    if (!strlen(curr)) {
         mdebug2("DBSYNC query: %s", input);
         snprintf(output, OS_MAXSTR + 1, "err Invalid dbsync query syntax, near '%.32s'", input);
         return ret_val;
     }
 
     char *data = curr;
-
     struct kv_list const *head = TABLE_MAP;
     while (NULL != head) {
         if (strncmp(head->current.key, table_key, OS_SIZE_256 - 1) == 0) {
-            ret_val = process_dbsync_data(wdb, &head->current, operation, data);
+            ret_val = process_dbsync_data(wdb, &head->current, operation, data) ? OS_SUCCESS : OS_INVALID;
             break;
         }
         head = head->next;
     }
 
-    if (ret_val) {
-        strcat(output, "ok");
+    if (OS_SUCCESS == ret_val) {
+        strcat(output, "ok ");
     } else {
-        strcat(output, "error");
+        strcat(output, "err");
     }
     return ret_val;
 }
@@ -6005,7 +6600,7 @@ int wdb_parse_task_delete_old(wdb_t* wdb, const cJSON *parameters, char* output)
 
 // 'agents' DB command parsing
 
-int wdb_parse_vuln_cve(wdb_t* wdb, char* input, char* output) {
+int wdb_parse_vuln_cves(wdb_t* wdb, char* input, char* output) {
     int result = OS_INVALID;
     char * next;
     const char delim[] = " ";
@@ -6013,30 +6608,29 @@ int wdb_parse_vuln_cve(wdb_t* wdb, char* input, char* output) {
 
     next = strtok_r(input, delim, &tail);
 
-    if (!next){
-        snprintf(output, OS_MAXSTR + 1, "err Missing vuln_cve action");
-    }
-    else if (strcmp(next, "insert") == 0) {
-        result = wdb_parse_agents_insert_vuln_cve(wdb, tail, output);
-    }
-    else if (strcmp(next, "clear") == 0) {
-        result = wdb_parse_agents_clear_vuln_cve(wdb, output);
-    }
-    else {
-        snprintf(output, OS_MAXSTR + 1, "err Invalid vuln_cve action: %s", next);
+    if (!next) {
+        snprintf(output, OS_MAXSTR + 1, "err Missing vuln_cves action");
+    } else if (strcmp(next, "insert") == 0) {
+        result = wdb_parse_agents_insert_vuln_cves(wdb, tail, output);
+    } else if (strcmp(next, "update_status") == 0) {
+        result = wdb_parse_agents_update_vuln_cves_status(wdb, tail, output);
+    } else if (strcmp(next, "remove") == 0) {
+        result = wdb_parse_agents_remove_vuln_cves(wdb, tail, output);
+    } else {
+        snprintf(output, OS_MAXSTR + 1, "err Invalid vuln_cves action: %s", next);
     }
 
     return result;
 }
 
-int wdb_parse_agents_insert_vuln_cve(wdb_t* wdb, char* input, char* output) {
+int wdb_parse_agents_insert_vuln_cves(wdb_t* wdb, char* input, char* output) {
     cJSON *data = NULL;
     const char *error = NULL;
     int ret = OS_INVALID;
 
     data = cJSON_ParseWithOpts(input, &error, TRUE);
     if (!data) {
-        mdebug1("Invalid vuln_cve JSON syntax when inserting vulnerable package.");
+        mdebug1("Invalid vuln_cves JSON syntax when inserting vulnerable package.");
         mdebug2("JSON error near: %s", error);
         snprintf(output, OS_MAXSTR + 1, "err Invalid JSON syntax, near '%.32s'", input);
     }
@@ -6045,21 +6639,44 @@ int wdb_parse_agents_insert_vuln_cve(wdb_t* wdb, char* input, char* output) {
         cJSON* j_version = cJSON_GetObjectItem(data, "version");
         cJSON* j_architecture = cJSON_GetObjectItem(data, "architecture");
         cJSON* j_cve = cJSON_GetObjectItem(data, "cve");
-        // Required fields
-        if (!cJSON_IsString(j_name) || !cJSON_IsString(j_version) || !cJSON_IsString(j_architecture) ||!cJSON_IsString(j_cve)) {
-            mdebug1("Invalid vuln_cve JSON data when inserting vulnerable package. Not compliant with constraints defined in the database.");
-            snprintf(output, OS_MAXSTR + 1, "err Invalid JSON data, missing required fields");
-        }
+        cJSON* j_reference = cJSON_GetObjectItem(data, "reference");
+        cJSON* j_type = cJSON_GetObjectItem(data, "type");
+        cJSON* j_status = cJSON_GetObjectItem(data, "status");
+        cJSON* j_check_pkg_existence = cJSON_GetObjectItem(data, "check_pkg_existence");
+        cJSON* j_severity = cJSON_GetObjectItem(data, "severity");
+        cJSON* j_cvss2_score = cJSON_GetObjectItem(data, "cvss2_score");
+        cJSON* j_cvss3_score = cJSON_GetObjectItem(data, "cvss3_score");
+        cJSON* j_external_references = cJSON_GetObjectItem(data, "external_references");
+        cJSON* j_condition = cJSON_GetObjectItem(data, "condition");
+        cJSON* j_title = cJSON_GetObjectItem(data, "title");
+        cJSON* j_published = cJSON_GetObjectItem(data, "published");
+        cJSON* j_updated = cJSON_GetObjectItem(data, "updated");
 
-        else {
-            ret = wdb_agents_insert_vuln_cve(wdb, j_name->valuestring, j_version->valuestring, j_architecture->valuestring, j_cve->valuestring);
-            if (OS_SUCCESS != ret) {
-                mdebug1("DB(%s) Cannot execute vuln_cve insert command; SQL err: %s", wdb->id, sqlite3_errmsg(wdb->db));
-                snprintf(output, OS_MAXSTR + 1, "err Cannot execute vuln_cve insert command; SQL err: %s", sqlite3_errmsg(wdb->db));
+        // Required fields
+        if (!cJSON_IsString(j_name) || !cJSON_IsString(j_version) || !cJSON_IsString(j_architecture) ||!cJSON_IsString(j_cve) ||
+            !cJSON_IsString(j_reference) || !cJSON_IsString(j_type) || !cJSON_IsString(j_status) ||!cJSON_IsBool(j_check_pkg_existence)) {
+            mdebug1("Invalid vuln_cves JSON data when inserting vulnerable package. Not compliant with constraints defined in the database.");
+            snprintf(output, OS_MAXSTR + 1, "err Invalid JSON data, missing required fields");
+        } else {
+            char* str_external_references = cJSON_PrintUnformatted(j_external_references);
+
+            cJSON* result = wdb_agents_insert_vuln_cves(wdb, cJSON_GetStringValue(j_name), cJSON_GetStringValue(j_version), cJSON_GetStringValue(j_architecture), cJSON_GetStringValue(j_cve),
+                                                        cJSON_GetStringValue(j_reference), cJSON_GetStringValue(j_type), cJSON_GetStringValue(j_status), (bool)j_check_pkg_existence->valueint,
+                                                        cJSON_GetStringValue(j_severity), cJSON_IsNumber(j_cvss2_score) ? j_cvss2_score->valuedouble : 0,
+                                                        cJSON_IsNumber(j_cvss3_score) ? j_cvss3_score->valuedouble : 0, str_external_references, cJSON_GetStringValue(j_condition),
+                                                        cJSON_GetStringValue(j_title), cJSON_GetStringValue(j_published), cJSON_GetStringValue(j_updated));
+
+            if (result) {
+                char *out = cJSON_PrintUnformatted(result);
+                snprintf(output, OS_MAXSTR + 1, "ok %s", out);
+                os_free(out);
+                cJSON_Delete(result);
+                ret = OS_SUCCESS;
+            } else {
+                mdebug1("Error inserting vulnerability in vuln_cves.");
+                snprintf(output, OS_MAXSTR + 1, "err Error inserting vulnerability in vuln_cves.");
             }
-            else {
-                snprintf(output, OS_MAXSTR + 1, "ok");
-            }
+            os_free(str_external_references);
         }
     }
 
@@ -6067,14 +6684,69 @@ int wdb_parse_agents_insert_vuln_cve(wdb_t* wdb, char* input, char* output) {
     return ret;
 }
 
-int wdb_parse_agents_clear_vuln_cve(wdb_t* wdb, char* output) {
-    int ret = wdb_agents_clear_vuln_cve(wdb);
-    if (OS_SUCCESS != ret) {
-        mdebug1("DB(%s) Cannot execute vuln_cve clear command; SQL err: %s",  wdb->id, sqlite3_errmsg(wdb->db));
-        snprintf(output, OS_MAXSTR + 1, "err Cannot execute vuln_cve clear command; SQL err: %s", sqlite3_errmsg(wdb->db));
+int wdb_parse_agents_update_vuln_cves_status(wdb_t* wdb, char* input, char* output) {
+    cJSON *data = NULL;
+    const char *error = NULL;
+    int ret = OS_INVALID;
+
+    data = cJSON_ParseWithOpts(input, &error, TRUE);
+
+    if (!data) {
+        mdebug1("Invalid vuln_cves JSON syntax when updating status value.");
+        mdebug2("JSON error near: %s", error);
+        snprintf(output, OS_MAXSTR + 1, "err Invalid JSON syntax, near '%.32s'", input);
     }
     else {
-        snprintf(output, OS_MAXSTR + 1, "ok");
+        const char *old_status = cJSON_GetStringValue(cJSON_GetObjectItem(data, "old_status"));
+        const char *new_status = cJSON_GetStringValue(cJSON_GetObjectItem(data, "new_status"));
+        const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(data, "type"));
+
+        if (new_status && ((type && !old_status) || (!type && old_status))) {
+            ret = wdb_agents_update_vuln_cves_status(wdb, old_status, new_status, type);
+            if (OS_SUCCESS != ret) {
+                mdebug1("DB(%s) Cannot execute vuln_cves update_status command; SQL err: %s", wdb->id, sqlite3_errmsg(wdb->db));
+                snprintf(output, OS_MAXSTR + 1, "err Cannot execute vuln_cves update_status command; SQL err: %s", sqlite3_errmsg(wdb->db));
+            } else {
+                snprintf(output, OS_MAXSTR + 1, "ok");
+            }
+        } else {
+            mdebug1("Invalid vuln_cves JSON data when updating CVE's status.");
+            snprintf(output, OS_MAXSTR + 1, "err Invalid JSON data, missing or wrong required fields");
+        }
     }
+
+    cJSON_Delete(data);
+    return ret;
+}
+
+int wdb_parse_agents_remove_vuln_cves(wdb_t* wdb, char* input, char* output) {
+    cJSON *data = NULL;
+    const char *error = NULL;
+    int ret = OS_INVALID;
+
+    data = cJSON_ParseWithOpts(input, &error, TRUE);
+
+    if (!data) {
+        mdebug1("Invalid vuln_cves JSON syntax when removing vulnerabilities.");
+        mdebug2("JSON error near: %s", error);
+        snprintf(output, OS_MAXSTR + 1, "err Invalid JSON syntax, near '%.32s'", input);
+    }
+    else {
+        cJSON* status = cJSON_GetObjectItem(data, "status");
+
+        if (cJSON_IsString(status)) {
+            char* remove_out_str = NULL;
+
+            wdbc_result wdb_res = wdb_agents_remove_vuln_cves_by_status(wdb, status->valuestring, &remove_out_str);
+            snprintf(output, OS_MAXSTR + 1, "%s %s",  WDBC_RESULT[wdb_res], remove_out_str);
+            os_free(remove_out_str)
+            ret = OS_SUCCESS;
+        } else {
+            mdebug1("Invalid vuln_cves JSON data to remove vulnerabilities.");
+            snprintf(output, OS_MAXSTR + 1, "err Invalid JSON data");
+        }
+    }
+
+    cJSON_Delete(data);
     return ret;
 }

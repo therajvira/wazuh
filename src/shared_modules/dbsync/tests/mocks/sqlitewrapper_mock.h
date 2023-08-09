@@ -1,6 +1,6 @@
 /*
  * Wazuh DBSYNC
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * June 16, 2020.
  *
  * This program is free software; you can redistribute it
@@ -29,6 +29,10 @@ class MockConnection : public SQLite::IConnection
                     execute,
                     (const std::string& query),
                     (override));
+        MOCK_METHOD(int64_t,
+                    changes,
+                    (),
+                    (const override));
         MOCK_METHOD(const std::shared_ptr<sqlite3>&,
                     db,
                     (),

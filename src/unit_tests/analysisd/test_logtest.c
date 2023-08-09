@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -16,6 +16,7 @@
 #include "../../headers/shared.h"
 #include "../../analysisd/logtest.h"
 #include "../wrappers/wazuh/shared/debug_op_wrappers.h"
+#include "../wrappers/wazuh/os_xml/os_xml_wrappers.h"
 
 int w_logtest_init_parameters();
 void * w_logtest_init();
@@ -45,6 +46,9 @@ int w_logtest_process_request_remove_session(cJSON * json_request, cJSON * json_
 void * w_logtest_clients_handler(w_logtest_connection_t * connection);
 int w_logtest_process_request_log_processing(cJSON * json_request, cJSON * json_response, OSList * list_msg,
                                              w_logtest_connection_t * connection);
+void w_logtest_ruleset_free_config (_Config * ruleset_config);
+bool w_logtest_ruleset_load_config(OS_XML * xml, XML_NODE conf_section_nodes,
+                                  _Config * ruleset_config, OSList * list_msg);
 
 int logtest_enabled = 1;
 
@@ -65,6 +69,8 @@ w_logtest_session_t * stored_session = NULL;
 bool store_session = false;
 
 extern OSHash *w_logtest_sessions;
+
+int session_level_alert = 7;
 
 /* setup/teardown */
 
@@ -275,6 +281,39 @@ void __wrap_os_remove_eventlist(EventList *list) {
     return;
 }
 
+int __wrap_Read_Rules(XML_NODE node, void * configp, void * list) {
+
+    int retval = mock_type(int);
+    _Config * ruleset = (_Config *) configp;
+
+    if (retval < 0) {
+        return retval;
+    }
+
+    ruleset->decoders = calloc(2, sizeof(char *));
+    os_strdup("test_decoder.xml", ruleset->decoders[0]);
+
+    ruleset->lists = calloc(2, sizeof(char *));
+    os_strdup("test_list.xml", ruleset->lists[0]);
+
+    ruleset->includes = calloc(2, sizeof(char *));
+    os_strdup("test_rule.xml", ruleset->includes[0]);
+
+    return retval;
+}
+
+int __wrap_Read_Alerts(XML_NODE node, void * configp, void * list) {
+    int retval = mock_type(int);
+    _Config * ruleset = (_Config *) configp;
+
+    if (retval < 0) {
+        return retval;
+    }
+
+    ruleset->logbylevel = session_level_alert;
+    return retval;
+}
+
 unsigned int __wrap_sleep (unsigned int __seconds) {
     return mock_type(unsigned int);
 }
@@ -302,7 +341,12 @@ void __wrap_OS_CreateEventList(int maxsize, EventList *list) {
 int __wrap_ReadDecodeXML(const char *file, OSDecoderNode **decoderlist_pn,
                         OSDecoderNode **decoderlist_nopn, OSStore **decoder_list,
                         OSList* log_msg) {
-    return mock_type(int);
+    int retval = mock_type(int);
+
+    if (retval > 0) {
+        *decoder_list = (OSStore *) 1;
+    }
+    return retval;
 }
 
 int __wrap_SetDecodeXML(OSList* log_msg, OSStore **decoder_list,
@@ -452,11 +496,11 @@ char *__wrap_Eventinfo_to_jsonstr(const Eventinfo *lf, bool force_full_log){
     return mock_type(char *);
 }
 
-void __wrap_os_analysisd_free_log_msg(os_analysisd_log_msg_t ** log_msg) {
-    os_free((*log_msg)->file);
-    os_free((*log_msg)->func);
-    os_free((*log_msg)->msg);
-    os_free(*log_msg);
+void __wrap_os_analysisd_free_log_msg(os_analysisd_log_msg_t * log_msg) {
+    os_free(log_msg->file);
+    os_free(log_msg->func);
+    os_free(log_msg->msg);
+    os_free(log_msg);
     return;
 }
 
@@ -621,34 +665,7 @@ void test_w_logtest_init_pthread_fail(void **state)
 
     expect_string(__wrap__merror_exit, formatted_msg, "(1109): Unable to create new pthread.");
 
-    will_return(__wrap_CreateThread, 1);
-
-    //w_logtest_clients_handler
-    will_return(__wrap_FOREVER, 1);
-
-    will_return(__wrap_pthread_mutex_lock, 0);
-
-    will_return(__wrap_accept, 5);
-
-    will_return(__wrap_pthread_mutex_unlock, 0);
-
-    will_return(__wrap_OS_RecvSecureTCP, 0);
-
-    expect_string(__wrap__mdebug1, formatted_msg, "(7314): Failure to receive message: empty or reception timeout");
-
-    will_return(__wrap_close, 0);
-    will_return(__wrap_FOREVER, 0);
-
-
-    will_return(__wrap_pthread_join, 0);
-    will_return(__wrap_close, 0);
-
-    expect_string(__wrap_unlink, file, LOGTEST_SOCK);
-    will_return(__wrap_unlink, 0);
-
-    will_return(__wrap_pthread_mutex_destroy, 0);
-
-    w_logtest_init();
+    expect_assert_failure(w_logtest_init());
     w_logtest_conf_threads = 1;
 
 }
@@ -1207,15 +1224,10 @@ void test_w_logtest_register_session_remove_old(void ** state) {
 }
 
 /* w_logtest_initialize_session */
-void test_w_logtest_initialize_session_error_decoders(void ** state) {
-
+void test_w_logtest_initialize_session_error_load_ruleset(void ** state) {
     char * token = strdup("test");
     OSList * msg = (OSList *) 8;
     w_logtest_session_t * session;
-
-    char * decoder_file = "test.xml";
-    Config.decoders = calloc(2, sizeof(char *));
-    Config.decoders[0] = decoder_file;
 
     random_bytes_result = 1234565555; // 0x49_95_f9_b3
     expect_value(__wrap_randombytes, length, W_LOGTEST_TOKEN_LENGH >> 1);
@@ -1225,7 +1237,123 @@ void test_w_logtest_initialize_session_error_decoders(void ** state) {
 
     will_return(__wrap_time, 0);
     will_return(__wrap_pthread_mutex_init, 0);
+
+    // test_w_logtest_remove_session_ok_error_load_decoder_cbd_rules_hash
+    /* w_logtest_ruleset_load */
+    will_return(__wrap_OS_ReadXML, -1);
+    will_return(__wrap_OS_ReadXML, "unknown");
+    will_return(__wrap_OS_ReadXML, 5);
+
+    expect_value(__wrap__os_analysisd_add_logmsg, level, LOGLEVEL_ERROR);
+    expect_value(__wrap__os_analysisd_add_logmsg, list, msg);
+    expect_string(__wrap__os_analysisd_add_logmsg, formatted_msg,
+                  "(1226): Error reading XML file 'etc/ossec.conf': "
+                  "unknown (line 5).");
+
+    will_return(__wrap_pthread_mutex_destroy, 0);
+
+    session = w_logtest_initialize_session(msg);
+
+    assert_null(session);
+
+    os_free(token);
+}
+
+void test_w_logtest_initialize_session_error_decoders(void ** state) {
+
+    char * token = strdup("test");
+    OSList * msg = (OSList *) 8;
+    w_logtest_session_t * session;
+
+    random_bytes_result = 1234565555; // 0x49_95_f9_b3
+    expect_value(__wrap_randombytes, length, W_LOGTEST_TOKEN_LENGH >> 1);
+
+    expect_string(__wrap_OSHash_Get_ex, key, "4995f9b3");
+    will_return(__wrap_OSHash_Get_ex, NULL);
+
+    will_return(__wrap_time, 0);
+    will_return(__wrap_pthread_mutex_init, 0);
+
+    /* w_logtest_ruleset_load */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
     will_return(__wrap_ReadDecodeXML, 0);
+
+
+    will_return(__wrap_pthread_mutex_destroy, 0);
+
+    session = w_logtest_initialize_session(msg);
+
+    assert_null(session);
+
+    os_free(token);
+}
+
+void test_w_logtest_initialize_session_error_set_decoders(void ** state) {
+
+    char * token = strdup("test");
+    OSList * msg = (OSList *) 1;
+    w_logtest_session_t * session;
+
+    random_bytes_result = 1234565555; // 0x49_95_f9_b3
+    expect_value(__wrap_randombytes, length, W_LOGTEST_TOKEN_LENGH >> 1);
+
+    expect_string(__wrap_OSHash_Get_ex, key, "4995f9b3");
+    will_return(__wrap_OSHash_Get_ex, NULL);
+
+    will_return(__wrap_time, 0);
+    will_return(__wrap_pthread_mutex_init, 0);
+
+    /* w_logtest_ruleset_load */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
+
+    will_return(__wrap_ReadDecodeXML, 1);
+    will_return(__wrap_SetDecodeXML, 0);
 
     // test_w_logtest_remove_session_ok_error_load_decoder_cbd_rules_hash
     will_return(__wrap_OSStore_Free, (OSStore *) 8);
@@ -1235,8 +1363,6 @@ void test_w_logtest_initialize_session_error_decoders(void ** state) {
     session = w_logtest_initialize_session(msg);
 
     assert_null(session);
-
-    os_free(Config.decoders);
     os_free(token);
 }
 
@@ -1246,14 +1372,6 @@ void test_w_logtest_initialize_session_error_cbd_list(void ** state) {
     OSList * msg = (OSList *) 8;
     w_logtest_session_t * session;
 
-    char * decoder_file = "test.xml";
-    Config.decoders = calloc(2, sizeof(char *));
-    Config.decoders[0] = decoder_file;
-
-    char * cbd_file = "test.xml";
-    Config.lists = calloc(2, sizeof(char *));
-    Config.lists[0] = cbd_file;
-
     random_bytes_result = 1234565555; // 0x49_95_f9_b3
     expect_value(__wrap_randombytes, length, W_LOGTEST_TOKEN_LENGH >> 1);
 
@@ -1262,8 +1380,35 @@ void test_w_logtest_initialize_session_error_cbd_list(void ** state) {
 
     will_return(__wrap_time, 0);
     will_return(__wrap_pthread_mutex_init, 0);
+
+    /* w_logtest_ruleset_load */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
+
     will_return(__wrap_ReadDecodeXML, 1);
-    will_return(__wrap_SetDecodeXML, 0);
+    will_return(__wrap_SetDecodeXML, 1);
     will_return(__wrap_Lists_OP_LoadList, -1);
 
     // test_w_logtest_remove_session_ok_error_load_decoder_cbd_rules_hash
@@ -1274,9 +1419,6 @@ void test_w_logtest_initialize_session_error_cbd_list(void ** state) {
     session = w_logtest_initialize_session(msg);
 
     assert_null(session);
-
-    os_free(Config.decoders);
-    os_free(Config.lists);
     os_free(token);
 }
 
@@ -1286,18 +1428,6 @@ void test_w_logtest_initialize_session_error_rules(void ** state) {
     OSList * msg = (OSList *) 8;
     w_logtest_session_t * session;
 
-    char * decoder_file = "test.xml";
-    Config.decoders = calloc(2, sizeof(char *));
-    Config.decoders[0] = decoder_file;
-
-    char * cbd_file = "test.xml";
-    Config.lists = calloc(2, sizeof(char *));
-    Config.lists[0] = cbd_file;
-
-    char * include_file = "test.xml";
-    Config.includes = calloc(2, sizeof(char *));
-    Config.includes[0] = include_file;
-
     random_bytes_result = 1234565555; // 0x49_95_f9_b3
     expect_value(__wrap_randombytes, length, W_LOGTEST_TOKEN_LENGH >> 1);
 
@@ -1306,8 +1436,34 @@ void test_w_logtest_initialize_session_error_rules(void ** state) {
 
     will_return(__wrap_time, 0);
     will_return(__wrap_pthread_mutex_init, 0);
+
+    /* w_logtest_ruleset_load */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
     will_return(__wrap_ReadDecodeXML, 1);
-    will_return(__wrap_SetDecodeXML, 0);
+    will_return(__wrap_SetDecodeXML, 1);
     will_return(__wrap_Lists_OP_LoadList, 0);
     will_return(__wrap_Rules_OP_ReadRules, -1);
 
@@ -1319,10 +1475,6 @@ void test_w_logtest_initialize_session_error_rules(void ** state) {
     session = w_logtest_initialize_session(msg);
 
     assert_null(session);
-
-    os_free(Config.includes);
-    os_free(Config.decoders);
-    os_free(Config.lists);
     os_free(token);
 }
 
@@ -1332,18 +1484,6 @@ void test_w_logtest_initialize_session_error_hash_rules(void ** state) {
     OSList * msg = (OSList *) 8;
     w_logtest_session_t * session;
 
-    char * decoder_file = "test.xml";
-    Config.decoders = calloc(2, sizeof(char *));
-    Config.decoders[0] = decoder_file;
-
-    char * cbd_file = "test.xml";
-    Config.lists = calloc(2, sizeof(char *));
-    Config.lists[0] = cbd_file;
-
-    char * include_file = "test.xml";
-    Config.includes = calloc(2, sizeof(char *));
-    Config.includes[0] = include_file;
-
     random_bytes_result = 1234565555; // 0x49_95_f9_b3
     expect_value(__wrap_randombytes, length, W_LOGTEST_TOKEN_LENGH >> 1);
 
@@ -1352,8 +1492,34 @@ void test_w_logtest_initialize_session_error_hash_rules(void ** state) {
 
     will_return(__wrap_time, 0);
     will_return(__wrap_pthread_mutex_init, 0);
+
+    /* w_logtest_ruleset_load */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
     will_return(__wrap_ReadDecodeXML, 1);
-    will_return(__wrap_SetDecodeXML, 0);
+    will_return(__wrap_SetDecodeXML, 1);
     will_return(__wrap_Lists_OP_LoadList, 0);
     will_return(__wrap_Rules_OP_ReadRules, 0);
     will_return(__wrap__setlevels, 0);
@@ -1368,9 +1534,6 @@ void test_w_logtest_initialize_session_error_hash_rules(void ** state) {
 
     assert_null(session);
 
-    os_free(Config.includes);
-    os_free(Config.decoders);
-    os_free(Config.lists);
     os_free(token);
 }
 
@@ -1380,18 +1543,6 @@ void test_w_logtest_initialize_session_error_fts_init(void ** state) {
     OSList * msg = (OSList *) 8;
     w_logtest_session_t * session;
 
-    char * decoder_file = "test.xml";
-    Config.decoders = calloc(2, sizeof(char *));
-    Config.decoders[0] = decoder_file;
-
-    char * cbd_file = "test.xml";
-    Config.lists = calloc(2, sizeof(char *));
-    Config.lists[0] = cbd_file;
-
-    char * include_file = "test.xml";
-    Config.includes = calloc(2, sizeof(char *));
-    Config.includes[0] = include_file;
-
     random_bytes_result = 1234565555; // 0x49_95_f9_b3
     expect_value(__wrap_randombytes, length, W_LOGTEST_TOKEN_LENGH >> 1);
 
@@ -1400,8 +1551,34 @@ void test_w_logtest_initialize_session_error_fts_init(void ** state) {
 
     will_return(__wrap_time, 0);
     will_return(__wrap_pthread_mutex_init, 0);
+
+    /* w_logtest_ruleset_load */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
     will_return(__wrap_ReadDecodeXML, 1);
-    will_return(__wrap_SetDecodeXML, 0);
+    will_return(__wrap_SetDecodeXML, 1);
     will_return(__wrap_Lists_OP_LoadList, 0);
     will_return(__wrap_Rules_OP_ReadRules, 0);
     will_return(__wrap__setlevels, 0);
@@ -1425,9 +1602,6 @@ void test_w_logtest_initialize_session_error_fts_init(void ** state) {
 
     assert_null(session);
 
-    os_free(Config.includes);
-    os_free(Config.decoders);
-    os_free(Config.lists);
     os_free(token);
 }
 
@@ -1437,18 +1611,6 @@ void test_w_logtest_initialize_session_error_accumulate_init(void ** state) {
     OSList * msg = (OSList *) 8;
     w_logtest_session_t * session;
 
-    char * decoder_file = "test.xml";
-    Config.decoders = calloc(2, sizeof(char *));
-    Config.decoders[0] = decoder_file;
-
-    char * cbd_file = "test.xml";
-    Config.lists = calloc(2, sizeof(char *));
-    Config.lists[0] = cbd_file;
-
-    char * include_file = "test.xml";
-    Config.includes = calloc(2, sizeof(char *));
-    Config.includes[0] = include_file;
-
     random_bytes_result = 1234565555; // 0x49_95_f9_b3
     expect_value(__wrap_randombytes, length, W_LOGTEST_TOKEN_LENGH >> 1);
 
@@ -1457,8 +1619,34 @@ void test_w_logtest_initialize_session_error_accumulate_init(void ** state) {
 
     will_return(__wrap_time, 0);
     will_return(__wrap_pthread_mutex_init, 0);
+
+    /* w_logtest_ruleset_load */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
     will_return(__wrap_ReadDecodeXML, 1);
-    will_return(__wrap_SetDecodeXML, 0);
+    will_return(__wrap_SetDecodeXML, 1);
     will_return(__wrap_Lists_OP_LoadList, 0);
     will_return(__wrap_Rules_OP_ReadRules, 0);
     will_return(__wrap__setlevels, 0);
@@ -1497,9 +1685,6 @@ void test_w_logtest_initialize_session_error_accumulate_init(void ** state) {
 
     assert_null(session);
 
-    os_free(Config.includes);
-    os_free(Config.decoders);
-    os_free(Config.lists);
     os_free(token);
 }
 
@@ -1509,18 +1694,6 @@ void test_w_logtest_initialize_session_success(void ** state) {
     OSList * msg = (OSList *) 8;
     w_logtest_session_t * session;
 
-    char * decoder_file = "test.xml";
-    Config.decoders = calloc(2, sizeof(char *));
-    Config.decoders[0] = decoder_file;
-
-    char * cbd_file = "test.xml";
-    Config.lists = calloc(2, sizeof(char *));
-    Config.lists[0] = cbd_file;
-
-    char * include_file = "test.xml";
-    Config.includes = calloc(2, sizeof(char *));
-    Config.includes[0] = include_file;
-
     random_bytes_result = 1234565555; // 0x49_95_f9_b3
     expect_value(__wrap_randombytes, length, W_LOGTEST_TOKEN_LENGH >> 1);
 
@@ -1529,8 +1702,34 @@ void test_w_logtest_initialize_session_success(void ** state) {
 
     will_return(__wrap_time, 1212);
     will_return(__wrap_pthread_mutex_init, 0);
+
+    /* w_logtest_ruleset_load */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
     will_return(__wrap_ReadDecodeXML, 1);
-    will_return(__wrap_SetDecodeXML, 0);
+    will_return(__wrap_SetDecodeXML, 1);
     will_return(__wrap_Lists_OP_LoadList, 0);
     will_return(__wrap_Rules_OP_ReadRules, 0);
     will_return(__wrap__setlevels, 0);
@@ -1561,9 +1760,7 @@ void test_w_logtest_initialize_session_success(void ** state) {
     os_free(session->eventlist);
     os_free(session->token);
     os_free(session);
-    os_free(Config.includes);
-    os_free(Config.decoders);
-    os_free(Config.lists);
+
 }
 
 void test_w_logtest_initialize_session_success_duplicate_key(void ** state) {
@@ -1571,18 +1768,6 @@ void test_w_logtest_initialize_session_success_duplicate_key(void ** state) {
     char * token = strdup("test");
     OSList * msg = (OSList *) 8;
     w_logtest_session_t * session;
-
-    char * decoder_file = "test.xml";
-    Config.decoders = calloc(2, sizeof(char *));
-    Config.decoders[0] = decoder_file;
-
-    char * cbd_file = "test.xml";
-    Config.lists = calloc(2, sizeof(char *));
-    Config.lists[0] = cbd_file;
-
-    char * include_file = "test.xml";
-    Config.includes = calloc(2, sizeof(char *));
-    Config.includes[0] = include_file;
 
     random_bytes_result = 1234565555; // 0x49_95_f9_b3
     expect_value(__wrap_randombytes, length, W_LOGTEST_TOKEN_LENGH >> 1);
@@ -1598,8 +1783,34 @@ void test_w_logtest_initialize_session_success_duplicate_key(void ** state) {
 
     will_return(__wrap_time, 1212);
     will_return(__wrap_pthread_mutex_init, 0);
+
+    /* w_logtest_ruleset_load */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
     will_return(__wrap_ReadDecodeXML, 1);
-    will_return(__wrap_SetDecodeXML, 0);
+    will_return(__wrap_SetDecodeXML, 1);
     will_return(__wrap_Lists_OP_LoadList, 0);
     will_return(__wrap_Rules_OP_ReadRules, 0);
     will_return(__wrap__setlevels, 0);
@@ -1630,9 +1841,6 @@ void test_w_logtest_initialize_session_success_duplicate_key(void ** state) {
     os_free(session->eventlist);
     os_free(session->token);
     os_free(session);
-    os_free(Config.includes);
-    os_free(Config.decoders);
-    os_free(Config.lists);
 }
 /* w_logtest_generate_token */
 void test_w_logtest_generate_token_success(void ** state) {
@@ -2552,7 +2760,6 @@ void test_w_logtest_check_input_request_debug_rules(void ** state) {
 
     int retval;
     const int ret_expect = W_LOGTEST_CODE_SUCCESS;
-
     OSList * list_msg = (OSList *) 2;
 
     /* location */
@@ -2731,6 +2938,12 @@ void test_w_logtest_process_request_error_check_input(void ** state) {
 
     will_return(__wrap_cJSON_PrintUnformatted, "{json response}");
 
+    will_return(__wrap_pthread_rwlock_wrlock, 0);
+    will_return(__wrap_pthread_mutex_lock, 0);
+    will_return(__wrap_pthread_mutex_unlock, 0);
+    will_return(__wrap_pthread_rwlock_unlock, 0);
+    will_return(__wrap_pthread_mutex_destroy, 0);
+
     retval = w_logtest_process_request(input_raw_json, &connection);
 
     assert_string_equal(retval, "{json response}");
@@ -2827,6 +3040,12 @@ void test_w_logtest_process_request_type_remove_session_ok(void ** state) {
 
     will_return(__wrap_cJSON_PrintUnformatted, "{json response}");
 
+    will_return(__wrap_pthread_rwlock_wrlock, 0);
+    will_return(__wrap_pthread_mutex_lock, 0);
+    will_return(__wrap_pthread_mutex_unlock, 0);
+    will_return(__wrap_pthread_rwlock_unlock, 0);
+    will_return(__wrap_pthread_mutex_destroy, 0);
+
     retval = w_logtest_process_request(input_raw_json, &connection);
 
     assert_string_equal(retval, "{json response}");
@@ -2905,16 +3124,37 @@ void test_w_logtest_process_request_type_log_processing(void ** state) {
     will_return(__wrap_OSHash_Get_ex, NULL);
 
     /* Initialize session*/
-    char * decoder_file = "test.xml";
-    Config.decoders = calloc(2, sizeof(char *));
-    Config.decoders[0] = decoder_file;
-
+    expect_function_call_any(__wrap_OS_ClearNode);
     will_return(__wrap_time, 0);
     will_return(__wrap_pthread_mutex_init, 0);
+
+    /* w_logtest_ruleset_load */
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
     will_return(__wrap_ReadDecodeXML, 0);
 
     // test_w_logtest_remove_session_ok_error_load_decoder_cbd_rules_hash
-    will_return(__wrap_OSStore_Free, (OSStore *) 8);
     will_return(__wrap_pthread_mutex_destroy, 0);
 
 
@@ -2966,9 +3206,14 @@ void test_w_logtest_process_request_type_log_processing(void ** state) {
 
     will_return(__wrap_cJSON_PrintUnformatted, "{json response}");
 
+    will_return(__wrap_pthread_rwlock_wrlock, 0);
+    will_return(__wrap_pthread_mutex_lock, 0);
+    will_return(__wrap_pthread_mutex_unlock, 0);
+    will_return(__wrap_pthread_rwlock_unlock, 0);
+    will_return(__wrap_pthread_mutex_destroy, 0);
+
     retval = w_logtest_process_request(input_raw_json, &connection);
 
-    os_free(Config.decoders);
     os_free(location.valuestring);
     os_free(log_format.valuestring);
     os_free(event.valuestring);
@@ -3033,6 +3278,44 @@ void test_w_logtest_decoding_phase_no_program_name(void ** state)
 }
 
 // w_logtest_preprocessing_phase
+void test_w_logtest_preprocessing_phase_json_location_to_scape_ok(void ** state)
+{
+    Eventinfo lf = {0};
+    cJSON request = {0};
+
+    cJSON json_event = {0};
+    cJSON json_event_child = {0};
+    char * raw_event = strdup("{event}");
+    char * str_location = strdup("loc:at\\ion");
+
+    lf.log = strdup("{event}");
+
+    json_event.child = &json_event_child;
+
+
+    const int expect_retval = 0;
+    int retval;
+
+    will_return(__wrap_cJSON_GetObjectItemCaseSensitive, &json_event);
+    will_return(__wrap_cJSON_PrintUnformatted, raw_event);
+
+    will_return(__wrap_cJSON_GetObjectItemCaseSensitive, (cJSON *) 8);
+    will_return(__wrap_cJSON_GetStringValue, str_location);
+
+    will_return(__wrap_OS_CleanMSG, 0);
+
+
+    retval = w_logtest_preprocessing_phase(&lf, &request);
+
+    assert_int_equal(retval, expect_retval);
+
+
+    os_free(str_location);
+    os_free(lf.log);
+
+
+}
+
 void test_w_logtest_preprocessing_phase_json_event_ok(void ** state)
 {
     Eventinfo lf = {0};
@@ -3974,6 +4257,7 @@ void test_w_logtest_process_request_remove_session_invalid_token(void ** state)
     cJSON * json_request = (cJSON *) 8;
     cJSON * json_response = (cJSON *) 2;
     OSList list_msg = {0};
+    OSList mock_list = {0};
     w_logtest_connection_t connection = {0};
     connection.active_client = 5;
 
@@ -3985,7 +4269,7 @@ void test_w_logtest_process_request_remove_session_invalid_token(void ** state)
     expect_string(__wrap__mdebug1, formatted_msg, "(7316): Failure to remove session. token JSON field must be a string");
 
     expect_value(__wrap__os_analysisd_add_logmsg, level, LOGLEVEL_ERROR);
-    expect_value(__wrap__os_analysisd_add_logmsg, list, NULL);
+    expect_value(__wrap__os_analysisd_add_logmsg, list, &mock_list);
     expect_string(__wrap__os_analysisd_add_logmsg, formatted_msg, "(7316): Failure to remove session. token JSON field must be a string");
 
 
@@ -4017,7 +4301,7 @@ void test_w_logtest_process_request_remove_session_invalid_token(void ** state)
     will_return(__wrap_OSList_GetFirstNode, NULL);
 
 
-    retval = w_logtest_process_request_remove_session(json_request, json_response, NULL, &connection);
+    retval = w_logtest_process_request_remove_session(json_request, json_response, &mock_list, &connection);
 
     assert_int_equal(retval, expect_retval);
     assert_int_equal(connection.active_client, 5);
@@ -4457,6 +4741,12 @@ void test_w_logtest_clients_handler_ok(void ** state)
 
     will_return(__wrap_cJSON_PrintUnformatted, strdup("{json response}"));
 
+    will_return(__wrap_pthread_rwlock_wrlock, 0);
+    will_return(__wrap_pthread_mutex_lock, 0);
+    will_return(__wrap_pthread_mutex_unlock, 0);
+    will_return(__wrap_pthread_rwlock_unlock, 0);
+    will_return(__wrap_pthread_mutex_destroy, 0);
+
     will_return(__wrap_OS_SendSecureTCP, 0);
 
     will_return(__wrap_close, 0);
@@ -4496,10 +4786,35 @@ void test_w_logtest_process_request_log_processing_fail_session(void ** state)
 
     will_return(__wrap_time, 0);
     will_return(__wrap_pthread_mutex_init, 0);
+
+    /* w_logtest_ruleset_load */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
     will_return(__wrap_ReadDecodeXML, 0);
 
     // test_w_logtest_remove_session_ok_error_load_decoder_cbd_rules_hash
-    will_return(__wrap_OSStore_Free, (OSStore *) 8);
     will_return(__wrap_pthread_mutex_destroy, 0);
 
 
@@ -4691,6 +5006,7 @@ void test_w_logtest_process_request_log_processing_ok_and_alert(void ** state)
     os_calloc(1, sizeof(cJSON), json_request_token);
     json_request_token->valuestring = token;
     active_session.last_connection = 0;
+    active_session.logbylevel = 3;
 
     will_return(__wrap_cJSON_GetObjectItemCaseSensitive, json_request_token);
 
@@ -4852,18 +5168,6 @@ void test_w_logtest_process_request_log_processing_ok_session_expired(void ** st
     // w_logtest_initialize_session
 
     /* Generate session token */
-    char * decoder_file = "test.xml";
-    Config.decoders = calloc(2, sizeof(char *));
-    Config.decoders[0] = decoder_file;
-
-    char * cbd_file = "test.xml";
-    Config.lists = calloc(2, sizeof(char *));
-    Config.lists[0] = cbd_file;
-
-    char * include_file = "test.xml";
-    Config.includes = calloc(2, sizeof(char *));
-    Config.includes[0] = include_file;
-
     random_bytes_result = 1234565555; // 0x49_95_f9_b3
     expect_value(__wrap_randombytes, length, W_LOGTEST_TOKEN_LENGH >> 1);
 
@@ -4872,8 +5176,34 @@ void test_w_logtest_process_request_log_processing_ok_session_expired(void ** st
 
     will_return(__wrap_pthread_mutex_init, 0);
     will_return(__wrap_time, 1212);
+
+    /* w_logtest_ruleset_load */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
     will_return(__wrap_ReadDecodeXML, 1);
-    will_return(__wrap_SetDecodeXML, 0);
+    will_return(__wrap_SetDecodeXML, 1);
     will_return(__wrap_Lists_OP_LoadList, 0);
     will_return(__wrap_Rules_OP_ReadRules, 0);
     will_return(__wrap__setlevels, 0);
@@ -5879,6 +6209,358 @@ void test_w_logtest_process_request_log_processing_rules_debug_true(void ** stat
     store_session = false;
 }
 
+/* w_logtest_ruleset_free_config */
+void test_w_logtest_ruleset_free_config_empty_config(void ** state) {
+    _Config ruleset_config = {0};
+    w_logtest_ruleset_free_config(&ruleset_config);
+}
+
+void test_w_logtest_ruleset_free_config_ok(void ** state) {
+    _Config ruleset_config = {0};
+    os_calloc(2, sizeof(char *), ruleset_config.includes);
+    os_strdup("test", ruleset_config.includes[0]);
+    os_calloc(3, sizeof(char *), ruleset_config.decoders);
+    os_strdup("test", ruleset_config.decoders[0]);
+    os_strdup("test", ruleset_config.decoders[1]);
+    os_calloc(3, sizeof(char *), ruleset_config.lists);
+    os_strdup("test", ruleset_config.lists[0]);
+    os_strdup("test", ruleset_config.lists[1]);
+
+    w_logtest_ruleset_free_config(&ruleset_config);
+}
+
+/* w_logtest_ruleset_load_config */
+void test_w_logtest_ruleset_load_config_empty_element(void ** state) {
+    bool retval = true;
+    bool EXPECT_RETVAL = false;
+
+    OS_XML xml = {0};
+    _Config ruleset_config = {0};
+    OSList list_msg = {0};
+
+    /* xml config */
+    XML_NODE conf_section_nodes;
+    os_calloc(2, sizeof(xml_node *), conf_section_nodes);
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+
+    expect_value(__wrap__os_analysisd_add_logmsg, level, LOGLEVEL_ERROR);
+    expect_value(__wrap__os_analysisd_add_logmsg, list, &list_msg);
+    expect_string(__wrap__os_analysisd_add_logmsg, formatted_msg, "(1231): Invalid NULL element in the configuration.");
+
+    retval = w_logtest_ruleset_load_config(&xml, conf_section_nodes, &ruleset_config, &list_msg);
+    assert_int_equal(retval, EXPECT_RETVAL);
+
+    os_free(conf_section_nodes[0]);
+    os_free(conf_section_nodes);
+}
+
+void test_w_logtest_ruleset_load_config_empty_option_node(void ** state) {
+    bool retval = true;
+    bool EXPECT_RETVAL = false;
+
+    OS_XML xml = {0};
+    _Config ruleset_config = {0};
+    OSList list_msg = {0};
+
+    /* xml config */
+    XML_NODE conf_section_nodes;
+    os_calloc(2, sizeof(xml_node *), conf_section_nodes);
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    conf_section_nodes[0]->element = (char *) 1;
+
+    will_return(__wrap_OS_GetElementsbyNode, NULL);
+    expect_value(__wrap__os_analysisd_add_logmsg, level, LOGLEVEL_ERROR);
+    expect_value(__wrap__os_analysisd_add_logmsg, list, &list_msg);
+    expect_string(__wrap__os_analysisd_add_logmsg, formatted_msg, "(1231): Invalid NULL element in the configuration.");
+
+    retval = w_logtest_ruleset_load_config(&xml, conf_section_nodes, &ruleset_config, &list_msg);
+    assert_int_equal(retval, EXPECT_RETVAL);
+
+    os_free(conf_section_nodes[0]);
+    os_free(conf_section_nodes);
+}
+
+void test_w_logtest_ruleset_load_config_fail_read_rules(void ** state) {
+    bool retval = true;
+    bool EXPECT_RETVAL = false;
+
+    OS_XML xml = {0};
+    _Config ruleset_config = {0};
+    OSList list_msg = {0};
+
+    /* xml config */
+    XML_NODE conf_section_nodes;
+    os_calloc(2, sizeof(xml_node *), conf_section_nodes);
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+
+    /* xml ruleset */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    os_strdup("ruleset", conf_section_nodes[0]->element);
+
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, -1);
+
+    retval = w_logtest_ruleset_load_config(&xml, conf_section_nodes, &ruleset_config, &list_msg);
+    assert_int_equal(retval, EXPECT_RETVAL);
+
+    os_free(conf_section_nodes[0]->element);
+    os_free(conf_section_nodes[0]);
+    os_free(conf_section_nodes);
+}
+
+void test_w_logtest_ruleset_load_config_fail_read_alerts(void ** state) {
+    bool retval = true;
+    bool EXPECT_RETVAL = false;
+
+    OS_XML xml = {0};
+    _Config ruleset_config = {0};
+    OSList list_msg = {0};
+
+    /* xml config */
+    XML_NODE conf_section_nodes;
+    os_calloc(2, sizeof(xml_node *), conf_section_nodes);
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+
+    /* xml ruleset */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    os_strdup("alerts", conf_section_nodes[0]->element);
+
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, -1);
+
+    retval = w_logtest_ruleset_load_config(&xml, conf_section_nodes, &ruleset_config, &list_msg);
+    assert_int_equal(retval, EXPECT_RETVAL);
+
+    os_free(conf_section_nodes[0]->element);
+    os_free(conf_section_nodes[0]);
+    os_free(conf_section_nodes);
+}
+
+void test_w_logtest_ruleset_load_config_ok(void ** state) {
+
+    bool retval = false;
+    bool EXPECT_RETVAL = true;
+
+    OS_XML xml = {0};
+    _Config ruleset_config = {0};
+    OSList list_msg = {0};
+
+    /* xml config */
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+
+    /* xml ruleset */
+    expect_function_call_any(__wrap_OS_ClearNode);
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
+    retval = w_logtest_ruleset_load_config(&xml, conf_section_nodes, &ruleset_config, &list_msg);
+
+    assert_int_equal(retval, EXPECT_RETVAL);
+    assert_int_equal(ruleset_config.logbylevel, session_level_alert);
+    assert_non_null(ruleset_config.decoders);
+    assert_non_null(ruleset_config.decoders[0]);
+    assert_non_null(ruleset_config.includes);
+    assert_non_null(ruleset_config.includes[0]);
+    assert_non_null(ruleset_config.lists);
+    assert_non_null(ruleset_config.lists[0]);
+
+    os_free(conf_section_nodes[0]->element);
+    os_free(conf_section_nodes[0]);
+    os_free(conf_section_nodes[1]->element);
+    os_free(conf_section_nodes[1]);
+    os_free(conf_section_nodes);
+    w_logtest_ruleset_free_config(&ruleset_config);
+}
+
+/* w_logtest_ruleset_load */
+void test_w_logtest_ruleset_load_fail_readxml(void ** state) {
+
+    bool retval = true;
+    bool EXPECT_RETVAL = false;
+
+    _Config ruleset_config = {0};
+    OSList list_msg = {0};
+
+    will_return(__wrap_OS_ReadXML, -1);
+    will_return(__wrap_OS_ReadXML, "unknown");
+    will_return(__wrap_OS_ReadXML, 5);
+
+    expect_value(__wrap__os_analysisd_add_logmsg, level, LOGLEVEL_ERROR);
+    expect_value(__wrap__os_analysisd_add_logmsg, list, &list_msg);
+    expect_string(__wrap__os_analysisd_add_logmsg, formatted_msg,
+                  "(1226): Error reading XML file 'etc/ossec.conf': "
+                  "unknown (line 5).");
+
+    retval = w_logtest_ruleset_load(&ruleset_config, &list_msg);
+
+    assert_int_equal(retval, EXPECT_RETVAL);
+}
+
+void test_w_logtest_ruleset_empty_file(void ** state) {
+
+    bool retval = true;
+    bool EXPECT_RETVAL = false;
+
+    _Config ruleset_config = {0};
+    OSList list_msg = {0};
+
+    will_return(__wrap_OS_ReadXML, 0);
+    will_return(__wrap_OS_GetElementsbyNode, NULL);
+
+    expect_value(__wrap__os_analysisd_add_logmsg, level, LOGLEVEL_ERROR);
+    expect_value(__wrap__os_analysisd_add_logmsg, list, &list_msg);
+    expect_string(__wrap__os_analysisd_add_logmsg, formatted_msg, "There are no configuration blocks inside of 'etc/ossec.conf'");
+
+    retval = w_logtest_ruleset_load(&ruleset_config, &list_msg);
+
+    assert_int_equal(retval, EXPECT_RETVAL);
+}
+
+void test_w_logtest_ruleset_load_null_element(void ** state) {
+
+    bool retval = true;
+    bool EXPECT_RETVAL = false;
+
+    _Config ruleset_config = {0};
+    OSList list_msg = {0};
+
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    os_calloc(1, sizeof(xml_node), node[0]);
+
+    will_return(__wrap_OS_GetElementsbyNode, node);
+
+    expect_value(__wrap__os_analysisd_add_logmsg, level, LOGLEVEL_ERROR);
+    expect_value(__wrap__os_analysisd_add_logmsg, list, &list_msg);
+    expect_string(__wrap__os_analysisd_add_logmsg, formatted_msg, "(1231): Invalid NULL element in the configuration.");
+
+    retval = w_logtest_ruleset_load(&ruleset_config, &list_msg);
+
+    assert_int_equal(retval, EXPECT_RETVAL);
+}
+
+void test_w_logtest_ruleset_load_empty_ossec_label(void ** state) {
+
+    bool retval = false;
+    bool EXPECT_RETVAL = true;
+
+    _Config ruleset_config = {0};
+    OSList list_msg = {0};
+
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+    will_return(__wrap_OS_GetElementsbyNode, NULL);
+
+    retval = w_logtest_ruleset_load(&ruleset_config, &list_msg);
+
+    assert_int_equal(retval, EXPECT_RETVAL);
+}
+
+void test_w_logtest_ruleset_load_fail_load_ruleset_config(void ** state) {
+
+    bool retval = true;
+    bool EXPECT_RETVAL = false;
+
+    _Config ruleset_config = {0};
+    OSList list_msg = {0};
+
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+
+    // Fail w_logtest_ruleset_load_config
+    XML_NODE conf_section_nodes;
+    os_calloc(2, sizeof(xml_node *), conf_section_nodes);
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+
+    expect_value(__wrap__os_analysisd_add_logmsg, level, LOGLEVEL_ERROR);
+    expect_value(__wrap__os_analysisd_add_logmsg, list, &list_msg);
+    expect_string(__wrap__os_analysisd_add_logmsg, formatted_msg, "(1231): Invalid NULL element in the configuration.");
+
+    expect_value(__wrap__os_analysisd_add_logmsg, level, LOGLEVEL_ERROR);
+    expect_value(__wrap__os_analysisd_add_logmsg, list, &list_msg);
+    expect_string(__wrap__os_analysisd_add_logmsg, formatted_msg, "(1202): Configuration error at 'etc/ossec.conf'.");
+
+    retval = w_logtest_ruleset_load(&ruleset_config, &list_msg);
+
+    assert_int_equal(retval, EXPECT_RETVAL);
+}
+
+void test_w_logtest_ruleset_load_ok(void ** state) {
+
+    bool retval = false;
+    bool EXPECT_RETVAL = true;
+
+    _Config ruleset_config = {0};
+    OSList list_msg = {0};
+
+    expect_function_call_any(__wrap_OS_ClearNode);
+    will_return(__wrap_OS_ReadXML, 0);
+    XML_NODE node;
+    os_calloc(2, sizeof(xml_node *), node);
+    /* <ossec_config></> */
+    os_calloc(1, sizeof(xml_node), node[0]);
+    os_strdup("ossec_config", node[0]->element);
+    will_return(__wrap_OS_GetElementsbyNode, node);
+
+    // w_logtest_ruleset_load_config ok
+    XML_NODE conf_section_nodes;
+    os_calloc(3, sizeof(xml_node *), conf_section_nodes);
+    // Alert
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[0]);
+    // Ruleset
+    os_calloc(1, sizeof(xml_node), conf_section_nodes[1]);
+    will_return(__wrap_OS_GetElementsbyNode, conf_section_nodes);
+
+    /* xml ruleset */
+    os_strdup("alerts", conf_section_nodes[0]->element);
+    os_strdup("ruleset", conf_section_nodes[1]->element);
+
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Alerts, 0);
+
+    will_return(__wrap_OS_GetElementsbyNode, (xml_node **) calloc(1, sizeof(xml_node *)));
+    will_return(__wrap_Read_Rules, 0);
+
+    retval = w_logtest_ruleset_load(&ruleset_config, &list_msg);
+
+    assert_int_equal(retval, EXPECT_RETVAL);
+    assert_int_equal(ruleset_config.logbylevel, session_level_alert);
+    assert_non_null(ruleset_config.decoders);
+    assert_non_null(ruleset_config.decoders[0]);
+    assert_non_null(ruleset_config.includes);
+    assert_non_null(ruleset_config.includes[0]);
+    assert_non_null(ruleset_config.lists);
+    assert_non_null(ruleset_config.lists[0]);
+
+    w_logtest_ruleset_free_config(&ruleset_config);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -5914,7 +6596,9 @@ int main(void)
         cmocka_unit_test(test_w_logtest_register_session_dont_remove),
         cmocka_unit_test(test_w_logtest_register_session_remove_old),
         // Tests w_logtest_initialize_session
+        cmocka_unit_test(test_w_logtest_initialize_session_error_load_ruleset),
         cmocka_unit_test(test_w_logtest_initialize_session_error_decoders),
+        cmocka_unit_test(test_w_logtest_initialize_session_error_set_decoders),
         cmocka_unit_test(test_w_logtest_initialize_session_error_cbd_list),
         cmocka_unit_test(test_w_logtest_initialize_session_error_rules),
         cmocka_unit_test(test_w_logtest_initialize_session_error_hash_rules),
@@ -5932,7 +6616,7 @@ int main(void)
         cmocka_unit_test(test_w_logtest_add_msg_response_warn_msg),
         cmocka_unit_test(test_w_logtest_add_msg_response_warn_dont_remplaze_error_msg),
         cmocka_unit_test(test_w_logtest_add_msg_response_info_msg),
-        // // Tests w_logtest_check_input
+        // Tests w_logtest_check_input
         cmocka_unit_test(test_w_logtest_check_input_malformed_json_long),
         cmocka_unit_test(test_w_logtest_check_input_malformed_json_short),
         cmocka_unit_test(test_w_logtest_check_input_parameter_not_found),
@@ -5965,6 +6649,7 @@ int main(void)
         // Tests w_logtest_generate_error_response
         cmocka_unit_test(test_w_logtest_generate_error_response_ok),
         // Tests w_logtest_preprocessing_phase
+        cmocka_unit_test(test_w_logtest_preprocessing_phase_json_location_to_scape_ok),
         cmocka_unit_test(test_w_logtest_preprocessing_phase_json_event_ok),
         cmocka_unit_test(test_w_logtest_preprocessing_phase_json_event_fail),
         cmocka_unit_test(test_w_logtest_preprocessing_phase_str_event_ok),
@@ -6009,11 +6694,24 @@ int main(void)
         cmocka_unit_test(test_w_logtest_process_request_log_processing_fail_process_log),
         cmocka_unit_test(test_w_logtest_process_request_log_processing_ok_and_alert),
         cmocka_unit_test(test_w_logtest_process_request_log_processing_ok_session_expired),
-        cmocka_unit_test(test_w_logtest_process_request_log_processing_options_without_rules_debug),
-        cmocka_unit_test(test_w_logtest_process_request_log_processing_rules_debug_not_bolean),
-        cmocka_unit_test(test_w_logtest_process_request_log_processing_rules_debug_false),
-        cmocka_unit_test(test_w_logtest_process_request_log_processing_rules_debug_true),
+        // w_logtest_ruleset_free_config
+        cmocka_unit_test(test_w_logtest_ruleset_free_config_empty_config),
+        cmocka_unit_test(test_w_logtest_ruleset_free_config_ok),
+        // w_logtest_ruleset_load_config
+        cmocka_unit_test(test_w_logtest_ruleset_load_config_empty_element),
+        cmocka_unit_test(test_w_logtest_ruleset_load_config_empty_option_node),
+        cmocka_unit_test(test_w_logtest_ruleset_load_config_fail_read_rules),
+        cmocka_unit_test(test_w_logtest_ruleset_load_config_fail_read_alerts),
+        cmocka_unit_test(test_w_logtest_ruleset_load_config_ok),
+        // w_logtest_ruleset_load
+        cmocka_unit_test(test_w_logtest_ruleset_load_fail_readxml),
+        cmocka_unit_test(test_w_logtest_ruleset_empty_file),
+        cmocka_unit_test(test_w_logtest_ruleset_load_null_element),
+        cmocka_unit_test(test_w_logtest_ruleset_load_empty_ossec_label),
+        cmocka_unit_test(test_w_logtest_ruleset_load_fail_load_ruleset_config),
+        cmocka_unit_test(test_w_logtest_ruleset_load_ok),
+
     };
 
-    return cmocka_run_group_tests(tests, NULL, NULL);
+    return cmocka_run_group_tests(tests, setup_group, NULL);
 }

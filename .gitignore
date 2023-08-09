@@ -1,4 +1,5 @@
 *.so
+*.so.*
 *.o
 *.a
 *.dSYM
@@ -96,6 +97,8 @@ src/win32/route-null-2012.cmd
 src/win32/netsh.cmd
 src/win32/VERSION
 src/win32/REVISION
+src/libwazuhshared.*
+src/libwazuhext.*
 
 # Eclipse files
 .cproject
@@ -116,11 +119,16 @@ src/win32/REVISION
 # test and coverage files
 *.gcno
 *.gcda
+src/TEMP.db
+src/local.db
 src/coverage-report/
 src/data_provider/coverage_report/
 src/shared_modules/dbsync/coverage_report/
+src/shared_modules/dbsync/smokeTests/output/
+src/shared_modules/dbsync/smokeTests/temp.db
 src/shared_modules/rsync/coverage_report/
 src/shared_modules/utils/coverage_report/
+src/shared_modules/utils/tests/coverage_report
 src/wazuh_modules/syscollector/coverage_report/
 src/ossec.test
 src/tap_*
@@ -143,4 +151,3 @@ documentation/
 
 # MSU for Vulnerability Detector
 src/wazuh_modules/vulnerability_detector/msu.json.gz
-

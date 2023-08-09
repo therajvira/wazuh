@@ -1,6 +1,6 @@
 /*
  * Queue (abstract data type)
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * October 2, 2017
  *
  * This program is free software; you can redistribute it
@@ -22,7 +22,7 @@
 /**
  * queue main structure 
  * */
-typedef struct queue_t {
+typedef struct w_queue_s {
     void ** data; ///> Pointer to the circular buffer
     size_t begin; ///> Stores the index of the next empty space
     size_t end;   ///> Stores the index of the next element

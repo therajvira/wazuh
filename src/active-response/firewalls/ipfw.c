@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All right reserved.
  *
  * This program is free software; you can redistribute it
@@ -126,10 +126,7 @@ int main (int argc, char **argv) {
             wpclose(wfd);
         }
 
-        char *exec_cmd4[7] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
-
-        const char *arg4[7] = { IPFW, "-q", "table", TABLE_ID, (action == ADD_COMMAND) ? "add" : "delete", srcip, NULL };
-        memcpy(exec_cmd4, arg4, sizeof(exec_cmd4));
+        char *exec_cmd4[7] = { IPFW, "-q", "table", TABLE_ID, (action == ADD_COMMAND) ? "add" : "delete", (char *)srcip, NULL };
 
         // Executing it
         wfd = wpopenv(IPFW, exec_cmd4, W_BIND_STDERR);

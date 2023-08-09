@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -105,7 +105,6 @@ int Init_FileQueue(file_queue *fileq, const struct tm *p, int flags)
     }
     fileq->last_change = 0;
     fileq->flags = 0;
-    fileq->read_attempts = 0;
 
     fileq->day = p->tm_mday;
     fileq->year = p->tm_year + 1900;

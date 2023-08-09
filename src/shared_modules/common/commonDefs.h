@@ -1,6 +1,6 @@
 /*
  * Wazuh DBSYNC
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * June 11, 2020.
  *
  * This program is free software; you can redistribute it
@@ -119,5 +119,12 @@ typedef struct
  * @details Useful to get deeper information during the dbsync interaction.
  */
 typedef void((*log_fnc_t)(const char* msg));
+
+/**
+* @brief Definition to indicate the unlimited queue.
+*
+* @details It's used to define the unlimited queue size.
+*/
+#define UNLIMITED_QUEUE_SIZE 0
 
 #endif // _COMMON_DEFS_H_

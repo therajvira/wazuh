@@ -1,12 +1,11 @@
 #!/usr/bin/env python
 
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
 
 import os
 import sys
-from datetime import datetime
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -21,7 +20,8 @@ with patch('wazuh.core.common.wazuh_uid'):
         wazuh.rbac.decorators.expose_resources = RBAC_bypasser
         from wazuh import mitre
         from wazuh.core import mitre as core_mitre
-        from wazuh.core.common import decimals_date_format
+        from wazuh.core.common import DECIMALS_DATE_FORMAT
+        from wazuh.core.utils import get_utc_strptime
 
 test_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
 
@@ -62,7 +62,7 @@ def sort_entries(entries, sort_key='id'):
 
 def check_datetime(element, key):
     if key in {'created_time', 'modified_time'}:
-        element[key] = datetime.strptime(element[key], '%Y-%m-%d %H:%M:%S.%f').strftime(decimals_date_format)
+        element[key] = get_utc_strptime(element[key], '%Y-%m-%d %H:%M:%S.%f').strftime(DECIMALS_DATE_FORMAT)
 
     return element[key]
 

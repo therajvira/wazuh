@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -14,8 +14,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "headers/shared.h"
-#include "headers/sec.h"
+#include "../headers/shared.h"
+#include "../headers/sec.h"
 #include "../../wrappers/common.h"
 #include "../../wrappers/wazuh/shared/debug_op_wrappers.h"
 #include "../../wrappers/wazuh/shared/rbtree_op_wrappers.h"
@@ -43,7 +43,8 @@ static int setup_config(void **state)
     keys->keyentries[0]->id = "001";
     keys->keyentries[0]->name = "agent1";
     os_calloc(1, sizeof(os_ip), keys->keyentries[0]->ip);
-    keys->keyentries[0]->ip->netmask = 0xFFFFFFFF;
+    os_calloc(1, sizeof(os_ipv4), keys->keyentries[0]->ip->ipv4);
+    keys->keyentries[0]->ip->ipv4->netmask = 0xFFFFFFFF;
     keys->keyentries[0]->ip->ip = "1.1.1.1";
 
     os_calloc(3, sizeof(keyentry), keys->keyentries[1]);
@@ -51,7 +52,8 @@ static int setup_config(void **state)
     keys->keyentries[1]->id = "002";
     keys->keyentries[1]->name = "agent2";
     os_calloc(1, sizeof(os_ip), keys->keyentries[1]->ip);
-    keys->keyentries[1]->ip->netmask = 0xFFFFFFFF;
+    os_calloc(1, sizeof(os_ipv4), keys->keyentries[1]->ip->ipv4);
+    keys->keyentries[1]->ip->ipv4->netmask = 0xFFFFFFFF;
     keys->keyentries[1]->ip->ip = "2.2.2.2";
     keys->keyentries[1]->time_added = 1628683533;
 
@@ -66,6 +68,7 @@ static int teardown_config(void **state)
     keystore *keys = *(keystore **)state;
 
     for (int i = 0; i < keys->keysize; i++) {
+        free(keys->keyentries[i]->ip->ipv4);
         free(keys->keyentries[i]->ip);
         free(keys->keyentries[i]);
     }
@@ -97,11 +100,11 @@ int __wrap_OS_MoveFile(const char *src, const char *dst) {
 // Test OS_IsAllowedID
 void test_OS_IsAllowedID_id_NULL(void **state)
 {
-    keystore *keys = NULL;
+    keystore keys;
 
     const char * id = NULL;
 
-    int ret = OS_IsAllowedID(keys, id);
+    int ret = OS_IsAllowedID(&keys, id);
 
     assert_int_equal(ret, -1);
 
@@ -330,6 +333,79 @@ void test_OS_WriteTimestamps_file_write(void **state)
     assert_int_equal(r, 0);
 }
 
+void test_OS_WriteTimestamps_write_error(void **state)
+{
+    keystore *keys = *(keystore **)state;
+    char timestamp[40];
+    struct tm tm = { .tm_sec = 0 };
+
+    strftime(timestamp, 40, "002 agent2 2.2.2.2 %Y-%m-%d %H:%M:%S\n", localtime_r(&keys->keyentries[1]->time_added, &tm));
+
+    expect_string(__wrap_TempFile, source, TIMESTAMP_FILE);
+    expect_value(__wrap_TempFile, copy, 0);
+    will_return(__wrap_TempFile, strdup(TIMESTAMP_FILE ".bak"));
+    will_return(__wrap_TempFile, (FILE *)1);
+    will_return(__wrap_TempFile, 0);
+    expect_fprintf((FILE *)1, timestamp, -1);
+    expect_fclose((FILE *)1, 0);
+    expect_string(__wrap_unlink, file, "queue/agents-timestamp.bak");
+    will_return(__wrap_unlink, 0);
+    expect_string(__wrap__merror, formatted_msg, "(1110): Could not write file 'queue/agents-timestamp.bak' due to [(28)-(No space left on device)].");
+    errno = ENOSPC;
+
+    int r = OS_WriteTimestamps(keys);
+    assert_int_equal(r, -1);
+}
+
+void test_OS_WriteTimestamps_close_error(void **state)
+{
+    keystore *keys = *(keystore **)state;
+    char timestamp[40];
+    struct tm tm = { .tm_sec = 0 };
+
+    strftime(timestamp, 40, "002 agent2 2.2.2.2 %Y-%m-%d %H:%M:%S\n", localtime_r(&keys->keyentries[1]->time_added, &tm));
+
+    expect_string(__wrap_TempFile, source, TIMESTAMP_FILE);
+    expect_value(__wrap_TempFile, copy, 0);
+    will_return(__wrap_TempFile, strdup(TIMESTAMP_FILE ".bak"));
+    will_return(__wrap_TempFile, (FILE *)1);
+    will_return(__wrap_TempFile, 0);
+    expect_fprintf((FILE *)1, timestamp, 0);
+    expect_fclose((FILE *)1, -1);
+    expect_string(__wrap_unlink, file, "queue/agents-timestamp.bak");
+    will_return(__wrap_unlink, 0);
+    expect_string(__wrap__merror, formatted_msg, "(1140): Could not close file 'queue/agents-timestamp.bak' due to [(28)-(No space left on device)].");
+    errno = ENOSPC;
+
+    int r = OS_WriteTimestamps(keys);
+    assert_int_equal(r, -1);
+}
+
+void test_OS_WriteTimestamps_move_error(void **state)
+{
+    keystore *keys = *(keystore **)state;
+    char timestamp[40];
+    struct tm tm = { .tm_sec = 0 };
+
+    strftime(timestamp, 40, "002 agent2 2.2.2.2 %Y-%m-%d %H:%M:%S\n", localtime_r(&keys->keyentries[1]->time_added, &tm));
+
+    expect_string(__wrap_TempFile, source, TIMESTAMP_FILE);
+    expect_value(__wrap_TempFile, copy, 0);
+    will_return(__wrap_TempFile, strdup(TIMESTAMP_FILE ".bak"));
+    will_return(__wrap_TempFile, (FILE *)1);
+    will_return(__wrap_TempFile, 0);
+    expect_fprintf((FILE *)1, timestamp, 0);
+    expect_fclose((FILE *)1, 0);
+    expect_string(__wrap_OS_MoveFile, src, TIMESTAMP_FILE ".bak");
+    expect_string(__wrap_OS_MoveFile, dst, TIMESTAMP_FILE);
+    will_return(__wrap_OS_MoveFile, -1);
+    expect_string(__wrap_unlink, file, "queue/agents-timestamp.bak");
+    will_return(__wrap_unlink, 0);
+
+    int r = OS_WriteTimestamps(keys);
+    assert_int_equal(r, -1);
+}
+
 // Test w_get_key_hash
 
 void test_w_get_key_hash_empty_parameters(void **state){
@@ -394,6 +470,9 @@ int main(void)
         // Test OS_WriteTimestamps
         cmocka_unit_test_setup_teardown(test_OS_WriteTimestamps_file_error, setup_config, teardown_config),
         cmocka_unit_test_setup_teardown(test_OS_WriteTimestamps_file_write, setup_config, teardown_config),
+        cmocka_unit_test_setup_teardown(test_OS_WriteTimestamps_write_error, setup_config, teardown_config),
+        cmocka_unit_test_setup_teardown(test_OS_WriteTimestamps_close_error, setup_config, teardown_config),
+        cmocka_unit_test_setup_teardown(test_OS_WriteTimestamps_move_error, setup_config, teardown_config),
         // Test w_get_key_hash
         cmocka_unit_test(test_w_get_key_hash_empty_parameters),
         cmocka_unit_test(test_w_get_key_hash_empty_value),

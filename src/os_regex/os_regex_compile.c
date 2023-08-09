@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -52,6 +52,7 @@ int OSRegex_Compile(const char *pattern, OSRegex *reg, int flags)
     reg->raw = NULL;
     memset(&reg->d_size, 0, sizeof(regex_dynamic_size));
     w_mutex_init(&reg->mutex, NULL);
+    reg->mutex_initialised = true;
 
     /* The pattern can't be null */
     if (pattern == NULL) {

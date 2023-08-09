@@ -1,9 +1,10 @@
 #!/usr/bin/env python
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
 
 import os
+from datetime import timezone, datetime
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +16,7 @@ with patch('wazuh.core.common.wazuh_uid'):
 
 test_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', 'manager')
 ossec_log_path = '{0}/ossec_log.log'.format(test_data_path)
+ossec_log_json_path = '{0}/ossec_log.log'.format(test_data_path)
 
 
 class InitManager:
@@ -40,8 +42,8 @@ def test_manager():
     return test_manager
 
 
-def get_logs():
-    with open(ossec_log_path) as f:
+def get_logs(json_log: bool = False):
+    with open(ossec_log_json_path if json_log else ossec_log_path) as f:
         return f.read()
 
 
@@ -52,7 +54,7 @@ def get_logs():
     'restarting',
     'starting'
 ])
-@patch('wazuh.core.cluster.utils.exists')
+@patch('os.path.exists')
 @patch('wazuh.core.cluster.utils.glob')
 def test_get_status(manager_glob, manager_exists, test_manager, process_status):
     """Tests core.manager.status()
@@ -94,7 +96,7 @@ def test_get_ossec_log_fields():
     """Test get_ossec_log_fields() method returns a tuple"""
     result = get_ossec_log_fields('2020/07/14 06:10:40 rootcheck: INFO: Ending rootcheck scan.')
     assert isinstance(result, tuple), 'The result is not a tuple'
-    assert result[0] == datetime(2020, 7, 14, 6, 10, 40)
+    assert result[0] == datetime(2020, 7, 14, 6, 10, 40, tzinfo=timezone.utc)
     assert result[1] == 'wazuh-rootcheck'
     assert result[2] == 'info'
     assert result[3] == ' Ending rootcheck scan.'
@@ -106,16 +108,26 @@ def test_get_ossec_log_fields_ko():
     assert not result
 
 
-def test_get_ossec_logs():
+@pytest.mark.parametrize("log_format", [
+    LoggingFormat.plain, LoggingFormat.json
+])
+def test_get_ossec_logs(log_format):
     """Test get_ossec_logs() method returns result with expected information"""
-    logs = get_logs().splitlines()
+    logs = get_logs(json_log=log_format == LoggingFormat.json).splitlines()
 
-    with patch('wazuh.core.manager.tail', return_value=logs):
-        result = get_ossec_logs()
-        assert all(key in log for key in ('timestamp', 'tag', 'level', 'description') for log in result)
+    with patch("wazuh.core.manager.get_wazuh_active_logging_format", return_value=log_format):
+        with pytest.raises(WazuhInternalError, match=".*1020.*"):
+            get_ossec_logs()
+
+        with patch('wazuh.core.manager.exists', return_value=True):
+            with patch('wazuh.core.manager.tail', return_value=logs):
+                result = get_ossec_logs()
+                assert all(key in log for key in ('timestamp', 'tag', 'level', 'description') for log in result)
 
 
-def test_get_logs_summary():
+@patch("wazuh.core.manager.get_wazuh_active_logging_format", return_value=LoggingFormat.plain)
+@patch('wazuh.core.manager.exists', return_value=True)
+def test_get_logs_summary(mock_exists, mock_active_logging_format):
     """Test get_logs_summary() method returns result with expected information"""
     logs = get_logs().splitlines()
     with patch('wazuh.core.manager.tail', return_value=logs):
@@ -126,11 +138,9 @@ def test_get_logs_summary():
                                                      'debug': 2}
 
 
-@patch('wazuh.core.manager.open')
-@patch('wazuh.core.manager.fcntl')
 @patch('wazuh.core.manager.exists', return_value=True)
 @patch('wazuh.core.manager.WazuhSocket')
-def test_validate_ossec_conf(mock_wazuhsocket, mock_exists, mock_fcntl, mock_open):
+def test_validate_ossec_conf(mock_wazuhsocket, mock_exists):
     with patch('socket.socket') as sock:
         # Mock sock response
         json_response = json.dumps({'error': 0, 'message': ""}).encode()
@@ -138,15 +148,11 @@ def test_validate_ossec_conf(mock_wazuhsocket, mock_exists, mock_fcntl, mock_ope
         result = validate_ossec_conf()
 
         assert result == {'status': 'OK'}
-        assert mock_fcntl.lockf.call_count == 2
-        mock_exists.assert_called_with(join(common.wazuh_path, 'queue', 'sockets', 'com'))
-        mock_open.assert_called_once_with(join(common.wazuh_path, "var", "run", ".api_wcom_lock"), 'a+')
+        mock_exists.assert_called_with(os.path.join(common.WAZUH_PATH, 'queue', 'sockets', 'com'))
 
 
-@patch('wazuh.core.manager.open')
-@patch('wazuh.core.manager.fcntl')
 @patch("wazuh.core.manager.exists", return_value=True)
-def test_validation_ko(mosck_exists, mock_lockf, mock_open):
+def test_validation_ko(mock_exists):
     # Socket creation raise socket.error
     with patch('socket.socket', side_effect=socket.error):
         with pytest.raises(WazuhInternalError, match='.* 1013 .*'):

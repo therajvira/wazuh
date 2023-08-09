@@ -2,7 +2,7 @@
   -  Rules config
   -  Author: Daniel Cid.
   -  Updated by Wazuh, Inc.
-  -  Copyright (C) 2015-2021, Wazuh Inc.
+  -  Copyright (C) 2015, Wazuh Inc.
   -  Copyright (C) 2009 Trend Micro Inc.
   -  This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2.
 -->
@@ -52,6 +52,6 @@
 <group name="ossec,">
   <rule id="7" level="0" noalert="1">
     <category>ossec</category>
-    <description>Generic template for all ossec rules.</description>
+    <description>Generic template for all wazuh rules.</description>
   </rule>
 </group>

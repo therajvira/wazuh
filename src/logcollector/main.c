@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -131,7 +131,7 @@ int main(int argc, char **argv)
 
     /* Read config file */
     if (LogCollectorConfig(cfg) < 0) {
-        merror_exit(CONFIG_ERROR, cfg);
+        mlerror_exit(LOGLEVEL_ERROR, CONFIG_ERROR, cfg);
     }
 
     /* Exit if test config */

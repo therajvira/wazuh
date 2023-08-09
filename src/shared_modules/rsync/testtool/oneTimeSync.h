@@ -1,6 +1,6 @@
 /*
  * Wazuh RSYNC
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * September 18, 2020.
  *
  * This program is free software; you can redistribute it
@@ -21,7 +21,8 @@ class OneTimeSync final
     public:
         OneTimeSync(const nlohmann::json& config,
                     const nlohmann::json& inputData,
-                    const std::string& outputFolder);
+                    const std::string& outputFolder,
+                    const size_t maxQueueSize);
         ~OneTimeSync();
         void syncData();
         void pushData();

@@ -1,4 +1,4 @@
-# Copyright (C) 2015-2021, Wazuh Inc.
+# Copyright (C) 2015, Wazuh Inc.
 # Created by Wazuh, Inc. <info@wazuh.com>.
 # This program is a free software; you can redistribute it and/or modify it under the terms of GPLv2
 
@@ -14,12 +14,21 @@ from wazuh.core.cluster.dapi.dapi import DistributedAPI
 logger = logging.getLogger('wazuh-api')
 
 
-async def get_overview_agents(request, pretty=False, wait_for_complete=False):
-    """ Get full summary of agents.
+async def get_overview_agents(request, pretty: bool = False, wait_for_complete: bool = False) -> web.Response:
+    """Get full summary of agents.
 
-    :param pretty: Show results in human-readable format
-    :param wait_for_complete: Disable timeout response
-    :return: Dict with a full summary of agents
+    Parameters
+    ----------
+    request : connexion.request
+    pretty: bool
+        Show results in human-readable format.
+    wait_for_complete : bool
+        Disable timeout response.
+
+    Returns
+    -------
+    web.Response
+        API response.
     """
     f_kwargs = {}
 

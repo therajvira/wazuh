@@ -1,6 +1,6 @@
 /*
  * Wazuh SysInfo
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * October 28, 2020.
  *
  * This program is free software; you can redistribute it
@@ -140,6 +140,7 @@ class MacOsParser
         MacOsParser() = default;
         ~MacOsParser() = default;
         bool parseSwVersion(const std::string& in, nlohmann::json& output);
+        bool parseSystemProfiler(const std::string& in, nlohmann::json& output);
         bool parseUname(const std::string& in, nlohmann::json& output);
 };
 

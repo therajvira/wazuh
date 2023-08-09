@@ -1,6 +1,6 @@
 /*
  * Shared functions for Syscheck events decoding
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -64,14 +64,31 @@ extern const char *SYSCHECK_EVENT_STRINGS[];
 #include "shared.h"
 #include "aclapi.h"
 #include <sddl.h>
+#include <winreg.h>
 
 #define BUFFER_LEN 1024
 
+//Windows registers
+#define STR_HKEY_CLASSES_ROOT                   "HKEY_CLASSES_ROOT"
+#define STR_HKEY_CURRENT_CONFIG                 "HKEY_CURRENT_CONFIG"
+#define STR_HKEY_CURRENT_USER                   "HKEY_CURRENT_USER"
+#define STR_HKEY_LOCAL_MACHINE                  "HKEY_LOCAL_MACHINE"
+#define STR_HKEY_PERFORMANCE_DATA               "HKEY_PERFORMANCE_DATA"
+#define STR_HKEY_USERS                          "HKEY_USERS"
+#define check_wildcard(x)                       strchr(x,'*') || strchr(x,'?')
+
+/* Fields for paths */
+typedef struct _reg_path_struct {
+    char* path;
+    int has_wildcard;
+    int checked;
+} reg_path_struct;
+
 #endif
 
-#include "../syscheckd/syscheck.h"
-#include "analysisd/eventinfo.h"
-#include "os_net/os_net.h"
+#include "../syscheckd/include/syscheck.h"
+#include "../analysisd/eventinfo.h"
+#include "../os_net/os_net.h"
 
 #define FILE_ATTRIBUTE_INTEGRITY_STREAM         0x00008000
 #define FILE_ATTRIBUTE_NO_SCRUB_DATA            0x00020000
@@ -130,6 +147,7 @@ typedef enum fim_fields {
     FIM_REGISTRY_ARCH,
     FIM_REGISTRY_VALUE_NAME,
     FIM_REGISTRY_VALUE_TYPE,
+    FIM_REGISTRY_HASH,
     FIM_ENTRY_TYPE,
     FIM_EVENT_TYPE,
     FIM_NFIELDS
@@ -360,11 +378,12 @@ unsigned int w_get_file_attrs(const char *file_path);
  * @brief Retrieves the permissions of a specific file (Windows)
  *
  * @param [in] file_path The path of the file from which to check permissions
- * @param [out] permissions Buffer in which to write the permissions
- * @param [in] perm_size The size of the permissions buffer
- * @return 0 on success, the error code on failure, -2 if ACE could not be obtained
+ * @param [out] output_acl A cJSON pointer to an object holding the ACL of the file.
+ * @retval 0 on success.
+ * @retval -1 if the cJSON object could not be initialized.
+ * @retval An error code retrieved from `GetLastError` otherwise.
  */
-int w_get_file_permissions(const char *file_path, char *permissions, int perm_size);
+int w_get_file_permissions(const char *file_path, cJSON **output_acl);
 
 /**
  * @brief Retrieves the group name from a group ID in windows
@@ -387,12 +406,13 @@ char *get_registry_group(char **sid, HANDLE hndl);
 /**
  * @brief Retrieves the permissions of a registry key.
  *
- * @param hndl Handle for the registry key to check the permissions of.
- * @param perm_key Permissions associated to the registry key.
- *
- * @return Permissions in perm_key. ERROR_SUCCESS on success, different otherwise
+ * @param [in] hndl Handle for the registry key to check the permissions of.
+ * @param [out] output_acl A cJSON pointer to an object holding the ACL of the file.
+ * @retval 0 on success.
+ * @retval -1 if the cJSON object could not be initialized.
+ * @retval An error code retrieved from `GetLastError` otherwise.
 */
-DWORD get_registry_permissions(HKEY hndl, char *perm_key);
+DWORD get_registry_permissions(HKEY hndl, cJSON **output_acl);
 
 /**
  * @brief Get last modification time from registry key.
@@ -404,16 +424,6 @@ DWORD get_registry_permissions(HKEY hndl, char *perm_key);
 unsigned int get_registry_mtime(HKEY hndl);
 
 /**
- * @brief Copy ACE information into buffer
- *
- * @param [in] ace ACE structure
- * @param [out] perm Buffer in which to write the ACE information
- * @param [in] perm_size The size of the buffer
- * @return 0 on failure, the number of bytes written into perm on success
- */
-int copy_ace_info(void *ace, char *perm, int perm_size);
-
-/**
  * @brief Retrieves the account information (name and domain) from SID
  *
  * @param [in] sid SID from which retrieve the information
@@ -422,6 +432,58 @@ int copy_ace_info(void *ace, char *perm, int perm_size);
  * @return 0 on success, error code on failure
  */
 int w_get_account_info(SID *sid, char **account_name, char **account_domain);
+
+/**
+ * @brief Checks if at least one structure exists whose path has a wildcard  (Windows)
+ *
+ * @param [in] array_struct Arrangement of structures.
+ * @retval 1 on success.
+ * @retval 0 if there is not more wildcards.
+ */
+int w_is_still_a_wildcard(reg_path_struct **array_struct);
+
+/**
+ * @brief Returns the HKEY corresponding to the root key name  (Windows)
+ *
+ * @param [in] str_rootkey String that represents the root key.
+ * @retval HKEY on success.
+ * @retval NULL if there is not match.
+ */
+HKEY w_switch_root_key(char* str_rootkey);
+
+/**
+ * @brief Return all keys based on a root key and subkey  (Windows)
+ *
+ * @param [in] root_key HKEY that represents the root key.
+ * @param [in] str_subkey String that represents the main subkey, this could be NULL.
+ * @retval A non empty array of string on success.
+ */
+char** w_list_all_keys(HKEY root_key, char* str_subkey);
+
+/**
+ * @brief Generate all valid paths that contains a * or ? (Windows)
+ *
+ * @param [in] array_struct Array of all possible paths.
+ * @param [out] array_struct Array of paths with tag checked in 1 and has_wildcard in 0.
+ */
+void w_expand_by_wildcard(reg_path_struct **array_struct, char wildcard_chr);
+
+
+/**
+ * @brief Extract the subkey from path (Windows)
+ *
+ * @param [in] key String path that contains the key and subkey.
+ * @return Allocated subkey or NULL if there is not one.
+ */
+char* get_subkey(char* key);
+
+/**
+ * @brief Return all possible paths based in a entry  (Windows)
+ *
+ * @param [in] entry Raw entry read from config file.
+ * @param [out] paths Array of paths expanded with tag checked in 1 and has_wildcard in 0.
+ */
+void expand_wildcard_registers(char* entry, char** paths);
 
 #endif
 
@@ -440,6 +502,22 @@ void decode_win_attributes(char *str, unsigned int attrs);
  * @return A string in human readable format with the Windows permission
  */
 char *decode_win_permissions(char *raw_perm);
+
+/**
+ * @brief Compares 2 Windows ACLs in JSON format
+ *
+ * @param [in] acl1 A cJSON object holding a Windows ACL
+ * @param [in] acl2 A cJSON object holding a Windows ACL
+ * @return `true` if ACLs are equal to each other, `false` otherwise
+ */
+bool compare_win_permissions(const cJSON * const acl1, const cJSON * const acl2);
+
+/**
+ * @brief Decodes a permission string and converts it to a human readable format
+ *
+ * @param [out] acl_json A cJSON with the permissions to decode
+ */
+void decode_win_acl_json(cJSON *acl_json);
 
 /**
  * @brief Transforms a bit mask of attributes into a human readable cJSON

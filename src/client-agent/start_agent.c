@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All right reserved.
  *
@@ -13,13 +13,20 @@
 #include "os_net/os_net.h"
 
 #ifdef WAZUH_UNIT_TESTING
-    #define static
+    // Remove static qualifier when unit testing
+    #define STATIC
     #ifdef WIN32
             #include "unit_tests/wrappers/wazuh/client-agent/start_agent.h"
             #undef CloseSocket
             #define CloseSocket wrap_closesocket
             #define recv wrap_recv
     #endif
+
+    // Redefine ossec_version
+    #undef __ossec_version
+    #define __ossec_version "v4.5.0"
+#else
+    #define STATIC static
 #endif
 
 #define ENROLLMENT_RETRY_TIME_MAX   60
@@ -29,8 +36,8 @@ int timeout;    //timeout in seconds waiting for a server reply
 
 static ssize_t receive_message(char *buffer, unsigned int max_lenght);
 static void w_agentd_keys_init (void);
-static bool agent_handshake_to_server(int server_id, bool is_startup);
-static void send_msg_on_startup(void);
+STATIC bool agent_handshake_to_server(int server_id, bool is_startup);
+STATIC void send_msg_on_startup(void);
 
 /**
  * @brief Connects to a specified server
@@ -51,7 +58,7 @@ bool connect_server(int server_id, bool verbose)
 
         if (agt->server[agt->rip_id].rip) {
             if (verbose) {
-                minfo("Closing connection to server (%s:%d/%s).",
+                minfo("Closing connection to server ([%s]:%d/%s).",
                     agt->server[agt->rip_id].rip,
                     agt->server[agt->rip_id].port,
                     agt->server[agt->rip_id].protocol == IPPROTO_UDP ? "udp" : "tcp");
@@ -59,48 +66,39 @@ bool connect_server(int server_id, bool verbose)
         }
     }
 
-    char *tmp_str;
-
-    /* Check if we have a hostname */
-    tmp_str = strchr(agt->server[server_id].rip, '/');
+    char *ip_address = NULL;
+    char *tmp_str = strchr(agt->server[server_id].rip, '/');
     if (tmp_str) {
-        /* Resolve hostname */
-        if (!isChroot()) {
-            resolve_hostname(&agt->server[server_id].rip, 5);
-
-            tmp_str = strchr(agt->server[server_id].rip, '/');
-            if (tmp_str) {
-                tmp_str++;
-            }
-        } else {
-            tmp_str++;
-        }
-    } else {
-        tmp_str = agt->server[server_id].rip;
+        // server address comes in {hostname}/{ip} format
+        ip_address = strdup(++tmp_str);
+    }
+    if (!ip_address) {
+        // server address is either a host or a ip
+        ip_address = OS_GetHost(agt->server[server_id].rip, 3);
     }
 
     /* The hostname was not resolved correctly */
-    if (tmp_str == NULL || *tmp_str == '\0') {
+    if (ip_address == NULL || *ip_address == '\0') {
         if (agt->server[server_id].rip != NULL) {
             const int rip_l = strlen(agt->server[server_id].rip);
-            mdebug2("Could not resolve hostname '%.*s'", agt->server[server_id].rip[rip_l - 1] == '/' ? rip_l - 1 : rip_l, agt->server[server_id].rip);
+            minfo("Could not resolve hostname '%.*s'", agt->server[server_id].rip[rip_l - 1] == '/' ? rip_l - 1 : rip_l, agt->server[server_id].rip);
         } else {
-            mdebug2("Could not resolve hostname");
+            minfo("Could not resolve hostname");
         }
-
+        os_free(ip_address);
         return false;
     }
 
     if (verbose) {
-        minfo("Trying to connect to server (%s:%d/%s).",
+        minfo("Trying to connect to server ([%s]:%d/%s).",
             agt->server[server_id].rip,
             agt->server[server_id].port,
             agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp");
     }
     if (agt->server[server_id].protocol == IPPROTO_UDP) {
-        agt->sock = OS_ConnectUDP(agt->server[server_id].port, tmp_str, strchr(tmp_str, ':') != NULL);
+        agt->sock = OS_ConnectUDP(agt->server[server_id].port, ip_address, strchr(ip_address, ':') != NULL ? 1 : 0, agt->server[server_id].network_interface);
     } else {
-        agt->sock = OS_ConnectTCP(agt->server[server_id].port, tmp_str, strchr(tmp_str, ':') != NULL);
+        agt->sock = OS_ConnectTCP(agt->server[server_id].port, ip_address, strchr(ip_address, ':') != NULL ? 1 : 0, agt->server[server_id].network_interface);
     }
 
     if (agt->sock < 0) {
@@ -108,9 +106,9 @@ bool connect_server(int server_id, bool verbose)
 
         if (verbose) {
             #ifdef WIN32
-                merror(CONNS_ERROR, tmp_str, agt->server[server_id].port, agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp", win_strerror(WSAGetLastError()));
+                merror(CONNS_ERROR, ip_address, agt->server[server_id].port, agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp", win_strerror(WSAGetLastError()));
             #else
-                merror(CONNS_ERROR, tmp_str, agt->server[server_id].port, agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp", strerror(errno));
+                merror(CONNS_ERROR, ip_address, agt->server[server_id].port, agt->server[server_id].protocol == IPPROTO_UDP ? "udp" : "tcp", strerror(errno));
             #endif
         }
     } else {
@@ -124,8 +122,10 @@ bool connect_server(int server_id, bool verbose)
         #endif
         agt->rip_id = server_id;
         last_connection_time = (int)time(NULL);
+        os_free(ip_address);
         return true;
     }
+    os_free(ip_address);
     return false;
 }
 
@@ -161,7 +161,7 @@ void start_agent(int is_startup)
         // Try to enroll and extra attempt
 
         if (agt->enrollment_cfg && agt->enrollment_cfg->enabled) {
-            if (try_enroll_to_server(agt->server[current_server_id].rip) == 0) {
+            if (try_enroll_to_server(agt->server[current_server_id].rip, agt->server[current_server_id].network_interface) == 0) {
                 if (agent_handshake_to_server(current_server_id, is_startup)) {
                     return;
                 }
@@ -201,12 +201,12 @@ static void w_agentd_keys_init (void) {
                 int rc = 0;
                 if (agt->enrollment_cfg->target_cfg->manager_name) {
                     /* Configured enrollment server */
-                    registration_status = try_enroll_to_server(agt->enrollment_cfg->target_cfg->manager_name);
+                    registration_status = try_enroll_to_server(agt->enrollment_cfg->target_cfg->manager_name, agt->enrollment_cfg->target_cfg->network_interface);
                 }
 
                 /* Try to enroll to server list */
                 while (agt->server[rc].rip && (registration_status != 0)) {
-                    registration_status = try_enroll_to_server(agt->server[rc].rip);
+                    registration_status = try_enroll_to_server(agt->server[rc].rip, agt->server[rc].network_interface);
                     rc++;
                 }
 
@@ -304,8 +304,8 @@ static ssize_t receive_message(char *buffer, unsigned int max_lenght) {
     return 0;
 }
 
-int try_enroll_to_server(const char * server_rip) {
-    int enroll_result = w_enrollment_request_key(agt->enrollment_cfg, server_rip);
+int try_enroll_to_server(const char * server_rip, uint32_t network_interface) {
+    int enroll_result = w_enrollment_request_key(agt->enrollment_cfg, server_rip, network_interface);
     if (enroll_result == 0) {
         /* Wait for key update on agent side */
         minfo("Waiting %ld seconds before server connection", (long)agt->enrollment_cfg->delay_after_enrollment);
@@ -326,7 +326,7 @@ int try_enroll_to_server(const char * server_rip) {
  * @retval true on success
  * @retval false when failed
  * */
-static bool agent_handshake_to_server(int server_id, bool is_startup) {
+STATIC bool agent_handshake_to_server(int server_id, bool is_startup) {
     size_t msg_length;
     ssize_t recv_b = 0;
 
@@ -335,7 +335,13 @@ static bool agent_handshake_to_server(int server_id, bool is_startup) {
     char buffer[OS_MAXSTR + 1] = { '\0' };
     char cleartext[OS_MAXSTR + 1] = { '\0' };
 
-    snprintf(msg, OS_MAXSTR, "%s%s", CONTROL_HEADER, HC_STARTUP);
+    cJSON* agent_info = cJSON_CreateObject();
+    cJSON_AddStringToObject(agent_info, "version", __ossec_version);
+    char *agent_info_string = cJSON_PrintUnformatted(agent_info);
+    cJSON_Delete(agent_info);
+
+    snprintf(msg, OS_MAXSTR, "%s%s%s", CONTROL_HEADER, HC_STARTUP, agent_info_string);
+    os_free(agent_info_string);
 
     if (connect_server(server_id, true)) {
         /* Send start up message */
@@ -364,6 +370,19 @@ static bool agent_handshake_to_server(int server_id, bool is_startup) {
                         }
 
                         return true;
+                    } else if (strncmp(tmp_msg, HC_ERROR, strlen(HC_ERROR)) == 0) {
+                        cJSON *error_msg = NULL;
+                        cJSON *error_info = NULL;
+                        if (error_msg = cJSON_Parse(strchr(tmp_msg, '{')), error_msg) {
+                            if (error_info = cJSON_GetObjectItem(error_msg, "message"), cJSON_IsString(error_info)) {
+                                mwarn("Couldn't connect to server '%s': '%s'", agt->server[server_id].rip, error_info->valuestring);
+                            } else {
+                                merror("Error getting message from server '%s'", agt->server[server_id].rip);
+                            }
+                        } else {
+                            merror("Error getting message from server '%s'", agt->server[server_id].rip);
+                        }
+                        cJSON_Delete(error_msg);
                     }
                 }
             }
@@ -376,7 +395,7 @@ static bool agent_handshake_to_server(int server_id, bool is_startup) {
 /**
  * @brief Sends log message about start up
  * */
-static void send_msg_on_startup(void) {
+STATIC void send_msg_on_startup(void) {
 
     char msg[OS_MAXSTR + 2] = { '\0' };
     char fmsg[OS_MAXSTR + 1] = { '\0' };
@@ -385,8 +404,7 @@ static void send_msg_on_startup(void) {
     snprintf(msg, OS_MAXSTR, OS_AG_STARTED,
             keys.keyentries[0]->name,
             keys.keyentries[0]->ip->ip);
-    os_snprintf(fmsg, OS_MAXSTR, "%c:%s:%s", LOCALFILE_MQ,
-            "ossec", msg);
+    os_snprintf(fmsg, OS_MAXSTR, "%c:%s:%s", LOCALFILE_MQ, "wazuh-agent", msg);
 
     send_msg(fmsg, -1);
 }

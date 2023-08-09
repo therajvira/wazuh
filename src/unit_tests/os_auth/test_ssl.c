@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -15,7 +15,7 @@
 #include <string.h>
 
 #include "shared.h"
-#include "os_auth/auth.h"
+#include "../../os_auth/auth.h"
 
 #include "../wrappers/externals/openssl/ssl_lib_wrappers.h"
 

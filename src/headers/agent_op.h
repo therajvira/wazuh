@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -11,7 +11,11 @@
 #ifndef AGENT_OP_H
 #define AGENT_OP_H
 
-#include "external/cJSON/cJSON.h"
+#include <cJSON.h>
+#include "../config/authd-config.h"
+
+/* Attempts to send a message through the cluster */
+#define CLUSTER_SEND_MESSAGE_ATTEMPTS   10
 
 /**
  * @brief Check if syscheck is to be executed/restarted
@@ -56,22 +60,6 @@ char *os_read_agent_profile(void);
 int os_write_agent_info(const char *agent_name, const char *agent_ip, const char *agent_id,
                         const char *cfg_profile_name) __attribute__((nonnull(1, 3)));
 
-#ifndef CLIENT
-/* Read agent group. Returns 0 on success or -1 on failure. */
-int get_agent_group(const char *id, char *group, size_t size);
-
-/* Set agent group. Returns 0 on success or -1 on failure. */
-int set_agent_group(const char * id, const char * group);
-
-/* Create multigroup dir. Returns 0 on success or -1 on failure. */
-int create_multigroup_dir(const char * multigroup);
-
-int set_agent_multigroup(char * group);
-
-void w_remove_multigroup(const char *group);
-
-#endif
-
 /* Validates the group name
  * @params response must be a 2048 buffer or NULL
  * Returns 0 on success or  -x on failure
@@ -92,7 +80,7 @@ int auth_close(int sock);
  * @param ip IP of the agent to request the new key.
  * @param groups Groups list of the agent to request the new key.
  * @param key KEY of the newly generated key.
- * @param force Force option to be used during the registration. -1 means disabled. 0 or a positive value means enabled.
+ * @param force_options Force options to be used during the registration.
  * @param json_format Flag to identify if the response should be printed in JSON format.
  * @param agent_id ID of the agent when requesting a new key for a specific ID.
  * @param exit_on_error Flag to identify if the application should exit on any error.
@@ -104,7 +92,7 @@ int w_request_agent_add_local(int sock,
                               const char *ip,
                               const char * groups,
                               const char *key,
-                              const int force,
+                              authd_force_options_t *force_options,
                               const int json_format,
                               const char *agent_id,
                               int exit_on_error);
@@ -131,7 +119,7 @@ int w_request_agent_add_clustered(char *err_response,
                                   const char *key_hash,
                                   char **id,
                                   char **key,
-                                  const int force,
+                                  authd_force_options_t *force_options,
                                   const char *agent_id);
 
 // Send a clustered agent remove request.
@@ -147,6 +135,13 @@ cJSON* w_create_sendsync_payload(const char *daemon_name, cJSON *message);
 
 // Get the agent id
 char * get_agent_id_from_name(const char *agent_name);
+
+/**
+* @brief Returns an authd force options structure translated into a cJSON object
+* @param force_options The structure to be converted
+* @returns A cJSON object with all the parameters of the structure
+**/
+cJSON* w_force_options_to_json(authd_force_options_t *force_options);
 
 /* Check control module availability */
 #if defined (__linux__) || defined (__MACH__) || defined (sun) || defined(FreeBSD) || defined(OpenBSD)

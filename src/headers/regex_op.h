@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -13,7 +13,7 @@
 
 #ifndef WIN32
 #include <regex.h>
-#include "external/sqlite/sqlite3.h"
+#include "../external/sqlite/sqlite3.h"
 
 /**
  * @brief Compare a string with a regular expression.

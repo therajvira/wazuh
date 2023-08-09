@@ -1,5 +1,5 @@
 /* Remote request listener
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * Mar 14, 2018.
  *
  * This program is free software; you can redistribute it
@@ -15,8 +15,11 @@
 
 size_t wmcom_dispatch(char * command, char ** output){
 
-
     if (strncmp(command, "getconfig", 9) == 0){
+        /*
+         * getconfig wmodules
+         * getconfig internal_options
+        */
         char *rcv_comm = command;
         char *rcv_args = NULL;
 
@@ -31,7 +34,18 @@ size_t wmcom_dispatch(char * command, char ** output){
             return strlen(*output);
         }
         return wmcom_getconfig(rcv_args, output);
+    } else if (strncmp(command, "query ", 6) == 0) {
+        /*
+         * query vulnerability-detector run_now
+        */
+        return wm_module_query(command + 6, output);
     } else if (wmcom_sync(command) == 0) {
+        /*
+         * syscollector_hwinfo dbsync checksum_fail { ... }
+         * syscollector_osinfo dbsync checksum_fail { ... }
+         * syscollector_ports dbsync checksum_fail { ... }
+         * syscollector_processes dbsync checksum_fail { ... }
+        */
         return 0;
     } else {
         mdebug1("WMCOM Unrecognized command '%s'.", command);
@@ -121,7 +135,7 @@ void * wmcom_main(__attribute__((unused)) void * arg) {
 
     mdebug1("Local requests thread ready");
 
-    if (sock = OS_BindUnixDomain(WM_LOCAL_SOCK, SOCK_STREAM, OS_MAXSTR), sock < 0) {
+    if (sock = OS_BindUnixDomainWithPerms(WM_LOCAL_SOCK, SOCK_STREAM, OS_MAXSTR, getuid(), wm_getGroupID(), 0660), sock < 0) {
         merror("Unable to bind to socket '%s': (%d) %s.", WM_LOCAL_SOCK, errno, strerror(errno));
         return NULL;
     }

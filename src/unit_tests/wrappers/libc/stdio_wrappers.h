@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -58,5 +58,7 @@ FILE *__wrap_popen(const char *command, const char *type);
 int __wrap_pclose(FILE *stream);
 
 int __wrap_fputc(char character, FILE *stream);
+
+FILE *__wrap_open_memstream(char **__bufloc, size_t *__sizeloc);
 
 #endif

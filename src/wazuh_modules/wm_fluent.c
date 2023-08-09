@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for Fluent Forwarder
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * January 25, 2019.
  *
  * This program is free software; you can redistribute it
@@ -11,11 +11,11 @@
 #ifndef WIN32
 
 #include "wmodules.h"
-#include <os_net/os_net.h>
+#include "../os_net/os_net.h"
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include "os_crypto/md5/md5_op.h"
-#include "os_crypto/sha512/sha512_op.h"
+#include "../os_crypto/md5/md5_op.h"
+#include "../os_crypto/sha512/sha512_op.h"
 #include "shared.h"
 #include "msgpack.h"
 
@@ -68,12 +68,13 @@ static int wm_fluent_check_config(wm_fluent_t * fluent);
 static void wm_fluent_poll_server(wm_fluent_t * fluent);
 
 const wm_context WM_FLUENT_CONTEXT = {
-    FLUENT_WM_NAME,
-    (wm_routine)wm_fluent_main,
-    (wm_routine)(void *)wm_fluent_destroy,
-    (cJSON * (*)(const void *))wm_fluent_dump,
-    NULL,
-    NULL
+    .name = FLUENT_WM_NAME,
+    .start = (wm_routine)wm_fluent_main,
+    .destroy = (void(*)(void *))wm_fluent_destroy,
+    .dump = (cJSON * (*)(const void *))wm_fluent_dump,
+    .sync = NULL,
+    .stop = NULL,
+    .query = NULL,
 };
 
 // Module main function. It won't return
@@ -96,11 +97,12 @@ void * wm_fluent_main(wm_fluent_t * fluent) {
         pthread_exit(NULL);
     }
 
+    OPENSSL_init_crypto(OPENSSL_INIT_ADD_ALL_CIPHERS | OPENSSL_INIT_ADD_ALL_DIGESTS | OPENSSL_INIT_LOAD_CONFIG | OPENSSL_INIT_NO_ATEXIT, NULL);
     SSL_load_error_strings();
     SSL_library_init();
 
     /* Listen socket */
-    server_sock = OS_BindUnixDomain(fluent->sock_path, SOCK_DGRAM, OS_MAXSTR);
+    server_sock = OS_BindUnixDomainWithPerms(fluent->sock_path, SOCK_DGRAM, OS_MAXSTR, getuid(), wm_getGroupID(), 0660);
     if (server_sock < 0) {
         merror("Unable to bind to socket '%s': (%d) %s.", fluent->sock_path, errno, strerror(errno));
         pthread_exit(NULL);
@@ -203,7 +205,7 @@ static int wm_fluent_connect(wm_fluent_t * fluent) {
 
     /* Connect */
 
-    fluent->client_sock = OS_ConnectTCP(fluent->port, ip, 0);
+    fluent->client_sock = OS_ConnectTCP(fluent->port, ip, 0, 0);
     free(ip);
 
     if (fluent->client_sock < 0) {

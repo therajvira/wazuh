@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for Agent Upgrading
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * July 30, 2020.
  *
  * This program is free software; you can redistribute it
@@ -230,7 +230,7 @@ STATIC char * wm_agent_upgrade_com_open(const cJSON* json_object) {
     }
 
     if (file.fp = fopen(final_path, mode_obj->valuestring), file.fp) {
-        strncpy(file.path, final_path, PATH_MAX);
+        snprintf(file.path, sizeof(file.path), "%s", final_path);
         return wm_agent_upgrade_command_ack(ERROR_OK, error_messages[ERROR_OK]);
     } else {
         mterror(WM_AGENT_UPGRADE_LOGTAG, FOPEN_ERROR, file_path_obj->valuestring, errno, strerror(errno));
@@ -353,7 +353,7 @@ STATIC char * wm_agent_upgrade_com_upgrade(const cJSON* json_object) {
     }
 
     //Unmerge
-    if (UnmergeFiles(merged, UPGRADE_DIR, OS_BINARY) == 0) {
+    if (UnmergeFiles(merged, UPGRADE_DIR, OS_BINARY, NULL) == 0) {
         unlink(merged);
         mterror(WM_AGENT_UPGRADE_LOGTAG, WM_UPGRADE_UNMERGING_FILE_ERROR, "upgrade", merged);
         return wm_agent_upgrade_command_ack(ERROR_UNMERGE, error_messages[ERROR_UNMERGE]);

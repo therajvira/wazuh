@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * Copyright (C) 2009 Trend Micro Inc.
  * All rights reserved.
  *
@@ -18,8 +18,11 @@
 /* Send pgsql message and check the return code */
 static void __send_pgsql_msg(logreader *lf, int drop_it, char *buffer) {
     mdebug2("Reading PostgreSQL message: '%s'", buffer);
-    if (drop_it == 0) {
-        w_msg_hash_queues_push(buffer, lf->file, strlen(buffer) + 1, lf->log_target, POSTGRESQL_MQ);
+
+    /* Check ignore and restrict log regex, if configured. */
+    if (drop_it == 0 && !check_ignore_and_restrict(lf->regex_ignore, lf->regex_restrict, buffer)) {
+        /* Send message to queue */
+        w_msg_hash_queues_push(buffer, lf->file, strlen(buffer) + 1, lf->log_target, LOCALFILE_MQ);
     }
 }
 
@@ -28,14 +31,10 @@ void *read_postgresql_log(logreader *lf, int *rc, int drop_it) {
     size_t str_len = 0;
     int need_clear = 0;
     char *p;
-    char str[OS_MAXSTR + 1];
-    char buffer[OS_MAXSTR + 1];
+    char str[OS_MAX_LOG_SIZE] = {0};
+    char buffer[OS_MAX_LOG_SIZE] = {0};
     int lines = 0;
 
-    /* Zero buffer and str */
-    buffer[0] = '\0';
-    buffer[OS_MAXSTR] = '\0';
-    str[OS_MAXSTR] = '\0';
     *rc = 0;
 
     /* Obtain context to calculate hash */
@@ -44,7 +43,7 @@ void *read_postgresql_log(logreader *lf, int *rc, int drop_it) {
     bool is_valid_context_file = w_get_hash_context(lf, &context, current_position);
 
     /* Get new entry */
-    while (can_read() && fgets(str, OS_MAXSTR - OS_LOG_HEADER, lf->fp) != NULL && (!maximum_lines || lines < maximum_lines)) {
+    while (can_read() && fgets(str, sizeof(str), lf->fp) != NULL && (!maximum_lines || lines < maximum_lines)) {
 
         lines++;
         /* Get buffer size */
@@ -103,7 +102,7 @@ void *read_postgresql_log(logreader *lf, int *rc, int drop_it) {
 
             /* If the saved message is empty, set it and continue */
             if (buffer[0] == '\0') {
-                strncpy(buffer, str, str_len + 2);
+                snprintf(buffer, sizeof(buffer), "%s", str);
                 continue;
             }
 
@@ -111,7 +110,7 @@ void *read_postgresql_log(logreader *lf, int *rc, int drop_it) {
             else {
                 __send_pgsql_msg(lf, drop_it, buffer);
                 /* Store current one at the buffer */
-                strncpy(buffer, str, str_len + 2);
+                snprintf(buffer, sizeof(buffer), "%s", str);
             }
         }
 
@@ -131,7 +130,7 @@ void *read_postgresql_log(logreader *lf, int *rc, int drop_it) {
             }
 
             /* Add additional message to the saved buffer */
-            if (sizeof(buffer) - buffer_len > str_len + 256) {
+            if (sizeof(buffer) - buffer_len > str_len) {
                 /* Here we make sure that the size of the buffer
                  * minus what was used (strlen) is greater than
                  * the length of the received message.

@@ -1,6 +1,6 @@
 /*
  * Wazuh SysInfo
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * October 24, 2020.
  *
  * This program is free software; you can redistribute it
@@ -14,6 +14,7 @@
 
 constexpr auto WM_SYS_HW_DIR {"/sys/class/dmi/id/board_serial"};
 constexpr auto WM_SYS_CPU_DIR {"/proc/cpuinfo"};
+constexpr auto WM_SYS_CPU_FREC_DIR { "/sys/devices/system/cpu/" };
 constexpr auto WM_SYS_MEM_DIR {"/proc/meminfo"};
 constexpr auto WM_SYS_IFDATA_DIR {"/sys/class/net/"};
 constexpr auto WM_SYS_IF_FILE {"/etc/network/interfaces"};
@@ -28,6 +29,10 @@ constexpr auto RPM_PATH {"/var/lib/rpm/"};
 
 constexpr auto PACMAN_PATH {"/var/lib/pacman"};
 
+constexpr auto APK_PATH {"/lib/apk/db"};
+constexpr auto APK_DB_PATH {"/lib/apk/db/installed"};
+constexpr auto SNAP_PATH {"/var/lib/snapd"};
+
 constexpr auto UNKNOWN_VALUE { " " };
 constexpr auto MAC_ADDRESS_COUNT_SEGMENTS
 {
@@ -37,11 +42,12 @@ constexpr auto MAC_ADDRESS_COUNT_SEGMENTS
 #define ROUNDUP(a) ((a) > 0 ? (1 + (((a)-1) | (sizeof(long) - 1))) : sizeof(long))
 
 
-enum OSType
+enum OSPlatformType
 {
     LINUX,
     BSDBASED,
-    WINDOWS
+    WINDOWS,
+    SOLARIS
 };
 
 enum LinuxType
@@ -92,6 +98,12 @@ enum RPMFields
     RPM_FIELDS_INSTALLTIME,
     RPM_FIELDS_GROUPS,
     RPM_FIELDS_SIZE
+};
+
+enum MacOSArchitecture
+{
+    X86_64,
+    ARM64
 };
 
 #endif //_SHARED_DEFS_H

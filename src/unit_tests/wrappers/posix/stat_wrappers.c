@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -19,6 +19,12 @@
 
 int __wrap_chmod(const char *path) {
     check_expected_ptr(path);
+    return mock();
+}
+
+int __wrap_fchmod(int fd, mode_t mode) {
+    check_expected(fd);
+    check_expected(mode);
     return mock();
 }
 
@@ -92,4 +98,9 @@ int __wrap_stat(const char * __file, struct stat * __buf) {
         return mock_type(int);
     }
     return __real_stat(__file, __buf);
+}
+
+mode_t __wrap_umask(mode_t mode) {
+    check_expected(mode);
+    return mock();
 }

@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -34,6 +34,10 @@ char* __wrap_w_get_timestamp(time_t time) {
 
 void __wrap_gettime(struct timespec *ts) {
     ts->tv_sec = mock_type(time_t);
+}
+
+double __wrap_time_diff(__attribute__((unused)) const struct timespec * a, __attribute__((unused)) const struct timespec * b) {
+    return mock_type(double);
 }
 
 #ifdef WIN32

@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All right reserved.
  *
  * This program is free software; you can redistribute it
@@ -10,7 +10,7 @@
 #ifndef JSON_QUEUE_H
 #define JSON_QUEUE_H
 
-#include <external/cJSON/cJSON.h>
+#include <cJSON.h>
 #include "file-queue.h"
 
 // Initializes queue. Equivalent to initialize every field to 0.

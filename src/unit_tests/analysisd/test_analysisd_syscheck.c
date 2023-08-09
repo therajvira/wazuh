@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -42,6 +42,7 @@ size_t fim_generate_comment(char * str, long size, const char * format, const ch
 int fim_generate_alert(Eventinfo *lf, syscheck_event_t event_type, cJSON *attributes, cJSON *old_attributes, cJSON *audit);
 int fim_process_alert(_sdb *sdb, Eventinfo *lf, cJSON *event);
 int decode_fim_event(_sdb *sdb, Eventinfo *lf);
+char *perm_json_to_old_format(cJSON *perm_json);
 void fim_adjust_checksum(sk_sum_t *newsum, char **checksum);
 
 /* setup/teardown */
@@ -113,7 +114,7 @@ static int setup_fim_event_cjson(void **state) {
     return 0;
 }
 
-static int teardown_fim_event_cjson(void **state) {
+static int teardown_cjson(void **state) {
     cJSON *event = *state;
 
     cJSON_Delete(event);
@@ -233,6 +234,8 @@ static int setup_event_info(void **state) {
         return -1;
     if(lf->decoder_info->fields[FIM_REGISTRY_VALUE_TYPE] = strdup("value_type"), lf->decoder_info->fields[FIM_REGISTRY_VALUE_TYPE] == NULL)
         return -1;
+    if(lf->decoder_info->fields[FIM_REGISTRY_HASH] = strdup("hash_full_path"), lf->decoder_info->fields[FIM_REGISTRY_HASH] == NULL)
+        return -1;
     if(lf->decoder_info->fields[FIM_ENTRY_TYPE] = strdup("entry_type"), lf->decoder_info->fields[FIM_ENTRY_TYPE] == NULL)
         return -1;
     if(lf->decoder_info->fields[FIM_EVENT_TYPE] = strdup("event_type"), lf->decoder_info->fields[FIM_EVENT_TYPE] == NULL)
@@ -328,11 +331,83 @@ static int setup_fim_data(void **state) {
     return 0;
 }
 
+static int setup_fim_data_win_perms(void **state) {
+    fim_data_t *data;
+    const char *plain_event = "{\"type\":\"event\","
+        "\"data\":{"
+            "\"path\":\"/a/path\","
+            "\"mode\":\"whodata\","
+            "\"type\":\"added\","
+            "\"timestamp\":123456789,"
+            "\"changed_attributes\":["
+                "\"size\",\"permission\",\"uid\","
+                "\"user_name\",\"gid\",\"group_name\","
+                "\"mtime\",\"inode\",\"md5\",\"sha1\",\"sha256\"],"
+            "\"tags\":\"tags\","
+            "\"hard_links\":["
+                "\"/a/hard1.file\","
+                "\"/b/hard2.file\"],"
+            "\"content_changes\":\"some_changes\","
+            "\"old_attributes\":{"
+                "\"type\":\"file\","
+                "\"size\":1234,"
+                "\"perm\":{\"S-1-5-32-666\":{\"name\":\"anon\",\"denied\":[\"generic_read\",\"generic_write\",\"generic_execute\",\"generic_all\"]}},"
+                "\"user_name\":\"old_user_name\","
+                "\"group_name\":\"old_group_name\","
+                "\"uid\":\"old_uid\","
+                "\"gid\":\"old_gid\","
+                "\"inode\":2345,"
+                "\"mtime\":3456,"
+                "\"hash_md5\":\"old_hash_md5\","
+                "\"hash_sha1\":\"old_hash_sha1\","
+                "\"hash_sha256\":\"old_hash_sha256\","
+                "\"win_attributes\":\"old_win_attributes\","
+                "\"symlink_path\":\"old_symlink_path\","
+                "\"checksum\":\"old_checksum\"},"
+            "\"attributes\":{"
+                "\"type\":\"file\","
+                "\"size\":4567,"
+                "\"perm\":{\"S-1-5-32-636\":{\"name\":\"username\",\"allowed\":[\"generic_read\",\"generic_write\",\"generic_execute\",\"generic_all\"]}},"
+                "\"user_name\":\"user_name\","
+                "\"group_name\":\"group_name\","
+                "\"uid\":\"uid\","
+                "\"gid\":\"gid\","
+                "\"inode\":5678,"
+                "\"mtime\":6789,"
+                "\"hash_md5\":\"hash_md5\","
+                "\"hash_sha1\":\"hash_sha1\","
+                "\"hash_sha256\":\"hash_sha256\","
+                "\"win_attributes\":\"win_attributes\","
+                "\"symlink_path\":\"symlink_path\","
+                "\"checksum\":\"checksum\"}}}";
+
+    if(data = calloc(1, sizeof(fim_data_t)), data == NULL)
+        return -1;
+
+    data->event = cJSON_Parse(plain_event);
+
+    if(data->event == NULL)
+        return -1;
+
+    if (setup_event_info((void **)&data->lf) != 0) {
+        return -1;
+    }
+
+    if (fim_init() != 1)
+        return -1;
+
+    *state = data;
+
+    return 0;
+}
+
+
 static int setup_registry_key_data(void **state) {
     fim_data_t *data;
     const char *plain_event = "{\"type\":\"event\","
         "\"data\":{"
             "\"path\":\"HKEY_LOCAL_MACHINE\\\\software\\\\test\","
+            "\"index\":\"234567890ABCDEF1234567890ABCDEF123456111\","
             "\"arch\":\"[x64]\","
             "\"mode\":\"scheduled\","
             "\"type\":\"added\","
@@ -381,11 +456,14 @@ static int setup_registry_key_data(void **state) {
     return 0;
 }
 
+extern OSHash *fim_agentinfo;
+
 static int setup_registry_value_data(void **state) {
     fim_data_t *data;
     const char *plain_event = "{\"type\":\"event\","
         "\"data\":{"
             "\"path\":\"HKEY_LOCAL_MACHINE\\\\software\\\\test\","
+            "\"index\":\"234567890ABCDEF1234567890ABCDEF123456111\","
             "\"arch\":\"[x64]\","
             "\"value_name\":\"some:value\","
             "\"value_type\":\"REG_SZ\","
@@ -456,6 +534,8 @@ static int teardown_fim_data(void **state) {
     Free_Eventinfo(data->lf);
 
     free(data);
+
+    OSHash_Free(fim_agentinfo);
 
     return 0;
 }
@@ -1222,6 +1302,48 @@ static void test_fim_fetch_attributes_null_lf(void **state) {
     expect_assert_failure(fim_fetch_attributes(new_attrs, old_attrs, NULL));
 }
 
+static void test_fim_fetch_attributes_windows_perms(void **state) {
+    fim_data_t *input = *state;
+    int ret;
+
+    cJSON *data = cJSON_GetObjectItem(input->event, "data");
+    cJSON *new_attrs = cJSON_GetObjectItem(data, "attributes");
+    cJSON *old_attrs = cJSON_GetObjectItem(data, "old_attributes");
+
+    ret = fim_fetch_attributes(new_attrs, old_attrs, input->lf);
+
+    assert_int_equal(ret, 0);
+
+    /* assert new attributes */
+    assert_string_equal(input->lf->fields[FIM_SIZE].value, "4567");
+    assert_string_equal(input->lf->fields[FIM_INODE].value, "5678");
+    assert_string_equal(input->lf->fields[FIM_MTIME].value, "6789");
+    assert_string_equal(input->lf->fields[FIM_PERM].value,
+                        "username (allowed): GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL");
+    assert_string_equal(input->lf->fields[FIM_UNAME].value, "user_name");
+    assert_string_equal(input->lf->fields[FIM_GNAME].value, "group_name");
+    assert_string_equal(input->lf->fields[FIM_UID].value, "uid");
+    assert_string_equal(input->lf->fields[FIM_GID].value, "gid");
+    assert_string_equal(input->lf->fields[FIM_MD5].value, "hash_md5");
+    assert_string_equal(input->lf->fields[FIM_SHA1].value, "hash_sha1");
+    assert_string_equal(input->lf->fields[FIM_SHA256].value, "hash_sha256");
+    assert_string_equal(input->lf->fields[FIM_SYM_PATH].value, "symlink_path");
+
+    /* assert old attributes */
+    assert_string_equal(input->lf->fields[FIM_SIZE_BEFORE].value, "1234");
+    assert_string_equal(input->lf->fields[FIM_INODE_BEFORE].value, "2345");
+    assert_string_equal(input->lf->fields[FIM_MTIME_BEFORE].value, "3456");
+    assert_string_equal(input->lf->fields[FIM_PERM_BEFORE].value,
+                        "anon (denied): GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL");
+    assert_string_equal(input->lf->fields[FIM_UNAME_BEFORE].value, "old_user_name");
+    assert_string_equal(input->lf->fields[FIM_GNAME_BEFORE].value, "old_group_name");
+    assert_string_equal(input->lf->fields[FIM_UID_BEFORE].value, "old_uid");
+    assert_string_equal(input->lf->fields[FIM_GID_BEFORE].value, "old_gid");
+    assert_string_equal(input->lf->fields[FIM_MD5_BEFORE].value, "old_hash_md5");
+    assert_string_equal(input->lf->fields[FIM_SHA1_BEFORE].value, "old_hash_sha1");
+    assert_string_equal(input->lf->fields[FIM_SHA256_BEFORE].value, "old_hash_sha256");
+}
+
 /* fim_generate_comment */
 static void test_fim_generate_comment_both_parameters(void **state) {
     char str[OS_MAXSTR];
@@ -1505,6 +1627,10 @@ static void test_fim_generate_alert_registry_value_alert(void **state) {
 
     input->lf->fields[FIM_REGISTRY_VALUE_TYPE].value = strdup("REG_SZ");
     if (input->lf->fields[FIM_REGISTRY_VALUE_TYPE].value == NULL)
+        fail();
+
+    input->lf->fields[FIM_REGISTRY_HASH].value = strdup("234567890ABCDEF1234567890ABCDEF123456111");
+    if (input->lf->fields[FIM_REGISTRY_HASH].value == NULL)
         fail();
 
     input->lf->fields[FIM_MODE].value = strdup("scheduled");
@@ -2953,6 +3079,127 @@ static void test_fim_process_alert_no_audit(void **state) {
     assert_int_equal(input->lf->decoder_info->id, 0);
 }
 
+static void test_fim_process_alert_remove_registry_key(void **state) {
+    fim_data_t *input = *state;
+    _sdb sdb = {.socket = 10};
+    const char *result = "This is a mock query result, it wont go anywhere";
+    int ret;
+
+    cJSON *data = cJSON_GetObjectItem(input->event, "data");
+
+    cJSON_DeleteItemFromObject(data, "type");
+    cJSON_AddStringToObject(data, "type", "deleted");
+    cJSON_DeleteItemFromObject(data, "changed_attributes");
+
+    if(input->lf->agent_id = strdup("007"), input->lf->agent_id == NULL)
+        fail();
+
+    /* Inside fim_send_db_save */
+    expect_any(__wrap_wdbc_query_ex, *sock);
+    expect_string(__wrap_wdbc_query_ex, query, "agent 007 syscheck delete 234567890ABCDEF1234567890ABCDEF123456111");
+    expect_any(__wrap_wdbc_query_ex, len);
+    will_return(__wrap_wdbc_query_ex, result);
+    will_return(__wrap_wdbc_query_ex, 0);
+
+    expect_string(__wrap_wdbc_parse_result, result, result);
+    will_return(__wrap_wdbc_parse_result, WDBC_OK);
+
+    ret = fim_process_alert(&sdb, input->lf, data);
+
+    assert_int_equal(ret, 0);
+
+    // Assert fim_generate_alert
+    assert_string_equal(input->lf->fields[FIM_REGISTRY_ARCH].value, "[x64]");
+    assert_string_equal(input->lf->fields[FIM_FILE].value, "HKEY_LOCAL_MACHINE\\software\\test");
+    assert_string_equal(input->lf->fields[FIM_PERM].value, "perm");
+    assert_string_equal(input->lf->fields[FIM_UNAME].value, "user_name");
+    assert_string_equal(input->lf->fields[FIM_GNAME].value, "group_name");
+    assert_string_equal(input->lf->fields[FIM_UID].value, "uid");
+    assert_string_equal(input->lf->fields[FIM_GID].value, "gid");
+    assert_string_equal(input->lf->fields[FIM_REGISTRY_HASH].value, "234567890ABCDEF1234567890ABCDEF123456111");
+
+    assert_null(input->lf->fields[FIM_MD5].value);
+    assert_null(input->lf->fields[FIM_SHA1].value);
+    assert_null(input->lf->fields[FIM_SHA256].value);
+    assert_null(input->lf->fields[FIM_REGISTRY_VALUE_NAME].value);
+    assert_null(input->lf->fields[FIM_SIZE].value);
+
+    assert_string_equal(input->lf->full_log,
+        "Registry Key '[x64] HKEY_LOCAL_MACHINE\\software\\test' deleted\nMode: scheduled\n");
+
+    /* Assert actual output */
+    assert_string_equal(input->lf->fields[FIM_EVENT_TYPE].value, SYSCHECK_EVENT_STRINGS[FIM_DELETED]);
+    assert_string_equal(input->lf->decoder_info->name, FIM_REG_KEY_DEL);
+    assert_int_equal(input->lf->decoder_info->id, 0);
+}
+
+static void test_fim_process_alert_remove_registry_value(void **state) {
+    fim_data_t *input = *state;
+    _sdb sdb = {.socket = 10};
+    const char *result = "This is a mock query result, it wont go anywhere";
+    int ret;
+
+    cJSON *data = cJSON_GetObjectItem(input->event, "data");
+
+    cJSON_DeleteItemFromObject(data, "type");
+    cJSON_AddStringToObject(data, "type", "deleted");
+    cJSON_DeleteItemFromObject(data, "changed_attributes");
+
+    if(input->lf->agent_id = strdup("007"), input->lf->agent_id == NULL)
+        fail();
+
+    /* Inside fim_send_db_save */
+    expect_any(__wrap_wdbc_query_ex, *sock);
+    expect_string(__wrap_wdbc_query_ex, query, "agent 007 syscheck delete 234567890ABCDEF1234567890ABCDEF123456111");
+    expect_any(__wrap_wdbc_query_ex, len);
+    will_return(__wrap_wdbc_query_ex, result);
+    will_return(__wrap_wdbc_query_ex, 0);
+
+    expect_string(__wrap_wdbc_parse_result, result, result);
+    will_return(__wrap_wdbc_parse_result, WDBC_OK);
+
+    ret = fim_process_alert(&sdb, input->lf, data);
+
+    assert_int_equal(ret, 0);
+
+    // Assert fim_generate_alert
+    assert_string_equal(input->lf->fields[FIM_REGISTRY_ARCH].value, "[x64]");
+    assert_string_equal(input->lf->fields[FIM_FILE].value, "HKEY_LOCAL_MACHINE\\software\\test");
+    assert_string_equal(input->lf->fields[FIM_REGISTRY_VALUE_NAME].value, "some:value");
+    assert_string_equal(input->lf->fields[FIM_REGISTRY_HASH].value, "234567890ABCDEF1234567890ABCDEF123456111");
+    assert_string_equal(input->lf->fields[FIM_SIZE].value, "4567");
+    assert_string_equal(input->lf->fields[FIM_MD5].value, "hash_md5");
+    assert_string_equal(input->lf->fields[FIM_SHA1].value, "hash_sha1");
+    assert_string_equal(input->lf->fields[FIM_SHA256].value, "hash_sha256");
+
+    assert_string_equal(input->lf->full_log,
+        "Registry Value '[x64] HKEY_LOCAL_MACHINE\\software\\test\\some:value' deleted\nMode: scheduled\n");
+
+    /* Assert actual output */
+    assert_string_equal(input->lf->fields[FIM_EVENT_TYPE].value, SYSCHECK_EVENT_STRINGS[FIM_DELETED]);
+    assert_string_equal(input->lf->decoder_info->name, FIM_REG_VAL_DEL);
+    assert_int_equal(input->lf->decoder_info->id, 0);
+}
+
+static void test_fim_process_alert_no_hash(void **state) {
+    fim_data_t *input = *state;
+    _sdb sdb = {.socket = 10};
+    const char *result = "This is a mock query result, it wont go anywhere";
+    int ret;
+
+    cJSON *data = cJSON_GetObjectItem(input->event, "data");
+    cJSON_DeleteItemFromObject(data, "index");
+
+    if(input->lf->agent_id = strdup("007"), input->lf->agent_id == NULL)
+        fail();
+
+    expect_string(__wrap__mdebug1, formatted_msg, "No member 'index' in Syscheck JSON payload");
+
+    ret = fim_process_alert(&sdb, input->lf, data);
+
+    assert_int_equal(ret, -1);
+}
+
 static void test_fim_process_alert_null_event(void **state) {
     fim_data_t *input = *state;
     _sdb sdb = {.socket = 10};
@@ -2962,7 +3209,7 @@ static void test_fim_process_alert_null_event(void **state) {
         fail();
 
     /* Inside fim_send_db_save */
-    expect_string(__wrap__mdebug1, formatted_msg, "No member 'type' in Syscheck JSON payload");
+    expect_string(__wrap__mdebug1, formatted_msg, "No member 'type' in Syscheck attributes JSON payload");
 
     ret = fim_process_alert(&sdb, input->lf, NULL);
 
@@ -3171,7 +3418,7 @@ static void test_decode_fim_event_null_item(void **state) {
     if(lf->agent_id = strdup("007"), lf->agent_id == NULL)
         fail();
 
-    expect_string(__wrap__mdebug1, formatted_msg, "No member 'type' in Syscheck JSON payload");
+    expect_string(__wrap__mdebug1, formatted_msg, "No member 'type' in Syscheck attributes JSON payload");
     expect_string(__wrap__merror, formatted_msg, "Can't generate fim alert for event: '"
         "{\"type\":\"event\","
         "\"data\":{"
@@ -3259,6 +3506,235 @@ static void test_decode_fim_event_null_eventinfo(void **state) {
 
     expect_assert_failure(decode_fim_event(&sdb, NULL));
 }
+
+/* perm_json_to_old_format */
+void fill_ace_array(cJSON * ace) {
+    int i;
+    const char *it;
+    cJSON *element;
+    static const char * const perm_strings[] = {
+        "generic_read",
+        "generic_write",
+        "generic_execute",
+        "generic_all",
+        "delete",
+        "read_control",
+        "write_dac",
+        "write_owner",
+        "synchronize",
+        "read_data",
+        "write_data",
+        "append_data",
+        "read_ea",
+        "write_ea",
+        "execute",
+        "read_attributes",
+        "write_attributes",
+        NULL
+    };
+
+    for (i = 0, it = perm_strings[0]; it; it = perm_strings[++i]) {
+        cJSON_AddItemToArray(ace, cJSON_CreateString(it));
+    }
+}
+
+static void test_perm_json_to_old_format_null_acl(void **state) {
+    expect_assert_failure(perm_json_to_old_format(NULL));
+}
+
+static void test_perm_json_to_old_format_allowed_ace_only(void **state) {
+    cJSON *acl = cJSON_CreateObject();
+    cJSON *ace = cJSON_CreateObject();
+    cJSON *allowed = cJSON_CreateArray();
+    char *decoded;
+
+    if (acl == NULL || ace == NULL || allowed == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    *state = acl;
+
+    cJSON_AddItemToObject(acl, "S-1-5-32-636", ace);
+    cJSON_AddItemToObject(ace, "allowed", allowed);
+
+    fill_ace_array(allowed);
+
+    decoded = perm_json_to_old_format(acl);
+
+    assert_non_null(decoded);
+    assert_string_equal(decoded, "S-1-5-32-636 (allowed): "
+                                 "GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL|DELETE|READ_CONTROL|WRITE_DAC|"
+                                 "WRITE_OWNER|SYNCHRONIZE|READ_DATA|WRITE_DATA|APPEND_DATA|READ_EA|WRITE_EA|EXECUTE|"
+                                 "READ_ATTRIBUTES|WRITE_ATTRIBUTES");
+    free(decoded);
+}
+
+static void test_perm_json_to_old_format_denied_ace_only(void **state) {
+    cJSON *acl = cJSON_CreateObject();
+    cJSON *ace = cJSON_CreateObject();
+    cJSON *denied = cJSON_CreateArray();
+    char *decoded;
+
+    if (acl == NULL || ace == NULL || denied == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    *state = acl;
+
+    cJSON_AddItemToObject(acl, "S-1-5-32-636", ace);
+    cJSON_AddItemToObject(ace, "denied", denied);
+    cJSON_AddItemToObject(ace, "name", cJSON_CreateString("username"));
+
+    fill_ace_array(denied);
+
+    decoded = perm_json_to_old_format(acl);
+
+    assert_non_null(decoded);
+    assert_string_equal(decoded, "username (denied): "
+                                 "GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL|DELETE|READ_CONTROL|WRITE_DAC|"
+                                 "WRITE_OWNER|SYNCHRONIZE|READ_DATA|WRITE_DATA|APPEND_DATA|READ_EA|WRITE_EA|EXECUTE|"
+                                 "READ_ATTRIBUTES|WRITE_ATTRIBUTES");
+    free(decoded);
+}
+
+static void test_perm_json_to_old_format_both_aces(void **state) {
+    cJSON *acl = cJSON_CreateObject();
+    cJSON *ace = cJSON_CreateObject();
+    cJSON *allowed = cJSON_CreateArray();
+    cJSON *denied = cJSON_CreateArray();
+    char *decoded;
+
+    if (acl == NULL || ace == NULL || allowed == NULL || denied == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    *state = acl;
+
+    cJSON_AddItemToObject(acl, "S-1-5-32-636", ace);
+    cJSON_AddItemToObject(ace, "name", cJSON_CreateString("username"));
+    cJSON_AddItemToObject(ace, "denied", denied);
+    cJSON_AddItemToObject(ace, "allowed", allowed);
+
+    fill_ace_array(denied);
+    fill_ace_array(allowed);
+
+    decoded = perm_json_to_old_format(acl);
+
+    assert_non_null(decoded);
+    assert_string_equal(decoded, "username (allowed): "
+                                 "GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL|DELETE|READ_CONTROL|WRITE_DAC|"
+                                 "WRITE_OWNER|SYNCHRONIZE|READ_DATA|WRITE_DATA|APPEND_DATA|READ_EA|WRITE_EA|EXECUTE|"
+                                 "READ_ATTRIBUTES|WRITE_ATTRIBUTES, username (denied): "
+                                 "GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL|DELETE|READ_CONTROL|WRITE_DAC|"
+                                 "WRITE_OWNER|SYNCHRONIZE|READ_DATA|WRITE_DATA|APPEND_DATA|READ_EA|WRITE_EA|EXECUTE|"
+                                 "READ_ATTRIBUTES|WRITE_ATTRIBUTES");
+    free(decoded);
+}
+
+static void test_perm_json_to_old_format_empty_acl(void **state) {
+    cJSON *acl = cJSON_CreateObject();
+    char *decoded;
+
+    if (acl == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    *state = acl;
+
+    decoded = perm_json_to_old_format(acl);
+
+    assert_null(decoded);
+}
+
+static void test_perm_json_to_old_format_empty_aces(void **state) {
+    cJSON *acl = cJSON_CreateObject();
+    cJSON *ace = cJSON_CreateObject();
+    cJSON *allowed = cJSON_CreateArray();
+    cJSON *denied = cJSON_CreateArray();
+    char *decoded;
+
+    if (acl == NULL || ace == NULL || allowed == NULL || denied == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    *state = acl;
+
+    cJSON_AddItemToObject(acl, "S-1-5-32-636", ace);
+    cJSON_AddItemToObject(ace, "name", cJSON_CreateString("username"));
+    cJSON_AddItemToObject(ace, "denied", denied);
+    cJSON_AddItemToObject(ace, "allowed", allowed);
+
+    decoded = perm_json_to_old_format(acl);
+
+    assert_non_null(decoded);
+    assert_string_equal(decoded, "username (allowed): , username (denied): ");
+    free(decoded);
+}
+
+static void test_perm_json_to_old_format_multiple_aces(void **state) {
+    const char *const SIDS[] = {
+        "S-1-5-32-636",
+        "S-1-5-32-363",
+        "S-1-5-32-444",
+        NULL
+    };
+    const char * const USERNAMES[] = {
+        "username",
+        "otheruser",
+        "anon",
+        NULL
+    };
+    int i;
+    const char *it;
+    cJSON *acl = cJSON_CreateObject();
+    char *decoded;
+
+    if (acl == NULL) {
+        fail_msg("Failed to create cJSON object");
+    }
+
+    *state = acl;
+
+    for (i = 0, it = SIDS[0]; it; it = SIDS[++i]) {
+        cJSON *ace = cJSON_CreateObject();
+        cJSON *allowed = cJSON_CreateArray();
+        cJSON *denied = cJSON_CreateArray();
+        if (ace == NULL || allowed == NULL || denied == NULL) {
+            fail_msg("Failed to create cJSON object");
+        }
+
+        cJSON_AddItemToObject(acl, it, ace);
+        cJSON_AddItemToObject(ace, "name", cJSON_CreateString(USERNAMES[i]));
+        cJSON_AddItemToObject(ace, "denied", denied);
+        cJSON_AddItemToObject(ace, "allowed", allowed);
+
+        fill_ace_array(denied);
+        fill_ace_array(allowed);
+    }
+
+    decoded = perm_json_to_old_format(acl);
+
+    assert_non_null(decoded);
+    assert_string_equal(
+    decoded,
+    "username (allowed): "
+    "GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL|DELETE|READ_CONTROL|WRITE_DAC|WRITE_OWNER|SYNCHRONIZE|READ_"
+    "DATA|WRITE_DATA|APPEND_DATA|READ_EA|WRITE_EA|EXECUTE|READ_ATTRIBUTES|WRITE_ATTRIBUTES, username (denied): "
+    "GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL|DELETE|READ_CONTROL|WRITE_DAC|WRITE_OWNER|SYNCHRONIZE|READ_"
+    "DATA|WRITE_DATA|APPEND_DATA|READ_EA|WRITE_EA|EXECUTE|READ_ATTRIBUTES|WRITE_ATTRIBUTES, "
+    "otheruser (allowed): "
+    "GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL|DELETE|READ_CONTROL|WRITE_DAC|WRITE_OWNER|SYNCHRONIZE|READ_"
+    "DATA|WRITE_DATA|APPEND_DATA|READ_EA|WRITE_EA|EXECUTE|READ_ATTRIBUTES|WRITE_ATTRIBUTES, otheruser (denied): "
+    "GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL|DELETE|READ_CONTROL|WRITE_DAC|WRITE_OWNER|SYNCHRONIZE|READ_"
+    "DATA|WRITE_DATA|APPEND_DATA|READ_EA|WRITE_EA|EXECUTE|READ_ATTRIBUTES|WRITE_ATTRIBUTES, "
+    "anon (allowed): "
+    "GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL|DELETE|READ_CONTROL|WRITE_DAC|WRITE_OWNER|SYNCHRONIZE|READ_"
+    "DATA|WRITE_DATA|APPEND_DATA|READ_EA|WRITE_EA|EXECUTE|READ_ATTRIBUTES|WRITE_ATTRIBUTES, anon (denied): "
+    "GENERIC_READ|GENERIC_WRITE|GENERIC_EXECUTE|GENERIC_ALL|DELETE|READ_CONTROL|WRITE_DAC|WRITE_OWNER|SYNCHRONIZE|READ_"
+    "DATA|WRITE_DATA|APPEND_DATA|READ_EA|WRITE_EA|EXECUTE|READ_ATTRIBUTES|WRITE_ATTRIBUTES");
+    free(decoded);
+}
+
 
 static void test_fim_adjust_checksum_no_attributes_no_win_perm(void **state) {
     fim_adjust_checksum_data_t *data = *state;
@@ -3353,18 +3829,18 @@ int main(void) {
         cmocka_unit_test(test_fim_send_db_delete_null_path),
 
         /* fim_send_db_save */
-        cmocka_unit_test_setup_teardown(test_fim_send_db_save_success, setup_fim_event_cjson, teardown_fim_event_cjson),
-        cmocka_unit_test_setup_teardown(test_fim_send_db_save_event_too_long, setup_fim_event_cjson, teardown_fim_event_cjson),
-        cmocka_unit_test_setup_teardown(test_fim_send_db_save_null_agent_id, setup_fim_event_cjson, teardown_fim_event_cjson),
-        cmocka_unit_test_setup_teardown(test_fim_send_db_save_null_data, setup_fim_event_cjson, teardown_fim_event_cjson),
+        cmocka_unit_test_setup_teardown(test_fim_send_db_save_success, setup_fim_event_cjson, teardown_cjson),
+        cmocka_unit_test_setup_teardown(test_fim_send_db_save_event_too_long, setup_fim_event_cjson, teardown_cjson),
+        cmocka_unit_test_setup_teardown(test_fim_send_db_save_null_agent_id, setup_fim_event_cjson, teardown_cjson),
+        cmocka_unit_test_setup_teardown(test_fim_send_db_save_null_data, setup_fim_event_cjson, teardown_cjson),
 
         /* fim_process_scan_info */
-        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_scan_start,setup_fim_event_cjson, teardown_fim_event_cjson),
-        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_scan_end, setup_fim_event_cjson, teardown_fim_event_cjson),
-        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_timestamp_not_a_number,setup_fim_event_cjson, teardown_fim_event_cjson),
-        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_query_too_long,setup_fim_event_cjson, teardown_fim_event_cjson),
-        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_null_agent_id,setup_fim_event_cjson, teardown_fim_event_cjson),
-        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_null_data,setup_fim_event_cjson, teardown_fim_event_cjson),
+        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_scan_start,setup_fim_event_cjson, teardown_cjson),
+        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_scan_end, setup_fim_event_cjson, teardown_cjson),
+        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_timestamp_not_a_number,setup_fim_event_cjson, teardown_cjson),
+        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_query_too_long,setup_fim_event_cjson, teardown_cjson),
+        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_null_agent_id,setup_fim_event_cjson, teardown_cjson),
+        cmocka_unit_test_setup_teardown(test_fim_process_scan_info_null_data,setup_fim_event_cjson, teardown_cjson),
 
         /* fim_fetch_attributes_state */
         cmocka_unit_test_setup_teardown(test_fim_fetch_attributes_state_new_attr, setup_fim_data, teardown_fim_data),
@@ -3380,6 +3856,7 @@ int main(void) {
         cmocka_unit_test_setup_teardown(test_fim_fetch_attributes_null_new_attrs, setup_fim_data, teardown_fim_data),
         cmocka_unit_test_setup_teardown(test_fim_fetch_attributes_null_old_attrs, setup_fim_data, teardown_fim_data),
         cmocka_unit_test_setup_teardown(test_fim_fetch_attributes_null_lf, setup_fim_data, teardown_fim_data),
+        cmocka_unit_test_setup_teardown(test_fim_fetch_attributes_windows_perms, setup_fim_data_win_perms, teardown_fim_data),
 
         /* fim_generate_comment */
         cmocka_unit_test(test_fim_generate_comment_both_parameters),
@@ -3418,6 +3895,10 @@ int main(void) {
         cmocka_unit_test_setup_teardown(test_fim_process_alert_no_old_attributes, setup_fim_data, teardown_fim_data),
         cmocka_unit_test_setup_teardown(test_fim_process_alert_no_audit, setup_fim_data, teardown_fim_data),
         cmocka_unit_test_setup_teardown(test_fim_process_alert_null_event, setup_fim_data, teardown_fim_data),
+        cmocka_unit_test_setup_teardown(test_fim_process_alert_remove_registry_key, setup_registry_key_data, teardown_fim_data),
+        cmocka_unit_test_setup_teardown(test_fim_process_alert_remove_registry_value, setup_registry_value_data, teardown_fim_data),
+        cmocka_unit_test_setup_teardown(test_fim_process_alert_no_hash, setup_registry_key_data, teardown_fim_data),
+
 
         /* decode_fim_event */
         cmocka_unit_test_setup_teardown(test_decode_fim_event_type_event, setup_decode_fim_event, teardown_decode_fim_event),
@@ -3430,6 +3911,14 @@ int main(void) {
         cmocka_unit_test_setup_teardown(test_decode_fim_event_invalid_json, setup_decode_fim_event, teardown_decode_fim_event),
         cmocka_unit_test_setup_teardown(test_decode_fim_event_null_sdb, setup_decode_fim_event, teardown_decode_fim_event),
         cmocka_unit_test_setup_teardown(test_decode_fim_event_null_eventinfo, setup_decode_fim_event, teardown_decode_fim_event),
+
+        cmocka_unit_test(test_perm_json_to_old_format_null_acl),
+        cmocka_unit_test_teardown(test_perm_json_to_old_format_allowed_ace_only, teardown_cjson),
+        cmocka_unit_test_teardown(test_perm_json_to_old_format_denied_ace_only, teardown_cjson),
+        cmocka_unit_test_teardown(test_perm_json_to_old_format_both_aces, teardown_cjson),
+        cmocka_unit_test_teardown(test_perm_json_to_old_format_empty_acl, teardown_cjson),
+        cmocka_unit_test_teardown(test_perm_json_to_old_format_empty_aces, teardown_cjson),
+        cmocka_unit_test_teardown(test_perm_json_to_old_format_multiple_aces, teardown_cjson),
 
         /* fim_adjust_checksum */
         cmocka_unit_test_setup_teardown(test_fim_adjust_checksum_no_attributes_no_win_perm, setup_fim_adjust_checksum, teardown_fim_adjust_checksum),

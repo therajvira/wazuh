@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -16,8 +16,8 @@
 #include <cmocka.h>
 #include <time.h>
 #include "shared.h"
-#include "wazuh_modules/wmodules.h"
-#include "wazuh_modules/wm_oscap.h"
+#include "../../../wazuh_modules/wmodules.h"
+#include "../../../wazuh_modules/wm_oscap.h"
 #include "../scheduling/wmodules_scheduling_helpers.h"
 #include "../../wrappers/common.h"
 #include "../../wrappers/libc/stdlib_wrappers.h"
@@ -129,7 +129,7 @@ void test_interval_execution(void **state) {
         expect_any(__wrap_wm_exec, secs);
         expect_any(__wrap_wm_exec, add_path);
 
-        will_return(__wrap_wm_exec, strdup("TEST_STRING"));
+        will_return(__wrap_wm_exec, "TEST_STRING");
         will_return(__wrap_wm_exec, 0);
         will_return(__wrap_wm_exec, 0);
 

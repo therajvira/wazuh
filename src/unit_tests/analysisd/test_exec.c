@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -13,10 +13,13 @@
 #include <cmocka.h>
 #include <stdio.h>
 
+#include "../wrappers/common.h"
 #include "../wrappers/wazuh/os_net/os_net_wrappers.h"
+#include "../wrappers/wazuh/os_regex/os_regex_wrappers.h"
 #include "../wrappers/wazuh/shared/labels_op_wrappers.h"
 #include "../wrappers/wazuh/wazuh_db/wdb_global_helpers_wrappers.h"
 #include "../wrappers/wazuh/shared/mq_op_wrappers.h"
+#include "../wrappers/wazuh/shared/validate_op_wrappers.h"
 #include "../../analysisd/eventinfo.h"
 #include "../../analysisd/config.h"
 #include "../../analysisd/alerts/exec.h"
@@ -26,6 +29,8 @@ typedef struct test_struct {
     Eventinfo *lf;
     active_response *ar;
 } test_struct_t;
+
+const char *get_ip(const Eventinfo *lf);
 
 // Setup / Teardown
 
@@ -55,6 +60,9 @@ static int test_setup(void **state) {
     init_data->ar->command = "restart-wazuh";
 
     *state = init_data;
+
+    test_mode = 1;
+
     return OS_SUCCESS;
 }
 
@@ -63,9 +71,12 @@ static int test_teardown(void **state) {
     os_free(data->lf->decoder_info);
     os_free(data->lf->generated_rule);
     os_free(data->ar->ar_cmd);
+    os_free(data->lf->fields);
     os_free(data->lf);
     os_free(data->ar);
     os_free(data);
+
+    test_mode = 0;
 
     return OS_SUCCESS;
 }
@@ -781,7 +792,7 @@ void test_getActiveResponseInJSON_extra_args(void **state){
 
     will_return(__wrap_OS_GetOneContentforElement, node);
 
-    getActiveResponseInJSON(data->lf, data->ar, extra_args, msg);
+    getActiveResponseInJSON(data->lf, data->ar, extra_args, msg, false);
 
     cJSON * root = cJSON_Parse(msg);
     cJSON * deviceData = cJSON_GetObjectItem(root,"parameters");
@@ -856,6 +867,28 @@ void test_send_exec_msg_OS_TIMEOUT(void **state){
     send_exec_msg(&socket, queue_path, exec_msg);
 }
 
+void test_get_ip_success(void **state)
+{
+    test_struct_t *data  = (test_struct_t *)*state;
+    Config.white_list = (os_ip **)1;
+    Config.hostname_white_list = (OSMatch **) realloc(Config.hostname_white_list, sizeof(OSMatch *)*2);
+    os_calloc(1, sizeof(OSMatch), Config.hostname_white_list[0]);
+    Config.hostname_white_list[1] = NULL;
+    char *expected_ip = "192.168.0.100";
+    data->lf->srcip = expected_ip;
+
+    expect_string(__wrap_OS_IPFoundList, ip_address, expected_ip);
+    will_return(__wrap_OS_IPFoundList, 0);
+
+    expect_string(__wrap_OSMatch_Execute, str, expected_ip);
+    will_return(__wrap_OSMatch_Execute, 0);
+
+    assert_string_equal(expected_ip, get_ip(data->lf));
+
+    os_free(Config.hostname_white_list[0]);
+    os_free(Config.hostname_white_list);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -883,6 +916,9 @@ int main(void)
 
         // getActiveResponseInJSON
         cmocka_unit_test_setup_teardown(test_getActiveResponseInJSON_extra_args, test_setup, test_teardown),
+
+        // get_ip
+        cmocka_unit_test_setup_teardown(test_get_ip_success, test_setup, test_teardown),
 
         // send_exec_msg
         cmocka_unit_test(test_send_exec_msg),

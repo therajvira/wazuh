@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  *
  * This program is free software; you can redistribute it
  * and/or modify it under the terms of the GNU General Public
@@ -15,10 +15,10 @@
 #include <setjmp.h>
 #include <cmocka.h>
 
-#include "headers/debug_op.h"
+#include "../headers/debug_op.h"
 #include "../../analysisd/decoders/decoder.h"
-#include "error_messages/error_messages.h"
-#include "error_messages/debug_messages.h"
+#include "../error_messages/error_messages.h"
+#include "../error_messages/debug_messages.h"
 #include "../../analysisd/analysisd.h"
 
 void os_remove_decoders_list(OSDecoderNode *decoderlist_pn, OSDecoderNode *decoderlist_npn);

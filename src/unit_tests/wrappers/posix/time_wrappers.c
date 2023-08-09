@@ -1,4 +1,4 @@
-/* Copyright (C) 2015-2021, Wazuh Inc.
+/* Copyright (C) 2015, Wazuh Inc.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it
@@ -24,4 +24,8 @@ char *__wrap_ctime_r(const time_t *timep, char *buf) {
     strncpy(buf, mock_type(const char *), 26);
 
     return buf;
+}
+
+void __wrap_gettimeofday(__attribute__((unused))struct timeval *__restrict __tv, __attribute__((unused)) void *__restrict __tz) {
+    function_called();
 }

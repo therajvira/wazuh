@@ -1,6 +1,6 @@
 /*
  * Wazuh RSYNC
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * August 28, 2020.
  *
  * This program is free software; you can redistribute it
@@ -32,7 +32,8 @@ class AgentEmulator
         AgentEmulator(const std::chrono::milliseconds updatePeriod,
                       const unsigned int maxDbItems,
                       const std::shared_ptr<SyncQueue>& outQueue,
-                      const std::string& dbFolder);
+                      const std::string& dbFolder,
+                      const size_t maxQueueSize);
         ~AgentEmulator();
     private:
 

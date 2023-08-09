@@ -1,6 +1,6 @@
 /*
  * Wazuh Module for Task management.
- * Copyright (C) 2015-2021, Wazuh Inc.
+ * Copyright (C) 2015, Wazuh Inc.
  * July 13, 2020.
  *
  * This program is free software; you can redistribute it
@@ -9,13 +9,6 @@
  * Foundation.
  */
 
-#ifdef WAZUH_UNIT_TESTING
-// Remove static qualifier when unit testing
-#define STATIC
-#else
-#define STATIC static
-#endif
-
 #ifndef WIN32
 
 #include "../wmodules.h"
@@ -23,19 +16,38 @@
 #include "wm_task_manager_tasks.h"
 #include "../os_net/os_net.h"
 
+#ifdef WAZUH_UNIT_TESTING
+// Remove static qualifier when unit testing
+#define STATIC
+
+/* Replace pthread_exit with mock_assert, we do this to run some death tests on a very precarious way */
+extern void mock_assert(const int result, const char* const expression,
+                        const char * const file, const int line);
+
+#define pthread_exit(x) mock_assert(0, #x, __FILE__, __LINE__)
+#else
+#define STATIC static
+#endif
+
+
 STATIC int wm_task_manager_init(wm_task_manager *task_config) __attribute__((nonnull));
+#ifdef WIN32
+STATIC DWORD WINAPI wm_task_manager_main(void *arg);
+#else
 STATIC void* wm_task_manager_main(wm_task_manager* task_config);    // Module main function. It won't return
+#endif
 STATIC void wm_task_manager_destroy(wm_task_manager* task_config);
 STATIC cJSON* wm_task_manager_dump(const wm_task_manager* task_config);
 
 /* Context definition */
 const wm_context WM_TASK_MANAGER_CONTEXT = {
-    TASK_MANAGER_WM_NAME,
-    (wm_routine)wm_task_manager_main,
-    (wm_routine)(void *)wm_task_manager_destroy,
-    (cJSON * (*)(const void *))wm_task_manager_dump,
-    NULL,
-    NULL
+    .name = TASK_MANAGER_WM_NAME,
+    .start = (wm_routine)wm_task_manager_main,
+    .destroy = (void (*)(void *))wm_task_manager_destroy,
+    .dump = (cJSON * (*)(const void *))wm_task_manager_dump,
+    .sync = NULL,
+    .stop = NULL,
+    .query = NULL,
 };
 
 size_t wm_task_manager_dispatch(const char *msg, char **response) {
@@ -107,7 +119,7 @@ STATIC int wm_task_manager_init(wm_task_manager *task_config) {
     w_create_thread(wm_task_manager_clean_tasks, task_config);
 
     /* Set the queue */
-    if (sock = OS_BindUnixDomain(TASK_QUEUE, SOCK_STREAM, OS_MAXSTR), sock < 0) {
+    if (sock = OS_BindUnixDomainWithPerms(TASK_QUEUE, SOCK_STREAM, OS_MAXSTR, getuid(), wm_getGroupID(), 0660), sock < 0) {
         mterror(WM_TASK_MANAGER_LOGTAG, MOD_TASK_CREATE_SOCK_ERROR, TASK_QUEUE, strerror(errno)); // LCOV_EXCL_LINE
         pthread_exit(NULL);
     }
@@ -115,7 +127,12 @@ STATIC int wm_task_manager_init(wm_task_manager *task_config) {
     return sock;
 }
 
+#ifdef WIN32
+STATIC DWORD WINAPI wm_task_manager_main(void *arg) {
+    wm_task_manager* task_config = (wm_task_manager *)arg;
+#else
 STATIC void* wm_task_manager_main(wm_task_manager* task_config) {
+#endif
     int sock;
     int peer;
     char *buffer = NULL;
@@ -125,7 +142,11 @@ STATIC void* wm_task_manager_main(wm_task_manager* task_config) {
 
     if (w_is_worker()) {
         mtinfo(WM_TASK_MANAGER_LOGTAG, MOD_TASK_DISABLED_WORKER);
+#ifdef WIN32
+        return 0;
+#else
         return NULL;
+#endif
     }
 
     // Initial configuration
@@ -191,7 +212,11 @@ STATIC void* wm_task_manager_main(wm_task_manager* task_config) {
     }
 
     close(sock);
+#ifdef WIN32
+    return 0;
+#else
     return NULL;
+#endif
 }
 
 STATIC void wm_task_manager_destroy(wm_task_manager* task_config) {
